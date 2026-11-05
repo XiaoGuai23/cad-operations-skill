@@ -1,0 +1,94 @@
+{
+  "schema_version": "1.0",
+  "project": {
+    "name": "法兰装配总成",
+    "drawing_number": "FA-2D-001",
+    "drawing_type": "assembly"
+  },
+  "standard": {
+    "family": "GB/T",
+    "units": "mm",
+    "projection": "first-angle"
+  },
+  "sheet": {
+    "size": "A4",
+    "orientation": "landscape",
+    "scale": "1:3"
+  },
+  "requirements": {
+    "material": {"text": "法兰盘 45钢；密封垫 NBR；紧固件 8.8级", "source_id": "demo-material"},
+    "views": ["front", "part-detail", "section-A"],
+    "technical_notes": [
+      {"text": "法兰装配：外径 ⌀100，安装孔相邻角 90°。", "source_id": "drawing-rule"},
+      {"text": "配合尺寸公差 ±0.10 mm；未注尺寸单位 mm。", "source_id": "tolerance"},
+      {"text": "法兰盘 45钢；密封垫 NBR；紧固件 8.8级", "source_id": "demo-material"}
+    ]
+  },
+  "geometry": {
+    "parameters": {
+      "view_semantics": {
+        "front": "assembly",
+        "part-detail": "part",
+        "section-A": "section"
+      },
+      "outer_diameter_mm": 100.0,
+      "bore_diameter_mm": 48.0,
+      "bolt_circle_diameter_mm": 64.0,
+      "hole_diameter_mm": 10.0,
+      "thickness_mm": 18.0
+    },
+    "entities": [
+      {"kind": "circle", "layer": "OUTLINE", "center": [0.0, 0.0], "radius": 50.0, "source_id": "outer-diameter"},
+      {"kind": "circle", "layer": "OUTLINE", "center": [0.0, 0.0], "radius": 24.0, "source_id": "bore-diameter"},
+      {"kind": "circle", "layer": "CENTER", "center": [0.0, 0.0], "radius": 32.0, "source_id": "bolt-pattern"},
+      {"kind": "circle", "layer": "OUTLINE", "center": [32.0, 0.0], "radius": 5.0, "source_id": "bolt-pattern"},
+      {"kind": "circle", "layer": "OUTLINE", "center": [0.0, 32.0], "radius": 5.0, "source_id": "bolt-pattern"},
+      {"kind": "circle", "layer": "OUTLINE", "center": [-32.0, 0.0], "radius": 5.0, "source_id": "bolt-pattern"},
+      {"kind": "circle", "layer": "OUTLINE", "center": [0.0, -32.0], "radius": 5.0, "source_id": "bolt-pattern"},
+      {"kind": "line", "layer": "CENTER", "start": [-50.0, 0.0], "end": [50.0, 0.0], "source_id": "bolt-pattern"},
+      {"kind": "line", "layer": "CENTER", "start": [0.0, -50.0], "end": [0.0, 50.0], "source_id": "bolt-pattern"},
+      {"kind": "text", "layer": "TEXT", "text": "ASSEMBLY", "insert": [-16.0, 54.0], "height": 5.0, "style": "normal", "source_id": "assembly-content"},
+
+      {"kind": "polyline", "layer": "OUTLINE", "vertices": [[0.0, 0.0], [80.0, 0.0], [80.0, 18.0], [0.0, 18.0]], "closed": true, "source_id": "thickness"},
+      {"kind": "line", "layer": "HIDDEN", "start": [16.0, 0.0], "end": [16.0, 18.0], "source_id": "bore-diameter"},
+      {"kind": "line", "layer": "HIDDEN", "start": [64.0, 0.0], "end": [64.0, 18.0], "source_id": "bore-diameter"},
+      {"kind": "line", "layer": "CENTER", "start": [-5.0, 9.0], "end": [85.0, 9.0], "source_id": "thickness"},
+
+      {"kind": "polyline", "layer": "OUTLINE", "vertices": [[0.0, 0.0], [80.0, 0.0], [80.0, 18.0], [60.0, 18.0], [60.0, 28.0], [20.0, 28.0], [20.0, 18.0], [0.0, 18.0]], "closed": true, "source_id": "section-profile"},
+      {"kind": "hatch", "layer": "HATCH", "boundary": [[0.0, 0.0], [80.0, 0.0], [80.0, 18.0], [60.0, 18.0], [60.0, 28.0], [20.0, 28.0], [20.0, 18.0], [0.0, 18.0]], "pattern": "ANSI31", "source_id": "section-profile"},
+      {"kind": "line", "layer": "CENTER", "start": [40.0, -5.0], "end": [40.0, 33.0], "source_id": "section-profile"}
+    ],
+    "view_entity_indices": {
+      "front": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+      "part-detail": [10, 11, 12, 13],
+      "section-A": [14, 15, 16]
+    }
+  },
+  "dimensions": [
+    {"kind": "diameter", "value": 100.0, "source_id": "outer-diameter"}
+  ],
+  "annotations": [],
+  "parts_list": [
+    {"item": "法兰盘", "quantity": 2, "source_id": "assembly-content"},
+    {"item": "密封垫", "quantity": 1, "source_id": "assembly-content"},
+    {"item": "紧固件", "quantity": 4, "source_id": "assembly-content"}
+  ],
+  "provenance": [
+    {"id": "demo-material", "file": "input/material-declaration.md", "locator": "line 3", "confidence": 1.0},
+    {"id": "drawing-identity", "file": "input/project.md", "locator": "line 3", "confidence": 1.0},
+    {"id": "outer-diameter", "file": "input/project.md", "locator": "line 4", "confidence": 1.0},
+    {"id": "bore-diameter", "file": "input/project.md", "locator": "line 5", "confidence": 1.0},
+    {"id": "bolt-pattern", "file": "input/project.md", "locator": "line 6", "confidence": 1.0},
+    {"id": "thickness", "file": "input/project.md", "locator": "line 7", "confidence": 1.0},
+    {"id": "assembly-content", "file": "input/project.md", "locator": "line 8", "confidence": 1.0},
+    {"id": "view-requirement", "file": "input/project.md", "locator": "line 9", "confidence": 1.0},
+    {"id": "tolerance", "file": "input/project.md", "locator": "line 10", "confidence": 1.0},
+    {"id": "drawing-rule", "file": "input/drawing-rules.md", "locator": "line 4", "confidence": 1.0},
+    {"id": "section-profile", "file": "input/project.md", "locator": "lines 7-9", "confidence": 1.0}
+  ],
+  "validation": {
+    "missing": [],
+    "conflicts": [],
+    "assumptions": ["合成软件示例：材料沿用旧版示例参数，未经真实工程确认；来源为 input/material-declaration.md，仅供测试演示。"]
+  }
+}

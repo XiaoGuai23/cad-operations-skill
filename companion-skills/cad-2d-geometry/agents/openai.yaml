@@ -1,0 +1,7 @@
+interface:
+  display_name: "CAD 2D Geometry"
+  short_description: "Generate deterministic 2D mechanical drawings"
+  default_prompt: "Use $cad-2d-geometry to generate and verify a deterministic 2D mechanical drawing."
+
+policy:
+  allow_implicit_invocation: true

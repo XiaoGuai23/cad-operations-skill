@@ -1,0 +1,4 @@
+interface:
+  display_name: "CAD Operations"
+  short_description: "Unified local CAD, AutoCAD, FreeCAD, SolidWorks MCP, DXF/PDF workflows"
+  default_prompt: "Use CAD Operations to create, edit, validate, and export local CAD deliverables with the user's installed CAD scripts, AutoCAD paths, and SolidWorks MCP assets."

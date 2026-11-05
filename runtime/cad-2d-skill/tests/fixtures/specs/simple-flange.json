@@ -1,0 +1,39 @@
+{
+  "schema_version": "1.0",
+  "project": {
+    "name": "Simple flange",
+    "drawing_number": "FLG-001",
+    "drawing_type": "part"
+  },
+  "standard": {
+    "family": "GB/T",
+    "units": "mm",
+    "projection": "first-angle"
+  },
+  "sheet": {
+    "size": "A3",
+    "orientation": "landscape",
+    "scale": "1:1"
+  },
+  "requirements": {
+    "views": ["front"]
+  },
+  "geometry": {
+    "entities": [
+      {"kind": "circle", "layer": "OUTLINE", "center": [0.0, 0.0], "radius": 100.0, "source_id": "outer-radius"},
+      {"kind": "circle", "layer": "OUTLINE", "center": [0.0, 0.0], "radius": 40.0, "source_id": "bore-radius"},
+      {"kind": "circle", "layer": "OUTLINE", "center": [60.0, 0.0], "radius": 8.0, "source_id": "hole-east"},
+      {"kind": "circle", "layer": "OUTLINE", "center": [0.0, 60.0], "radius": 8.0, "source_id": "hole-north"},
+      {"kind": "circle", "layer": "OUTLINE", "center": [-60.0, 0.0], "radius": 8.0, "source_id": "hole-west"},
+      {"kind": "circle", "layer": "OUTLINE", "center": [0.0, -60.0], "radius": 8.0, "source_id": "hole-south"}
+    ]
+  },
+  "provenance": [
+    {"id": "outer-radius", "file": "project.md", "locator": "outer radius", "confidence": 1.0},
+    {"id": "bore-radius", "file": "project.md", "locator": "bore radius", "confidence": 1.0},
+    {"id": "hole-east", "file": "project.md", "locator": "east hole centre and radius", "confidence": 1.0},
+    {"id": "hole-north", "file": "project.md", "locator": "north hole centre and radius", "confidence": 1.0},
+    {"id": "hole-west", "file": "project.md", "locator": "west hole centre and radius", "confidence": 1.0},
+    {"id": "hole-south", "file": "project.md", "locator": "south hole centre and radius", "confidence": 1.0}
+  ]
+}

@@ -1,0 +1,11 @@
+name: GB basic title block
+fields:
+  - project.name
+  - project.drawing_number
+  - sheet.scale
+  - standard.projection
+labels:
+  title: TITLE
+  drawing_number: DRAWING
+  scale: SCALE
+  projection: PROJECTION

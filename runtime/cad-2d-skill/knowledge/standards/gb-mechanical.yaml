@@ -1,0 +1,88 @@
+# GB/T-oriented defaults for this project's 2D mechanical automation.
+# This configurable profile is not a complete reproduction of any standards
+# publication; confirm project-specific requirements before issuing drawings.
+name: GB/T mechanical project profile
+description: Configurable GB/T-oriented defaults for 2D mechanical drawing automation; not a complete standards publication.
+profile_type: configurable-project-profile
+scope: automation-defaults
+family: GB/T
+units: mm
+projection: first-angle
+
+layers:
+  OUTLINE:
+    linetype: CONTINUOUS
+    lineweight_mm: 0.70
+    color: 7
+  THIN:
+    linetype: CONTINUOUS
+    lineweight_mm: 0.35
+    color: 7
+  CENTER:
+    linetype: CENTER
+    lineweight_mm: 0.25
+    color: 1
+  HIDDEN:
+    linetype: HIDDEN
+    lineweight_mm: 0.25
+    color: 7
+  DIM:
+    linetype: CONTINUOUS
+    lineweight_mm: 0.18
+    color: 7
+  TEXT:
+    linetype: CONTINUOUS
+    lineweight_mm: 0.18
+    color: 7
+  HATCH:
+    linetype: CONTINUOUS
+    lineweight_mm: 0.18
+    color: 7
+  FRAME:
+    linetype: CONTINUOUS
+    lineweight_mm: 0.70
+    color: 7
+
+text_styles:
+  normal:
+    font: project-default
+    height_mm: 3.5
+    width_factor: 1.0
+  title:
+    font: project-default
+    height_mm: 5.0
+    width_factor: 1.0
+
+dimension:
+  text_height_mm: 3.5
+  gap_mm: 5.0
+  arrow_size_mm: 3.5
+  lineweight_mm: 0.18
+
+spacing:
+  view_gap_mm: 20.0
+  dimension_gap_mm: 5.0
+
+sheets:
+  A0:
+    width_mm: 1189.0
+    height_mm: 841.0
+  A1:
+    width_mm: 841.0
+    height_mm: 594.0
+  A2:
+    width_mm: 594.0
+    height_mm: 420.0
+  A3:
+    width_mm: 420.0
+    height_mm: 297.0
+  A4:
+    width_mm: 297.0
+    height_mm: 210.0
+
+protected_zones:
+  title_block:
+    anchor: bottom-right
+    width_mm: 180.0
+    height_mm: 55.0
+    margin_mm: 0.0

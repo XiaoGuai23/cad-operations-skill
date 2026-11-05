@@ -1,0 +1,27 @@
+{
+  "title": "电气主接线图",
+  "sheet": {"width_mm": 440, "height_mm": 317},
+  "title_block": {
+    "专业": "电气",
+    "比例": "示意",
+    "日期": "2026-05-29",
+    "图号": "SLD-01"
+  },
+  "voltage_levels": [
+    {
+      "name": "110kV",
+      "bus": "单母线",
+      "feeders": ["110kV进线1", "110kV进线2"],
+      "transformers": ["1#主变", "2#主变"],
+      "pt": 2
+    },
+    {
+      "name": "35kV",
+      "bus": "单母分段",
+      "feeders": ["35kV出线1", "35kV出线2", "35kV出线3", "35kV出线4"],
+      "pt": 2,
+      "reactors": 2,
+      "capacitors": 2
+    }
+  ]
+}

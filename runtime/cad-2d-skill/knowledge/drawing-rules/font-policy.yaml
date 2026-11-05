@@ -1,0 +1,13 @@
+# Project-owned order only. Font files remain installed and licensed locally.
+fonts:
+  cjk:
+    - Arial Unicode MS
+    - Microsoft YaHei
+    - SimSun
+  latin:
+    - Arial
+    - Microsoft YaHei
+  engineering:
+    - Arial Unicode MS
+    - Microsoft YaHei
+    - Arial

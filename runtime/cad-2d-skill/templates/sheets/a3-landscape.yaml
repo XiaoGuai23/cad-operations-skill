@@ -1,0 +1,15 @@
+# A3 landscape template coordinates are millimetres from the lower-left corner.
+name: A3 landscape mechanical sheet
+size: A3
+orientation: landscape
+sheet_bounds: [0.0, 0.0, 420.0, 297.0]
+printable_margin_mm: 10.0
+zones:
+  title_block:
+    anchor: bottom-right
+    width_mm: 180.0
+    height_mm: 55.0
+  parts_list:
+    anchor: right
+  technical_notes:
+    anchor: top-right

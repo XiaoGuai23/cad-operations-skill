@@ -1,0 +1,195 @@
+{
+  "audit": {
+    "counts": {
+      "errors": 0,
+      "info": 1,
+      "warnings": 0
+    },
+    "issue_codes": ["SPEC_ASSUMPTION"],
+    "status": "complete"
+  },
+  "dxf": {
+    "bounded_extents_mm": [
+      10.0,
+      10.0,
+      287.0,
+      200.0
+    ],
+    "entity_counts": {
+      "CIRCLE": 10,
+      "DIMENSION": 1,
+      "HATCH": 1,
+      "LEADER": 3,
+      "LINE": 6,
+      "LWPOLYLINE": 6,
+      "TEXT": 29
+    },
+    "layer_entity_counts": {
+      "CENTER": 5,
+      "DIM": 7,
+      "FRAME": 4,
+      "HATCH": 1,
+      "HIDDEN": 2,
+      "OUTLINE": 8,
+      "TEXT": 29
+    },
+    "version": "AC1032"
+  },
+  "font_render": {
+    "all_roles_have_exact_preview_evidence": true,
+    "fallback_fields": {
+      "inline_font_overrides": 0,
+      "unverified_roles": []
+    },
+    "verified_roles": [
+      "DIM",
+      "TEXT"
+    ]
+  },
+  "provenance": {
+    "canonical_spec_sha256": "4a3a9ea8a6bd83cec6824eeaafce1fffb8b6cae07e3096483765080a13bed8b7",
+    "source_files": [
+      {
+        "path": "input/drawing-rules.md",
+        "sha256": "8b78b05b2cbda3fb46606d7ea34e0444ca25d32a62eaa21117869497778b192a"
+      },
+      {
+        "path": "input/material-declaration.md",
+        "sha256": "899e73328ad8886b94c31f8ab44af34ca92190a9f9a0e866ebb6774070f93c02"
+      },
+      {
+        "path": "input/project.md",
+        "sha256": "339f9e4333f9278e0f2ac0c0fcbe13cb08166c40a77b447d2e64eb331c0e52ee"
+      }
+    ]
+  },
+  "published_suffixes": [
+    ".dwg",
+    ".dxf",
+    ".pdf",
+    ".png",
+    ".svg"
+  ],
+  "schema": "Cad2DGoldenSemanticSnapshot/v2",
+  "semantics": {
+    "balloon_numbers": [
+      "1",
+      "2",
+      "3"
+    ],
+    "dimensions": [
+      {
+        "display": "100",
+        "id": "dimension-1",
+        "measurement_mm": 33.333333
+      }
+    ],
+    "parts_list": [
+      {
+        "description": "法兰盘",
+        "item_no": 1,
+        "quantity": 2
+      },
+      {
+        "description": "密封垫",
+        "item_no": 2,
+        "quantity": 1
+      },
+      {
+        "description": "紧固件",
+        "item_no": 3,
+        "quantity": 4
+      }
+    ],
+    "technical_notes": [
+      "法兰装配：外径 ⌀100，安装孔相邻角 90°。",
+      "配合尺寸公差 ±0.10 mm；未注尺寸单位 mm。",
+      "法兰盘 45钢；密封垫 NBR；紧固件 8.8级"
+    ],
+    "views": [
+      {
+        "id": "front",
+        "label": "FRONT",
+        "normalized_source_bounds_mm": [
+          48.0,
+          24.0,
+          81.333333,
+          60.333333
+        ],
+        "source_membership": [
+          { "entity_index": 0, "source_id": "outer-diameter" },
+          { "entity_index": 1, "source_id": "bore-diameter" },
+          { "entity_index": 2, "source_id": "bolt-pattern" },
+          { "entity_index": 3, "source_id": "bolt-pattern" },
+          { "entity_index": 4, "source_id": "bolt-pattern" },
+          { "entity_index": 5, "source_id": "bolt-pattern" },
+          { "entity_index": 6, "source_id": "bolt-pattern" },
+          { "entity_index": 7, "source_id": "bolt-pattern" },
+          { "entity_index": 8, "source_id": "bolt-pattern" },
+          { "entity_index": 9, "source_id": "assembly-content" }
+        ],
+        "source_entity_counts": {
+          "CIRCLE": 7,
+          "LINE": 2,
+          "TEXT": 1
+        }
+      },
+      {
+        "id": "part-detail",
+        "label": "PART-DETAIL",
+        "normalized_source_bounds_mm": [
+          12.0,
+          92.0,
+          42.0,
+          98.0
+        ],
+        "source_membership": [
+          { "entity_index": 10, "source_id": "thickness" },
+          { "entity_index": 11, "source_id": "bore-diameter" },
+          { "entity_index": 12, "source_id": "bore-diameter" },
+          { "entity_index": 13, "source_id": "thickness" }
+        ],
+        "source_entity_counts": {
+          "LINE": 3,
+          "LWPOLYLINE": 1
+        }
+      },
+      {
+        "id": "section-A",
+        "label": "SECTION A-A",
+        "normalized_source_bounds_mm": [
+          12.0,
+          132.0,
+          38.666667,
+          144.666667
+        ],
+        "source_membership": [
+          { "entity_index": 14, "source_id": "section-profile" },
+          { "entity_index": 15, "source_id": "section-profile" },
+          { "entity_index": 16, "source_id": "section-profile" }
+        ],
+        "source_entity_counts": {
+          "HATCH": 1,
+          "LINE": 1,
+          "LWPOLYLINE": 1
+        }
+      }
+    ]
+  },
+  "text": {
+    "required_tokens": {
+      "90°": true,
+      "FRONT": true,
+      "PART-DETAIL": true,
+      "PARTS LIST": true,
+      "SECTION A-A": true,
+      "±0.10": true,
+      "⌀100": true,
+      "法兰": true
+    },
+    "style_entity_counts": {
+      "DIM": 1,
+      "normal": 29
+    }
+  }
+}

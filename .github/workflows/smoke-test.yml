@@ -1,0 +1,30 @@
+name: smoke-test
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke-test:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt -e "./runtime/cad-2d-skill[dev]"
+
+      - name: Validate generated CAD outputs
+        run: python tests/smoke_test.py
+
+      - name: Validate mechanical revision runtime
+        working-directory: runtime/cad-2d-skill
+        run: python -m pytest tests -q -m "not autocad"
