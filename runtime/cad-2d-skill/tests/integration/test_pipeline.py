@@ -329,7 +329,8 @@ def test_task_rejects_output_reparse_escape_without_touching_target(tmp_path):
     except OSError as error:
         pytest.skip(f"directory symlinks are unavailable: {error}")
 
-    with pytest.raises(PipelineInputError, match="symlink or reparse"):
+    # Containment may reject an external link before the reparse guard runs.
+    with pytest.raises(PipelineInputError, match="symlink or reparse|escapes task directory"):
         run_task(task_dir)
 
     assert sentinel.read_text(encoding="utf-8") == "unrelated"

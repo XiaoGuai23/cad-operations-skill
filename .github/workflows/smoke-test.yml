@@ -28,3 +28,14 @@ jobs:
       - name: Validate mechanical revision runtime
         working-directory: runtime/cad-2d-skill
         run: python -m pytest tests -q -m "not autocad"
+
+      - name: Show failed synthetic pipeline diagnostics
+        if: failure()
+        shell: pwsh
+        run: |
+          Get-ChildItem "$env:TEMP/pytest-of-$env:USERNAME" -Filter audit.json -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
+            $audit = Get-Content -LiteralPath $_.FullName -Raw | ConvertFrom-Json
+            if ($audit.status -eq 'failed' -or $audit.summary.errors -gt 0) {
+              [PSCustomObject]@{ Path = $_.FullName; Issues = $audit.issues } | ConvertTo-Json -Depth 8
+            }
+          }
