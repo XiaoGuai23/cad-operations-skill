@@ -66,6 +66,8 @@ Pop-Location
 
 运行工具测试使用合成输入；原生 AutoCAD 探测测试默认在上述命令中排除。GitHub Actions 执行相同的公开包检查。测试通过不等于工程设计验收，也不代表原生软件中的夹点行为已验证。
 
+中文整图测试需要字体覆盖中文及 `⌀` 等工程符号。字体策略位于 `runtime/cad-2d-skill/knowledge/drawing-rules/font-policy.yaml`。GitHub Actions 在临时运行环境中下载并校验 [GNU Unifont 16.0.04](https://unifoundry.com/pub/unifont/unifont-16.0.04/font-builds/)，使用专用测试字体策略；它不会修改仓库默认策略或你电脑上的字体。Unifont 使用其自身的[字体许可证](https://www.unifoundry.com/unifont/)，不包含在本仓库文件中。
+
 ## 目录
 
 - `SKILL.md`：按任务读取所需说明的入口。

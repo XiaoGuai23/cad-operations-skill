@@ -25,6 +25,21 @@ jobs:
       - name: Validate generated CAD outputs
         run: python tests/smoke_test.py
 
+      - name: Prepare reproducible CI font
+        shell: pwsh
+        run: |
+          # Only the disposable runner uses this font and test policy.
+          $fontPath = Join-Path $env:RUNNER_TEMP 'cad-ci-unifont-16.0.04.otf'
+          Invoke-WebRequest -Uri 'https://unifoundry.com/pub/unifont/unifont-16.0.04/font-builds/unifont-16.0.04.otf' -OutFile $fontPath
+          $expected = '0e3981ab552231b5a2a870f2b61741903a4bf25c23ef5aeb05fdced1b3c7af4d'
+          if ((Get-FileHash -LiteralPath $fontPath -Algorithm SHA256).Hash.ToLower() -ne $expected) {
+            throw 'CI font checksum mismatch'
+          }
+          Copy-Item -LiteralPath $fontPath -Destination (Join-Path $env:WINDIR 'Fonts/cad-ci-unifont-16.0.04.otf')
+          @{ fonts = @{ cjk = @('Unifont'); latin = @('Unifont'); engineering = @('Unifont') } } |
+            ConvertTo-Json -Depth 4 |
+            Set-Content -LiteralPath 'runtime/cad-2d-skill/knowledge/drawing-rules/font-policy.yaml' -Encoding utf8
+
       - name: Validate mechanical revision runtime
         working-directory: runtime/cad-2d-skill
         run: python -m pytest tests -q -m "not autocad"

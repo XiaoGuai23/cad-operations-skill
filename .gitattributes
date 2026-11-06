@@ -1,0 +1,2 @@
+# The reviewed snapshots bind the exact bytes of these authored source documents.
+runtime/cad-2d-skill/examples/**/input/*.md text eol=lf
