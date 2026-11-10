@@ -19,15 +19,20 @@ def operation_catalog() -> dict:
          'Last operation only; HATCH and native annotation semantics are preserved.'),
         ('delete_entities', ['targets'], [], 'Delete explicit native entities and their display; no adjacent geometry selection.'),
         ('replace_outline', ['targets', 'replacements'], [],
-         'Explicit LINE/ARC/CIRCLE replacements each require id, source, type and geometry; unsupported metadata is rejected.'),
-        ('dimension_remeasure', ['target', 'p1', 'p2'], [],
-         'Native linear/aligned dimension endpoints; preserves text semantics, style and text movement mode.'),
+         'Explicit LINE/ARC/CIRCLE/CIRCULAR replacements each require id, source, type and geometry; unsupported metadata is rejected.'),
+        ('dimension_remeasure', ['target'], ['p1', 'p2', 'mode', 'geometry'],
+         'Explicit DXF update: linear/aligned p1+p2, OR circular mode+geometry. '
+         'Preserves text semantics and style; does not create native associativity.'),
+        ('dimension_drive', ['target', 'mode', 'value', 'geometry'], ['fixed'],
+         'Explicit DXF update: radius/diameter drives one CIRCLE/ARC, or linear drives one LINE '
+         'with fixed p1/p2. The dimension must measure that geometry and use measured text. '
+         'No AutoCAD native real-time constraint is created.'),
     ]
     return {'schema': 'cad-operation-catalog/v1', 'status': 'available',
             'plan_schema': 'cad-revision/v1', 'common_required': ['id', 'type'],
             'selector': 'Exactly one handle or stable id, from the bound input DXF.',
             'operations': [{'type': name, 'required': required, 'optional': optional, 'limits': limits,
                             'documentation': 'docs/edit-operations.md' if name in
-                            {'delete_entities', 'replace_outline', 'dimension_remeasure'} else 'docs/revision-tools.md'}
+                            {'delete_entities', 'replace_outline', 'dimension_remeasure', 'dimension_drive'} else 'docs/revision-tools.md'}
                            for name, required, optional, limits in entries],
             'native_interaction_tested': False}

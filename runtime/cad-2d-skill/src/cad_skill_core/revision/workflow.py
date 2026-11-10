@@ -147,7 +147,7 @@ def _active_checks(doc, entries, tolerance, *, only_edits=False):
                 set(entry['result'].get('created_handles', []))) & later_handles:
             # Each step's fixed/original geometry was already checked after save.
             # When later authorized edits affect it, recheck the active predicate.
-            if entry['operation']['type'] == 'dimension_remeasure':
+            if entry['operation']['type'] in {'dimension_remeasure', 'dimension_drive'}:
                 # A later native move/mode operation may change placement and
                 # text movement, while endpoints, labels and tolerances remain
                 # protected by the remeasurement requirement.

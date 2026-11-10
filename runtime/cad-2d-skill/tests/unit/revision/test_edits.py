@@ -154,3 +154,111 @@ def test_dimension_cache_block_metadata_is_not_silently_discarded(kind):
     with pytest.raises(RevisionError):
         edits().apply_edit(doc, operation, TOL)
     assert serialized(doc) == before
+
+
+def _drive_fixture(tmp_path, mode):
+    doc = ezdxf.new('R2013')
+    if mode == 'diameter':
+        circle = doc.modelspace().add_circle((10, 0), 5)
+        dim = doc.modelspace().add_diameter_dim(center=(10, 0), radius=5, angle=90)
+        target = circle
+    elif mode == 'radius':
+        arc = doc.modelspace().add_arc((10, 0), 5, 0, 90)
+        dim = doc.modelspace().add_radius_dim(center=(10, 0), radius=5, angle=45)
+        target = arc
+    else:
+        line = doc.modelspace().add_line((0, 0), (10, 0))
+        dim = doc.modelspace().add_linear_dim(base=(0, 5), p1=(0, 0), p2=(10, 0))
+        target = line
+    dim.render()
+    return doc, dim.dimension, target
+
+
+@pytest.mark.parametrize('mode,value,check', [
+    ('diameter', 16.0, lambda doc, target: target.dxf.radius == pytest.approx(8.0)),
+    ('radius', 8.0, lambda doc, target: target.dxf.radius == pytest.approx(8.0)),
+    ('linear', 20.0, lambda doc, target: tuple(target.dxf.end) == pytest.approx((20.0, 0.0, 0.0))),
+])
+def test_dimension_drive_changes_geometry_and_dimension_together(tmp_path, mode, value, check):
+    doc, dim, target = _drive_fixture(tmp_path, mode)
+    op = {'type': 'dimension_drive', 'target': {'handle': dim.dxf.handle}, 'mode': mode,
+          'value': value, 'geometry': [{'handle': target.dxf.handle}],
+          **({'fixed': 'p1'} if mode == 'linear' else {})}
+    report = edits().apply_edit(doc, op, TOL)
+    path = tmp_path / 'out.dxf'
+    doc.saveas(path)
+    out = ezdxf.readfile(path)
+    changed_dim = out.entitydb[dim.dxf.handle]
+    changed_target = out.entitydb[target.dxf.handle]
+    assert float(changed_dim.get_measurement()) == pytest.approx(value)
+    assert check(out, changed_target)
+    assert edits().check_edit(out, report['verification'], TOL)['status'] == 'passed'
+    # The reverse direction still works: editing the geometry and remeasuring
+    # returns the dimension to the driven value.
+    if mode == 'linear':
+        changed_target.dxf.end = (15, 0, 0)
+        edits().apply_edit(out, {'type': 'dimension_remeasure', 'target': {'handle': dim.dxf.handle},
+                                  'p1': [0, 0], 'p2': [15, 0]}, TOL)
+        assert float(out.entitydb[dim.dxf.handle].get_measurement()) == pytest.approx(15.0)
+
+
+def test_dimension_drive_rejects_unmeasured_geometry_without_mutation():
+    doc, dim, target = _drive_fixture(None, 'diameter')
+    other = doc.modelspace().add_circle((100, 100), 5)
+    before = serialized(doc)
+    with pytest.raises(RevisionError):
+        edits().apply_edit(doc, {'type': 'dimension_drive', 'target': {'handle': dim.dxf.handle},
+                                  'mode': 'diameter', 'value': 16.0,
+                                  'geometry': [{'handle': other.dxf.handle}]}, TOL)
+    assert serialized(doc) == before
+
+
+def test_dimension_drive_rejects_manual_text_override_without_mutation():
+    doc, dim, target = _drive_fixture(None, 'radius')
+    dim.dxf.text = 'R5 FIXED'
+    before = serialized(doc)
+    with pytest.raises(RevisionError):
+        edits().apply_edit(doc, {'type': 'dimension_drive', 'target': {'handle': dim.dxf.handle},
+                                  'mode': 'radius', 'value': 8.0,
+                                  'geometry': [{'handle': target.dxf.handle}]}, TOL)
+    assert serialized(doc) == before
+
+
+def test_replace_outline_accepts_unified_circular_spec(tmp_path):
+    doc, source, op = setup_outline()
+    op['replacements'] = [{'id': 'edge-new', 'source': op['targets'][0], 'type': 'CIRCULAR',
+                           'center': [0, 0], 'radius': 5, 'start_angle': 0, 'sweep': 90}]
+    result = edits().apply_edit(doc, op, TOL)
+    child = doc.entitydb[result['created_handles'][0]]
+    assert child.dxftype() == 'ARC'
+    assert child.dxf.start_angle == pytest.approx(0.0)
+    assert child.dxf.end_angle == pytest.approx(90.0)
+
+
+def test_dimension_drive_bare_check_passes_after_drive():
+    doc, dim, target = _drive_fixture(None, 'diameter')
+    op = {'type': 'dimension_drive', 'target': {'handle': dim.dxf.handle},
+          'mode': 'diameter', 'value': 16.0, 'geometry': [{'handle': target.dxf.handle}]}
+    assert edits().check_edit(doc, op, TOL)['status'] == 'failed'
+    edits().apply_edit(doc, op, TOL)
+    assert edits().check_edit(doc, op, TOL)['status'] == 'passed'
+
+
+def test_dimension_drive_accepts_empty_default_text(tmp_path):
+    doc, dim, target = _drive_fixture(tmp_path, 'radius')
+    dim.dxf.text = ''
+    op = {'type': 'dimension_drive', 'target': {'handle': dim.dxf.handle},
+          'mode': 'radius', 'value': 8.0, 'geometry': [{'handle': target.dxf.handle}]}
+    edits().apply_edit(doc, op, TOL)
+    assert target.dxf.radius == pytest.approx(8.0)
+
+
+def test_dimension_drive_rejects_arc_not_covering_dimension_point():
+    doc, dim, target = _drive_fixture(None, 'radius')
+    other_arc = doc.modelspace().add_arc((10, 0), 5, 180, 270)
+    before = serialized(doc)
+    with pytest.raises(RevisionError):
+        edits().apply_edit(doc, {'type': 'dimension_drive', 'target': {'handle': dim.dxf.handle},
+                                  'mode': 'radius', 'value': 8.0,
+                                  'geometry': [{'handle': other_arc.dxf.handle}]}, TOL)
+    assert serialized(doc) == before

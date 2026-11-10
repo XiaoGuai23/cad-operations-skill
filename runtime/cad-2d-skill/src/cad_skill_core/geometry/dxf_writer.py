@@ -11,6 +11,7 @@ from typing import Iterable, Mapping
 
 import ezdxf
 from ezdxf import bbox, units
+from ezdxf.math import arc_angle_span_deg
 from ezdxf.sections.classes import ClassesSection
 from ezdxf.tools.juliandate import juliandate
 
@@ -21,6 +22,8 @@ from cad_skill_core.standards.profile import DrawingStandard
 from .entities import (
     ArcEntity,
     CircleEntity,
+    CircularEntity,
+    ContourEntity,
     DimensionEntity,
     DrawingEntity,
     HatchEntity,
@@ -32,6 +35,7 @@ from .entities import (
     SplineEntity,
     TextEntity,
 )
+from .contours import compile_contour
 
 
 _FIXED_METADATA_DATE = juliandate(datetime(2000, 1, 1, 0, 0))
@@ -257,8 +261,14 @@ def _validate_entity_numbers(entity: DrawingEntity) -> None:
     for value in _numbers(entity):
         if not isfinite(value):
             raise ValueError("coordinates and geometry values must be finite")
-    if isinstance(entity, (CircleEntity, ArcEntity)) and entity.radius < 0:
+    if isinstance(entity, (CircleEntity, ArcEntity, CircularEntity)) and entity.radius < 0:
         raise ValueError("negative radius is not allowed")
+    if isinstance(entity, CircularEntity) and not 0 < entity.sweep <= 360:
+        raise ValueError("circular sweep must be greater than zero and at most 360 degrees")
+    if isinstance(entity, CircularEntity) and not entity.is_full_circle:
+        start = entity.start_angle % 360.0
+        if arc_angle_span_deg(start, (start + entity.sweep) % 360.0) == 0:
+            raise ValueError("circular arc collapses at native angle precision")
     if isinstance(entity, (TextEntity, MTextEntity)) and entity.height <= 0:
         raise ValueError("zero-length geometry is not allowed")
     if isinstance(entity, MTextEntity) and entity.width is not None and entity.width <= 0:
@@ -282,7 +292,9 @@ def _numbers(entity: DrawingEntity) -> Iterable[float]:
 
 
 def _validate_entity_length(entity: DrawingEntity) -> None:
-    if isinstance(entity, (CircleEntity, ArcEntity)) and entity.radius == 0:
+    if isinstance(entity, ContourEntity):
+        compile_contour(entity)
+    if isinstance(entity, (CircleEntity, ArcEntity, CircularEntity)) and entity.radius == 0:
         raise ValueError("zero-length geometry is not allowed")
     if isinstance(entity, LineEntity) and entity.start == entity.end:
         raise ValueError("zero-length geometry is not allowed")
@@ -334,10 +346,22 @@ def _emit_entity(modelspace: ezdxf.layouts.Modelspace, entity: DrawingEntity) ->
         modelspace.add_line(entity.start, entity.end, dxfattribs=attributes)
     elif isinstance(entity, PolylineEntity):
         modelspace.add_lwpolyline(entity.vertices, close=entity.closed, dxfattribs=attributes)
+    elif isinstance(entity, ContourEntity):
+        modelspace.add_lwpolyline(compile_contour(entity), format="xyb", close=True, dxfattribs=attributes)
     elif isinstance(entity, CircleEntity):
         modelspace.add_circle(entity.center, entity.radius, dxfattribs=attributes)
     elif isinstance(entity, ArcEntity):
         modelspace.add_arc(entity.center, entity.radius, entity.start_angle, entity.end_angle, dxfattribs=attributes)
+    elif isinstance(entity, CircularEntity):
+        # One kind in the spec, native kinds in the file: a full sweep is a
+        # real CIRCLE, anything smaller is a real ARC on the same carrier.
+        if entity.is_full_circle:
+            modelspace.add_circle(entity.center, entity.radius, dxfattribs=attributes)
+        else:
+            # Reduce first: adding a small sweep to a huge direction loses
+            # the sweep in floating-point arithmetic.
+            start = entity.start_angle % 360.0
+            modelspace.add_arc(entity.center, entity.radius, start, (start + entity.sweep) % 360.0, dxfattribs=attributes)
     elif isinstance(entity, SplineEntity):
         modelspace.add_open_spline(
             entity.control_points,
@@ -376,9 +400,12 @@ def _emit_entity(modelspace: ezdxf.layouts.Modelspace, entity: DrawingEntity) ->
 
 
 def _dxf_type(entity: DrawingEntity) -> str:
+    if isinstance(entity, CircularEntity):
+        return "CIRCLE" if entity.is_full_circle else "ARC"
     return {
         "line": "LINE",
         "polyline": "LWPOLYLINE",
+        "contour": "LWPOLYLINE",
         "circle": "CIRCLE",
         "arc": "ARC",
         "spline": "SPLINE",

@@ -13,6 +13,7 @@ edit the current authoritative drawing; for new drawings use a validated spec.
 | Task | Read when needed |
 | --- | --- |
 | Mechanical comments, movable annotations, splitting | [Revision method](references/mechanical-revision-design.md) and [revision commands](references/revision-tools.md) |
+| Circular curves, closed composite contours, explicit dimension driving/sync | [Circular contours and dimension operations](references/circular-and-dimension-link.md) |
 | Cross-revision comment checks | [Comment ledger](references/comment-ledger.md) |
 | Related drawings, sample comparisons, shared preview and common edits | [Comparison and editing tools](references/drawing-comparison-and-edits.md) |
 | Local before/after checks or environment readiness | [Review and environment commands](references/review-and-environment.md) |

@@ -5,7 +5,7 @@
 发布 `drawing.dxf`、`revision-plan.json`、`revision-report.json`。源文件不被覆盖。
 这套工具补充现有 CAD 原生编辑路径，不需要把已有图纸重建为 `DrawingSpec`。
 
-新增 `delete_entities`、`replace_outline`、`dimension_remeasure` 也由同一修订工作流执行，
+新增 `delete_entities`、`replace_outline`、`dimension_remeasure`、`dimension_drive` 也由同一修订工作流执行，
 其严格字段、分段后追踪和保存核验见 [常用修改](edit-operations.md)。
 用 `python -m cad_skill_core operations --json` 查看当前支持的操作，不猜接口。
 

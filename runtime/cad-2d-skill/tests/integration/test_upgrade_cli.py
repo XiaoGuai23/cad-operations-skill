@@ -58,8 +58,11 @@ def test_operations_discovery_lists_existing_and_new_supported_operations(capsys
     entries = {o['type']: o for o in result['operations']}
     assert set(entries) == {'align', 'contact', 'resize_fixed_edge', 'set_length',
                             'dimension_move', 'dimension_text_mode', 'leader_move', 'link_callout',
-                            'split_intersections', 'delete_entities', 'replace_outline', 'dimension_remeasure'}
-    assert entries['dimension_remeasure']['required'] == ['target', 'p1', 'p2']
+                            'split_intersections', 'delete_entities', 'replace_outline', 'dimension_remeasure',
+                            'dimension_drive'}
+    assert entries['dimension_remeasure']['required'] == ['target']
+    assert entries['dimension_remeasure']['optional'] == ['p1', 'p2', 'mode', 'geometry']
+    assert entries['dimension_drive']['required'] == ['target', 'mode', 'value', 'geometry']
     assert result['native_interaction_tested'] is False
 
 
