@@ -426,22 +426,9 @@ def compile_spec_from_fragments(
     if not requested_views:
         requested_views = ["front"]
 
+    scale_was_auto = explicit_scale is None
     if explicit_scale is None:
-        max_span = max(
-            [
-                resolved_params[k].value
-                for k in ("outer_diameter", "width", "height")
-                if k in resolved_params
-            ]
-            + [sum(s[0] for s in shaft_steps) if shaft_steps else 0.0, 80.0]
-        )
-        if max_span > 300.0:
-            explicit_scale = "1:5"
-        elif max_span > 140.0:
-            explicit_scale = "1:2"
-        else:
-            explicit_scale = "1:1"
-        assumptions.append(f"drawing scale auto-selected as {explicit_scale}")
+        explicit_scale = "1:1"
 
     spec_dict: dict[str, Any] = {
         "schema_version": "1.0",
@@ -483,7 +470,22 @@ def compile_spec_from_fragments(
             "assumptions": assumptions,
         },
     }
-    return DrawingSpec.model_validate(spec_dict)
+    validated_spec = DrawingSpec.model_validate(spec_dict)
+    if scale_was_auto:
+        from cad_skill_core.layout.models import LayoutOverflowError
+        from cad_skill_core.layout.plan import plan_layout
+        from cad_skill_core.standards.profile import load_standard
+
+        std_path = Path(__file__).resolve().parents[3] / "knowledge" / "standards" / "gb-mechanical.yaml"
+        try:
+            plan_layout(validated_spec, load_standard(std_path))
+        except LayoutOverflowError as err:
+            if ":" in err.suggested_scale:
+                validated_spec.sheet.scale = err.suggested_scale
+        validated_spec.validation.assumptions.append(
+            f"drawing scale auto-selected as {validated_spec.sheet.scale}"
+        )
+    return validated_spec
 
 
 def _parse_tolerances(match: re.Match[str]) -> tuple[float | None, float | None]:
