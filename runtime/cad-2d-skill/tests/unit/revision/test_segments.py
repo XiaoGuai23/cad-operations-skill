@@ -394,3 +394,27 @@ def test_extension_xrecord_payload_reference_is_not_ignored_as_owner(tmp_path):
     result = verify_split(before, doc, report, 1e-7)
     assert result['status'] == 'failed'
     assert result['metadata_errors']
+
+
+def test_uncut_closed_lwpolyline_remains_intact_without_explosion(tmp_path):
+    doc = ezdxf.new()
+    m = doc.modelspace()
+    contour = m.add_lwpolyline(
+        [(50.0, 0.0, 0.0), (70.0, 0.0, 1.0), (70.0, 10.0, 0.0), (50.0, 10.0, 1.0)],
+        format='xyb',
+        close=True,
+    )
+    contour_handle = contour.dxf.handle
+    m.add_line((0.0, 0.0), (10.0, 0.0))
+    m.add_line((5.0, -5.0), (5.0, 5.0))
+    before = clone(doc, tmp_path)
+
+    report = split_intersections(doc, None, 1e-7)
+    checked = verify_split(before, doc, report, 1e-7)
+
+    assert checked['status'] == 'passed', checked
+    assert contour_handle not in report['touched_handles']
+    assert report['mapping'][contour_handle] == [contour_handle]
+    assert doc.entitydb[contour_handle].dxftype() == 'LWPOLYLINE'
+    assert doc.entitydb[contour_handle].closed
+

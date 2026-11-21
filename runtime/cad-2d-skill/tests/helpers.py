@@ -6,6 +6,9 @@ import shutil
 from pathlib import Path
 
 
+RUNTIME_ROOT = Path(__file__).resolve().parents[1]
+
+
 def copy_example(name: str, destination_root: Path) -> Path:
     """Copy one repository example without mutating its checked-in source."""
 

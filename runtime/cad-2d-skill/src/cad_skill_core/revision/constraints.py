@@ -11,6 +11,7 @@ from copy import deepcopy
 import math
 
 from .common import RevisionError, resolve_entity, resolve_entities, validate_tolerance
+from .transaction import DocumentCheckpoint
 
 
 _ANCHORS = {"min_x", "max_x", "center_x", "min_y", "max_y", "center_y"}
@@ -349,14 +350,13 @@ def apply_constraint(doc, operation, tolerance):
     if not all(checks.values()):
         raise RevisionError("candidate geometry does not satisfy the requested constraint")
     touched = [handle for handle in before if before[handle] != after[handle]]
+    checkpoint = DocumentCheckpoint(doc)
     try:
         for entity in context["entities"]:
             if entity.dxf.handle in touched:
                 _write(entity, after[entity.dxf.handle])
-    except Exception:
-        for entity in context["entities"]:
-            if entity.dxf.handle in touched:
-                _write(entity, before[entity.dxf.handle])
+    except BaseException:
+        checkpoint.restore()
         raise
     verification = deepcopy(operation)
     verification["expected_geometry"] = deepcopy(after)

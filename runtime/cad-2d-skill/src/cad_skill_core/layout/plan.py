@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from decimal import Decimal, InvalidOperation
-from math import ceil, cos, isfinite, radians, sin
+from math import atan, atan2, ceil, cos, degrees, hypot, isfinite, radians, sin
 from sys import float_info
 
-from cad_skill_core.geometry.entities import ArcEntity, CircleEntity, DimensionEntity, HatchEntity, LeaderEntity, LineEntity, MTextEntity, PolylineEntity, SplineEntity, TextEntity
+from cad_skill_core.geometry.contours import compile_contour
+from cad_skill_core.geometry.entities import ArcEntity, CircleEntity, CircularEntity, ContourEntity, DimensionEntity, HatchEntity, LeaderEntity, LineEntity, MTextEntity, PolylineEntity, SplineEntity, TextEntity
 from cad_skill_core.schema.models import DrawingSpec
 from cad_skill_core.standards.profile import DrawingStandard, ProtectedZone
 
@@ -238,9 +239,66 @@ def _exact_group_bounds(entities: list[object]) -> GeometryBounds:
     return GeometryBounds(min(item.min_x for item in all_bounds), min(item.min_y for item in all_bounds), max(item.max_x for item in all_bounds), max(item.max_y for item in all_bounds))
 
 
+def _arc_span_bounds(center: tuple[float, float], radius: float, start_deg: float, ccw_sweep_deg: float) -> GeometryBounds:
+    start = start_deg % 360.0
+    angles = [start, (start + ccw_sweep_deg) % 360.0]
+    for quadrant in (0.0, 90.0, 180.0, 270.0):
+        if (quadrant - start) % 360.0 <= ccw_sweep_deg + 1e-12:
+            angles.append(quadrant)
+    quadrant_unit = {0.0: (1.0, 0.0), 90.0: (0.0, 1.0), 180.0: (-1.0, 0.0), 270.0: (0.0, -1.0)}
+    points = [
+        (
+            center[0] + radius * quadrant_unit[angle][0],
+            center[1] + radius * quadrant_unit[angle][1],
+        )
+        if angle in quadrant_unit
+        else (
+            center[0] + radius * cos(radians(angle)),
+            center[1] + radius * sin(radians(angle)),
+        )
+        for angle in angles
+    ]
+    values = min(point[0] for point in points), min(point[1] for point in points), max(point[0] for point in points), max(point[1] for point in points)
+    return GeometryBounds(*(0.0 if abs(value) < 1e-12 else value for value in values))
+
+
+def _contour_exact_bounds(entity: ContourEntity) -> GeometryBounds:
+    vertices = compile_contour(entity)
+    xs: list[float] = []
+    ys: list[float] = []
+    count = len(vertices)
+    for index, (x1, y1, bulge) in enumerate(vertices):
+        x2, y2, _ = vertices[(index + 1) % count]
+        xs.extend((x1, x2))
+        ys.extend((y1, y2))
+        if bulge == 0.0:
+            continue
+        dx, dy = x2 - x1, y2 - y1
+        chord = hypot(dx, dy)
+        ux, uy = dx / chord, dy / chord
+        offset = chord * (1.0 / bulge - bulge) / 4.0
+        cx = 0.5 * (x1 + x2) - uy * offset
+        cy = 0.5 * (y1 + y2) + ux * offset
+        radius = hypot(0.5 * chord, offset)
+        sweep_deg = degrees(4.0 * atan(bulge))
+        start_deg = degrees(atan2(y1 - cy, x1 - cx)) % 360.0
+        ccw_start = start_deg if sweep_deg >= 0.0 else (start_deg + sweep_deg) % 360.0
+        arc_bounds = _arc_span_bounds((cx, cy), radius, ccw_start, abs(sweep_deg))
+        xs.extend((arc_bounds.min_x, arc_bounds.max_x))
+        ys.extend((arc_bounds.min_y, arc_bounds.max_y))
+    values = min(xs), min(ys), max(xs), max(ys)
+    return GeometryBounds(*(0.0 if abs(value) < 1e-12 else value for value in values))
+
+
 def _entity_exact_bounds(entity: object) -> GeometryBounds:
     if isinstance(entity, CircleEntity):
         return GeometryBounds(entity.center[0] - entity.radius, entity.center[1] - entity.radius, entity.center[0] + entity.radius, entity.center[1] + entity.radius)
+    if isinstance(entity, CircularEntity):
+        if entity.is_full_circle:
+            return GeometryBounds(entity.center[0] - entity.radius, entity.center[1] - entity.radius, entity.center[0] + entity.radius, entity.center[1] + entity.radius)
+        return _arc_span_bounds(entity.center, entity.radius, entity.start_angle, entity.sweep)
+    if isinstance(entity, ContourEntity):
+        return _contour_exact_bounds(entity)
     if isinstance(entity, ArcEntity):
         angles = [entity.start_angle, entity.end_angle]
         start, end = entity.start_angle % 360, entity.end_angle % 360

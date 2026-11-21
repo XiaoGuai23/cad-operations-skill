@@ -616,7 +616,7 @@ def _publish_file(source: Path, destination: Path, paths: TaskPaths) -> None:
 
 def _write_new_file(path: Path, payload: bytes) -> None:
     descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{path.name}.", suffix=".partial", dir=path.parent
+        prefix=".cad-tmp-", suffix=".partial", dir=path.parent
     )
     temporary = Path(temporary_name)
     try:
@@ -629,9 +629,32 @@ def _write_new_file(path: Path, payload: bytes) -> None:
         except FileExistsError as error:
             raise PipelineInputError(f"refusing to overwrite existing owned record: {path}") from error
         except OSError as error:
-            raise PipelineInputError(
-                f"could not atomically create owned record: {path}: {error}"
-            ) from error
+            import errno
+
+            if path.exists() or path.is_symlink():
+                raise PipelineInputError(f"refusing to overwrite existing owned record: {path}") from error
+            winerror = getattr(error, "winerror", None)
+            if error.errno not in {errno.EPERM, errno.EACCES, errno.ENOSYS, errno.EXDEV} and winerror not in {1, 5, 17, 50}:
+                raise PipelineInputError(
+                    f"could not atomically create owned record: {path}: {error}"
+                ) from error
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+            try:
+                exclusive_fd = os.open(path, flags, 0o666)
+            except FileExistsError as exists_error:
+                raise PipelineInputError(f"refusing to overwrite existing owned record: {path}") from exists_error
+            except OSError as fallback_error:
+                raise PipelineInputError(
+                    f"could not atomically create owned record: {path}: {fallback_error}"
+                ) from fallback_error
+            try:
+                with os.fdopen(exclusive_fd, "wb") as exclusive_stream:
+                    exclusive_stream.write(payload)
+                    exclusive_stream.flush()
+                    os.fsync(exclusive_stream.fileno())
+            except Exception:
+                path.unlink(missing_ok=True)
+                raise
     finally:
         temporary.unlink(missing_ok=True)
 

@@ -16,6 +16,10 @@ from cad_skill_core.geometry.dxf_writer import write_dxf
 from cad_skill_core.schema.io import load_spec
 from cad_skill_core.schema.models import DrawingSpec
 from cad_skill_core.standards.profile import load_standard
+from tests.helpers import RUNTIME_ROOT
+
+PROFILE_PATH = RUNTIME_ROOT / "knowledge/standards/gb-mechanical.yaml"
+SIMPLE_FLANGE_SPEC = RUNTIME_ROOT / "tests/fixtures/specs/simple-flange.json"
 
 
 def resolved_font_map() -> dict[str, ResolvedFont]:
@@ -38,8 +42,8 @@ def resolved_font_map() -> dict[str, ResolvedFont]:
 
 
 def test_flange_dxf_contains_expected_geometry_and_layers(tmp_path):
-    spec = load_spec(Path("tests/fixtures/specs/simple-flange.json"))
-    standard = load_standard(Path("knowledge/standards/gb-mechanical.yaml"))
+    spec = load_spec(SIMPLE_FLANGE_SPEC)
+    standard = load_standard(PROFILE_PATH)
 
     result = write_dxf(spec, standard, resolved_font_map(), tmp_path / "flange.dxf")
     doc = ezdxf.readfile(result.path)
@@ -56,8 +60,8 @@ def test_flange_dxf_contains_expected_geometry_and_layers(tmp_path):
 
 
 def test_writer_produces_byte_identical_dxf_in_specification_entity_order(tmp_path):
-    spec = load_spec(Path("tests/fixtures/specs/simple-flange.json"))
-    standard = load_standard(Path("knowledge/standards/gb-mechanical.yaml"))
+    spec = load_spec(SIMPLE_FLANGE_SPEC)
+    standard = load_standard(PROFILE_PATH)
 
     first = write_dxf(spec, standard, resolved_font_map(), tmp_path / "first.dxf")
     second = write_dxf(spec, standard, resolved_font_map(), tmp_path / "second.dxf")
@@ -96,8 +100,8 @@ write_dxf(
         subprocess.run(
             [sys.executable, "-c", script, str(output)],
             check=True,
-            cwd=Path.cwd(),
-            env={**os.environ, "PYTHONHASHSEED": seed},
+            cwd=RUNTIME_ROOT,
+            env={**os.environ, "PYTHONHASHSEED": seed, "PYTHONPATH": str(RUNTIME_ROOT / "src")},
         )
         outputs.append(output.read_bytes())
 
@@ -105,8 +109,8 @@ write_dxf(
 
 
 def test_overlapping_writes_are_byte_deterministic_and_preserve_ezdxf_options(tmp_path, monkeypatch):
-    spec = load_spec(Path("tests/fixtures/specs/simple-flange.json"))
-    standard = load_standard(Path("knowledge/standards/gb-mechanical.yaml"))
+    spec = load_spec(SIMPLE_FLANGE_SPEC)
+    standard = load_standard(PROFILE_PATH)
     first_at_save = threading.Event()
     second_at_save = threading.Event()
     first_metadata_scope_finished = threading.Event()
@@ -151,8 +155,8 @@ def test_overlapping_writes_are_byte_deterministic_and_preserve_ezdxf_options(tm
 
 
 def test_standard_linetypes_have_visible_dash_patterns(tmp_path):
-    spec = load_spec(Path("tests/fixtures/specs/simple-flange.json"))
-    standard = load_standard(Path("knowledge/standards/gb-mechanical.yaml"))
+    spec = load_spec(SIMPLE_FLANGE_SPEC)
+    standard = load_standard(PROFILE_PATH)
 
     document = ezdxf.readfile(write_dxf(spec, standard, resolved_font_map(), tmp_path / "flange.dxf").path)
 
@@ -167,7 +171,7 @@ def test_result_extents_enclose_reopened_text_and_dimension_bounds(tmp_path):
         {"kind": "text", "layer": "TEXT", "text": "WIDE", "insert": [100.0, 100.0], "height": 10.0, "source_id": "src"},
         {"kind": "dimension", "layer": "DIM", "start": [0.0, 0.0], "end": [10.0, 0.0], "offset": 20.0, "source_id": "src"},
     ])
-    standard = load_standard(Path("knowledge/standards/gb-mechanical.yaml"))
+    standard = load_standard(PROFILE_PATH)
 
     result = write_dxf(spec, standard, resolved_font_map(), tmp_path / "annotated.dxf")
     actual = bbox.extents(ezdxf.readfile(result.path).modelspace())
@@ -186,7 +190,7 @@ def test_result_extents_enclose_reopened_text_and_dimension_bounds(tmp_path):
     ],
 )
 def test_writer_rejects_missing_used_font_role(tmp_path, entity, role):
-    standard = load_standard(Path("knowledge/standards/gb-mechanical.yaml"))
+    standard = load_standard(PROFILE_PATH)
     fonts = resolved_font_map()
     del fonts[role]
 
@@ -195,7 +199,7 @@ def test_writer_rejects_missing_used_font_role(tmp_path, entity, role):
 
 
 def test_writer_reports_used_font_roles_needing_render_verification(tmp_path):
-    standard = load_standard(Path("knowledge/standards/gb-mechanical.yaml"))
+    standard = load_standard(PROFILE_PATH)
     fonts = resolved_font_map()
     fonts["TEXT"] = ResolvedFont(
         primary="simplex.shx",
@@ -216,7 +220,7 @@ def test_writer_reports_used_font_roles_needing_render_verification(tmp_path):
 
 
 def test_writer_uses_concrete_primary_path_after_fallback_promotion(tmp_path):
-    standard = load_standard(Path("knowledge/standards/gb-mechanical.yaml"))
+    standard = load_standard(PROFILE_PATH)
     concrete = Path(findfont("DejaVu Sans")).resolve()
     fonts = resolved_font_map()
     fonts["TEXT"] = ResolvedFont(
@@ -263,7 +267,7 @@ def test_writer_uses_concrete_primary_path_after_fallback_promotion(tmp_path):
 )
 def test_writer_rejects_invalid_geometry(tmp_path, entity, match):
     spec = _spec_with_entities([entity])
-    standard = load_standard(Path("knowledge/standards/gb-mechanical.yaml"))
+    standard = load_standard(PROFILE_PATH)
 
     with pytest.raises(ValueError, match=match):
         write_dxf(spec, standard, resolved_font_map(), tmp_path / "invalid.dxf")
@@ -283,7 +287,7 @@ def test_writer_supports_every_declared_2d_entity(tmp_path):
         {"kind": "dimension", "layer": "DIM", "start": [0.0, 45.0], "end": [10.0, 45.0], "offset": 5.0, "source_id": "src"},
     ]
     spec = _spec_with_entities(entities)
-    standard = load_standard(Path("knowledge/standards/gb-mechanical.yaml"))
+    standard = load_standard(PROFILE_PATH)
 
     result = write_dxf(spec, standard, resolved_font_map(), tmp_path / "all-entities.dxf")
     entities_in_dxf = [entity.dxftype() for entity in ezdxf.readfile(result.path).modelspace()]

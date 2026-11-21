@@ -897,3 +897,65 @@ def test_chinese_report_contains_complete_sorted_audit_evidence(tmp_path):
         assert expected in report
     assert ".run-" not in report
     assert str(task_dir) not in report
+
+
+def test_pipeline_supports_circular_and_contour_entities_end_to_end(tmp_path):
+    import ezdxf
+
+    task_dir = copy_example("simple-flange", tmp_path)
+    spec_path = task_dir / "work" / "drawing-spec.json"
+    spec = json.loads(spec_path.read_text(encoding="utf-8"))
+    source_id = spec["provenance"][0]["id"]
+    spec["geometry"]["entities"] = [
+        {
+            "kind": "circular",
+            "layer": "OUTLINE",
+            "center": [0.0, 0.0],
+            "radius": 60.0,
+            "source_id": source_id,
+        },
+        {
+            "kind": "circular",
+            "layer": "OUTLINE",
+            "center": [0.0, 0.0],
+            "radius": 75.0,
+            "start_angle": 30.0,
+            "sweep": 120.0,
+            "source_id": source_id,
+        },
+        {
+            "kind": "contour",
+            "layer": "OUTLINE",
+            "require_tangent": True,
+            "segments": [
+                {"kind": "line", "start": [-15.0, -8.0], "end": [15.0, -8.0]},
+                {"kind": "arc", "center": [15.0, 0.0], "radius": 8.0, "start_angle": -90.0, "sweep": 180.0},
+                {"kind": "line", "start": [15.0, 8.0], "end": [-15.0, 8.0]},
+                {"kind": "arc", "center": [-15.0, 0.0], "radius": 8.0, "start_angle": 90.0, "sweep": 180.0},
+            ],
+            "source_id": source_id,
+        },
+    ]
+    spec_path.write_text(json.dumps(spec, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    result = run_task(task_dir, PipelineOptions(run_autocad=False))
+
+    assert result.status == "partial"
+    audit = json.loads(result.audit_path.read_text(encoding="utf-8"))
+    assert audit["summary"]["errors"] == 0
+    reopened = ezdxf.readfile(task_dir / "output" / "drawing.dxf")
+    outline_entities = [
+        entity for entity in reopened.modelspace() if entity.dxf.layer == "OUTLINE"
+    ]
+    assert {entity.dxftype() for entity in outline_entities} >= {
+        "CIRCLE",
+        "ARC",
+        "LWPOLYLINE",
+    }
+    contour_poly = next(
+        entity for entity in outline_entities if entity.dxftype() == "LWPOLYLINE"
+    )
+    assert contour_poly.closed
+    assert any(abs(pt[2]) > 0.5 for pt in contour_poly.get_points("xyb"))
+    assert not reopened.audit().has_errors
+

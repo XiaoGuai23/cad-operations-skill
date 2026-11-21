@@ -12,9 +12,12 @@ from cad_skill_core.geometry.dxf_writer import write_dxf
 from cad_skill_core.schema.io import load_spec
 from cad_skill_core.schema.models import Annotation, DrawingSpec, SourcedText
 from cad_skill_core.standards.profile import load_standard
+from tests.helpers import RUNTIME_ROOT
 
 
-PROFILE_PATH = Path("knowledge/standards/gb-mechanical.yaml")
+PROFILE_PATH = RUNTIME_ROOT / "knowledge/standards/gb-mechanical.yaml"
+FIXTURE_SPEC_PATH = RUNTIME_ROOT / "tests/fixtures/specs/simple-flange.json"
+EXAMPLE_SPEC_PATH = RUNTIME_ROOT / "examples/simple-flange/work/drawing-spec.json"
 
 
 def gb_profile():
@@ -173,7 +176,7 @@ def test_narrow_edge_view_label_keeps_visible_clearance_from_sheet_frame():
 
 
 def test_layout_transforms_grouped_fixture_geometry_into_the_planned_view(tmp_path):
-    spec = load_spec(Path("tests/fixtures/specs/simple-flange.json"))
+    spec = load_spec(FIXTURE_SPEC_PATH)
     spec.sheet.scale = "1:2"
     spec.geometry.view_entity_indices = {"front": [0, 1, 2, 3, 4, 5]}
     standard = gb_profile()
@@ -251,7 +254,7 @@ def test_layout_prefers_visible_frame_clearance_when_content_fits():
 
 
 def test_simple_flange_one_to_one_requires_explicit_one_to_two_replan():
-    spec = load_spec(Path("examples/simple-flange/work/drawing-spec.json"))
+    spec = load_spec(EXAMPLE_SPEC_PATH)
     spec.sheet.scale = "1:1"
 
     with pytest.raises(LayoutOverflowError) as error:
@@ -262,7 +265,7 @@ def test_simple_flange_one_to_one_requires_explicit_one_to_two_replan():
 
 
 def test_tracked_simple_flange_one_to_two_keeps_view_content_two_mm_from_frame():
-    spec = load_spec(Path("examples/simple-flange/work/drawing-spec.json"))
+    spec = load_spec(EXAMPLE_SPEC_PATH)
     assert spec.sheet.scale == "1:2"
 
     plan = plan_layout(spec, gb_profile())
@@ -288,7 +291,7 @@ def test_tracked_simple_flange_one_to_two_keeps_view_content_two_mm_from_frame()
 
 
 def test_scale_search_skips_simple_flange_edge_only_candidate():
-    spec = load_spec(Path("examples/simple-flange/work/drawing-spec.json"))
+    spec = load_spec(EXAMPLE_SPEC_PATH)
     spec.sheet.scale = "2:1"
 
     with pytest.raises(LayoutOverflowError) as error:
@@ -298,7 +301,7 @@ def test_scale_search_skips_simple_flange_edge_only_candidate():
 
 
 def test_fixed_scale_long_annotation_reports_fixed_content_overflow():
-    spec = load_spec(Path("examples/simple-flange/work/drawing-spec.json"))
+    spec = load_spec(EXAMPLE_SPEC_PATH)
     assert spec.sheet.scale == "1:2"
     spec.annotations.append(Annotation(text="TRACEABLE NOTE " * 80))
 
