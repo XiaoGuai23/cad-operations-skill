@@ -95,6 +95,14 @@ def _parser() -> argparse.ArgumentParser:
     learn_cmd.add_argument('--name', default=None, dest='profile_name')
     learn_cmd.add_argument('--json', action='store_true', dest='as_json')
 
+    mcp_stdio = commands.add_parser('mcp-stdio', help='run standards-compliant MCP JSON-RPC server over stdio')
+    mcp_stdio.add_argument('--workspace', type=Path, default=None, dest='workspace_root')
+
+    mcp_http = commands.add_parser('mcp-http', help='run Streamable HTTP MCP server and Web Auto-Drafting FastAPI gateway')
+    mcp_http.add_argument('--host', default='127.0.0.1')
+    mcp_http.add_argument('--port', type=int, default=8765)
+    mcp_http.add_argument('--workspace', type=Path, default=None, dest='workspace_root')
+
     for name, help_text in (
         ("generate", "generate and audit core DXF and previews"),
         ("inspect", "run a fresh zero-repair inspection generation"),
@@ -127,6 +135,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _upgrade_command(arguments)
     if arguments.command in {'compile-spec', 'learn-standard'}:
         return _phase2_command(arguments)
+    if arguments.command in {'mcp-stdio', 'mcp-http'}:
+        return _mcp_command(arguments)
 
     from .pipeline import PipelineInputError, PipelineOptions, run_task
     try:
@@ -293,6 +303,20 @@ def _phase2_command(arguments: argparse.Namespace) -> int:
     except Exception as error:
         _write_error(f"phase2 command failure: {type(error).__name__}: {error}", arguments.as_json)
         return 1
+
+
+def _mcp_command(arguments: argparse.Namespace) -> int:
+    if arguments.command == "mcp-stdio":
+        from .mcp.stdio_server import serve_stdio
+
+        return serve_stdio(workspace_root=arguments.workspace_root)
+
+    import uvicorn
+    from .mcp.http_app import create_mcp_http_app
+
+    app = create_mcp_http_app(arguments.workspace_root)
+    uvicorn.run(app, host=arguments.host, port=arguments.port, log_level="info")
+    return 0
 
 
 def _validate_spec(path: Path, as_json: bool) -> int:
