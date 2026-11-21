@@ -78,6 +78,23 @@ def _parser() -> argparse.ArgumentParser:
     operations = commands.add_parser('operations', help='discover supported revision operations and required fields')
     operations.add_argument('--json', action='store_true', dest='as_json')
 
+    compile_cmd = commands.add_parser('compile-spec', help='compile engineering documents/tables into a validated DrawingSpec')
+    compile_cmd.add_argument('inputs', nargs='+', type=Path)
+    compile_cmd.add_argument('--out', type=Path, required=True, dest='output_path')
+    compile_cmd.add_argument(
+        '--part-family',
+        choices=('auto', 'flange', 'stepped-shaft', 'slotted-bracket', 'rounded-rect'),
+        default='auto',
+    )
+    compile_cmd.add_argument('--lang', choices=('auto', 'en', 'zh'), default='auto')
+    compile_cmd.add_argument('--json', action='store_true', dest='as_json')
+
+    learn_cmd = commands.add_parser('learn-standard', help='extract a validated DrawingStandard YAML profile from a sample DXF')
+    learn_cmd.add_argument('sample', type=Path)
+    learn_cmd.add_argument('--out', type=Path, required=True, dest='output_path')
+    learn_cmd.add_argument('--name', default=None, dest='profile_name')
+    learn_cmd.add_argument('--json', action='store_true', dest='as_json')
+
     for name, help_text in (
         ("generate", "generate and audit core DXF and previews"),
         ("inspect", "run a fresh zero-repair inspection generation"),
@@ -108,6 +125,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _revision_command(arguments)
     if arguments.command in {'check-drawing-set', 'compare-reference', 'preview', 'operations'}:
         return _upgrade_command(arguments)
+    if arguments.command in {'compile-spec', 'learn-standard'}:
+        return _phase2_command(arguments)
 
     from .pipeline import PipelineInputError, PipelineOptions, run_task
     try:
@@ -224,6 +243,56 @@ def _diagnostic_command(arguments):
     print(_stable_json({'command': arguments.command, **result}) if arguments.as_json
           else json.dumps(result, ensure_ascii=False, indent=2))
     return 1 if arguments.command == 'check-comments' and result['status'] == 'failed' else 0
+
+
+def _phase2_command(arguments: argparse.Namespace) -> int:
+    from ezdxf.lldxf.const import DXFError
+
+    try:
+        if arguments.command == "compile-spec":
+            from .documents.spec_compiler import compile_spec_from_files
+
+            spec = compile_spec_from_files(
+                arguments.inputs,
+                part_family=arguments.part_family,
+                title_block_language=arguments.lang,
+                output_path=arguments.output_path,
+            )
+            has_blocking = bool(spec.validation.missing or spec.validation.conflicts)
+            payload = {
+                "command": "compile-spec",
+                "output_path": str(arguments.output_path.resolve()),
+                "status": "incomplete" if has_blocking else "compiled",
+                "missing": spec.validation.missing,
+                "conflicts": spec.validation.conflicts,
+                "assumptions": spec.validation.assumptions,
+            }
+            print(_stable_json(payload) if arguments.as_json else json.dumps(payload, ensure_ascii=False, indent=2))
+            return 1 if has_blocking else 0
+
+        from .standards.sample_learner import learn_standard_from_dxf, save_standard_yaml
+
+        learned = learn_standard_from_dxf(
+            arguments.sample,
+            profile_name=arguments.profile_name,
+        )
+        saved = save_standard_yaml(learned.standard, arguments.output_path)
+        payload = {
+            "command": "learn-standard",
+            "output_path": str(saved.resolve()),
+            "status": "learned",
+            "profile_name": learned.standard.name,
+            "detected_sheet": learned.detected_sheet,
+            "matched_layers": learned.matched_layers,
+        }
+        print(_stable_json(payload) if arguments.as_json else json.dumps(payload, ensure_ascii=False, indent=2))
+        return 0
+    except (ValueError, TypeError, OSError, DXFError) as error:
+        _write_error(f"user/validation error: {error}", arguments.as_json)
+        return 2
+    except Exception as error:
+        _write_error(f"phase2 command failure: {type(error).__name__}: {error}", arguments.as_json)
+        return 1
 
 
 def _validate_spec(path: Path, as_json: bool) -> int:

@@ -54,7 +54,7 @@ class UnsafeRepairError(ValueError):
 class _RepairState:
     standard: DrawingStandard
     fonts: dict[str, ResolvedFont]
-    text_shifts: dict[str, float]
+    text_shifts: dict[str, float | tuple[float, float]]
     layer_overrides: dict[str, str]
 
 
@@ -397,7 +397,7 @@ def _resolve_render_verification(
 
 def _apply_plan_state(
     plan: LayoutPlan,
-    text_shifts: dict[str, float],
+    text_shifts: dict[str, float | tuple[float, float]],
 ) -> LayoutPlan:
     annotations = tuple(
         _shift_annotation(annotation, text_shifts.get(annotation.annotation_id, 0.0))
@@ -406,18 +406,87 @@ def _apply_plan_state(
     return replace(plan, annotations=annotations)
 
 
-def _shift_annotation(annotation: AnnotationLayout, distance: float) -> AnnotationLayout:
-    if distance == 0.0:
+def _coerce_shift(shift: float | tuple[float, float]) -> tuple[float, float]:
+    if isinstance(shift, tuple):
+        return float(shift[0]), float(shift[1])
+    val = float(shift)
+    return val, val
+
+
+def _shift_annotation(
+    annotation: AnnotationLayout, shift: float | tuple[float, float]
+) -> AnnotationLayout:
+    dx, dy = _coerce_shift(shift)
+    if dx == 0.0 and dy == 0.0:
         return annotation
     bounds = annotation.bounds
     shifted_bounds = Bounds(
-        bounds.min_x + distance,
-        bounds.min_y + distance,
-        bounds.max_x + distance,
-        bounds.max_y + distance,
+        bounds.min_x + dx,
+        bounds.min_y + dy,
+        bounds.max_x + dx,
+        bounds.max_y + dy,
     )
-    points = tuple((x + distance, y + distance) for x, y in annotation.points)
+    points = tuple((x + dx, y + dy) for x, y in annotation.points)
     return replace(annotation, bounds=shifted_bounds, points=points)
+
+
+def _solve_text_avoidance_shift(
+    target: AnnotationLayout,
+    plan: LayoutPlan,
+    current_shifts: dict[str, float | tuple[float, float]],
+    base_distance: float,
+) -> tuple[float, float]:
+    """Search candidate 2D (dx, dy) offsets to resolve annotation overlap safely."""
+
+    prev_dx, prev_dy = _coerce_shift(current_shifts.get(target.annotation_id, 0.0))
+    zones = {
+        "printable": plan.printable_bounds,
+        "title": plan.title_block_bounds,
+        "technical": plan.technical_note_bounds,
+        "parts": plan.parts_list.bounds,
+    }
+    protected = (plan.title_block_bounds, plan.technical_note_bounds, plan.parts_list.bounds)
+    other_bounds: list[Bounds] = []
+    for other in plan.annotations:
+        if other.annotation_id == target.annotation_id or other.kind == "frame":
+            continue
+        if other.group_id == target.group_id and (target.owner_zone is not None or other.kind in {"balloon", "leader"}):
+            continue
+        odx, ody = _coerce_shift(current_shifts.get(other.annotation_id, 0.0))
+        ob = other.bounds
+        other_bounds.append(Bounds(ob.min_x + odx, ob.min_y + ody, ob.max_x + odx, ob.max_y + ody))
+
+    step = max(base_distance, target.bounds.height + 0.8)
+    directions = (
+        (0.0, 1.0),
+        (0.0, -1.0),
+        (1.0, 0.0),
+        (-1.0, 0.0),
+        (1.0, 1.0),
+        (1.0, -1.0),
+        (-1.0, 1.0),
+        (-1.0, -1.0),
+    )
+    tb = target.bounds
+    for mult in (1.0, 2.0, 3.0, 4.0, 6.0):
+        for ux, uy in directions:
+            dx = prev_dx + ux * step * mult
+            dy = prev_dy + uy * step * mult
+            cand = Bounds(tb.min_x + dx, tb.min_y + dy, tb.max_x + dx, tb.max_y + dy)
+            if not plan.printable_bounds.contains(cand):
+                continue
+            if target.owner_zone is not None:
+                if not zones[target.owner_zone].contains(cand):
+                    continue
+            else:
+                if any(cand.intersects(z) for z in protected):
+                    continue
+                if any(cand.intersects(v.bounds) for v in plan.views):
+                    continue
+            if any(cand.intersects(ob) for ob in other_bounds):
+                continue
+            return (round(dx, 4), round(dy, 4))
+    return (prev_dx + base_distance, prev_dy + base_distance)
 
 
 def _verified_fallback_path(
@@ -517,25 +586,39 @@ def _apply_action(
     handles = set(action.target.split(","))
     if action.code == "SHIFT_TEXT":
         distance = float(action.delta["distance_mm"])
-        for annotation in plan.annotations:
-            if handles.intersection(annotation.entity_handles) and annotation.kind in {
-                "title-label",
-                "title",
-                "drawing-number",
-                "scale",
-                "projection",
-                "notes-header",
-                "parts-header",
-                "parts-column",
-                "parts-row",
-                "view-label",
-                "technical-note",
-                "annotation",
-                "balloon-text",
-            }:
-                state.text_shifts[annotation.annotation_id] = (
-                    state.text_shifts.get(annotation.annotation_id, 0.0) + distance
-                )
+        movable_kinds = {
+            "title-label",
+            "title",
+            "drawing-number",
+            "scale",
+            "projection",
+            "notes-header",
+            "parts-header",
+            "parts-column",
+            "parts-row",
+            "view-label",
+            "technical-note",
+            "annotation",
+            "balloon-text",
+        }
+        header_kinds = {"title-label", "notes-header", "parts-header", "parts-column"}
+        matched = [
+            annotation
+            for annotation in plan.annotations
+            if handles.intersection(annotation.entity_handles)
+            and annotation.kind in movable_kinds
+        ]
+        if len(matched) >= 2:
+            # Prefer keeping structural headers / earlier items stationary so the
+            # colliding annotation separates cleanly rather than moving together.
+            non_headers = [a for a in matched if a.kind not in header_kinds]
+            candidates_to_move = [non_headers[-1]] if non_headers else [matched[-1]]
+        else:
+            candidates_to_move = matched
+        for annotation in candidates_to_move:
+            state.text_shifts[annotation.annotation_id] = _solve_text_avoidance_shift(
+                annotation, plan, state.text_shifts, distance
+            )
         return
     if action.code == "REASSIGN_LAYER":
         annotation_by_handle = {

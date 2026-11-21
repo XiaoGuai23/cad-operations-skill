@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import csv
 import hashlib
 import math
 import unicodedata
 from collections.abc import Callable, Sequence
+from io import StringIO
 from pathlib import Path
 from typing import TypeAlias
 
@@ -19,6 +21,10 @@ OCRResult: TypeAlias = str | tuple[str, float]
 OCRCallable: TypeAlias = Callable[[Path], OCRResult]
 
 _TEXT_MEDIA_TYPES = {".md": "text/markdown", ".txt": "text/plain"}
+_TABLE_MEDIA_TYPES = {
+    ".csv": ("text/csv", ","),
+    ".tsv": ("text/tab-separated-values", "\t"),
+}
 _IMAGE_MEDIA_TYPES = {
     ".png": "image/png",
     ".jpg": "image/jpeg",
@@ -49,6 +55,9 @@ def extract_sources(
         suffix = path.suffix.lower()
         if suffix in _TEXT_MEDIA_TYPES:
             fragments.extend(_extract_text(path, _TEXT_MEDIA_TYPES[suffix]))
+        elif suffix in _TABLE_MEDIA_TYPES:
+            media_type, delimiter = _TABLE_MEDIA_TYPES[suffix]
+            fragments.extend(_extract_delimited_table(path, media_type, delimiter))
         elif suffix == ".docx":
             fragments.extend(_extract_docx(path))
         elif suffix == ".pdf":
@@ -89,7 +98,15 @@ def _extract_docx(path: Path) -> list[SourceFragment]:
         for table_number, table in enumerate(document.tables, start=1):
             for row_number, row in enumerate(table.rows, start=1):
                 locator = f"table {table_number} row {row_number}"
-                content = _normalize_content(" | ".join(cell.text for cell in row.cells))
+                unique_cells: list[str] = []
+                last_tc: object | None = None
+                for cell in row.cells:
+                    tc = getattr(cell, "_tc", None)
+                    if tc is not None and tc is last_tc:
+                        continue
+                    last_tc = tc
+                    unique_cells.append(cell.text)
+                content = _normalize_content(" | ".join(unique_cells))
                 if content:
                     fragments.append(_fragment(path, locator, _DOCX_MEDIA_TYPE, content, 1.0))
         return fragments
@@ -97,6 +114,30 @@ def _extract_docx(path: Path) -> list[SourceFragment]:
         raise
     except Exception as error:  # DOCX XML and relationship parsers raise library-specific errors.
         raise SourceExtractionError(path, locator, str(error)) from error
+
+
+def _extract_delimited_table(
+    path: Path, media_type: str, delimiter: str
+) -> list[SourceFragment]:
+    try:
+        raw_text = path.read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeError) as error:
+        raise SourceExtractionError(path, None, str(error)) from error
+
+    fragments: list[SourceFragment] = []
+    try:
+        reader = csv.reader(StringIO(raw_text), delimiter=delimiter)
+        for row_number, row in enumerate(reader, start=1):
+            cleaned = [cell.strip() for cell in row]
+            if not any(cleaned):
+                continue
+            locator = f"table 1 row {row_number}"
+            content = _normalize_content(" | ".join(cleaned))
+            if content:
+                fragments.append(_fragment(path, locator, media_type, content, 1.0))
+    except csv.Error as error:
+        raise SourceExtractionError(path, "table 1", str(error)) from error
+    return fragments
 
 
 def _extract_pdf(path: Path) -> list[SourceFragment]:
