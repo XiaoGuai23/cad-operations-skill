@@ -17,6 +17,7 @@ from ezdxf.entities.copy import CopySettings, CopyStrategy
 from ezdxf.math import arc_angle_span_deg
 
 from .common import RevisionError, resolve_entities, stable_id, validate_tolerance
+from .transaction import DocumentCheckpoint
 
 
 TAU = math.tau
@@ -324,7 +325,7 @@ def split_intersections(doc, selectors, tolerance, *, include_annotation_interse
         handle = entity.dxf.handle
         source_ids[handle] = stable_id(entity)
         pieces = [(g, a, b) for g in source_curves for a, b in _intervals(g, tolerance)]
-        unchanged = entity.dxftype() not in {"LWPOLYLINE", "POLYLINE"} and (not pieces or len(pieces) == 1)
+        unchanged = not pieces or len(pieces) == len(source_curves)
         if unchanged:
             mapping[handle] = [handle]
             continue
@@ -341,6 +342,7 @@ def split_intersections(doc, selectors, tolerance, *, include_annotation_interse
                 child.set_xdata("CAD_SKILL_ID", tags)
                 used_ids.add(child_id)
         replacements.append((entity, handle, children))
+    checkpoint = DocumentCheckpoint(doc)
     layout = doc.modelspace()
     added = []
     try:
@@ -349,13 +351,12 @@ def split_intersections(doc, selectors, tolerance, *, include_annotation_interse
                 layout.add_entity(child)
                 added.append(child)
             mapping[handle] = [child.dxf.handle for child in children]
-    except Exception:
-        for child in added:
-            layout.delete_entity(child)
+        touched = [handle for _, handle, _ in replacements]
+        for entity, _, _ in replacements:
+            layout.delete_entity(entity)
+    except BaseException:
+        checkpoint.restore()
         raise
-    touched = [handle for _, handle, _ in replacements]
-    for entity, _, _ in replacements:
-        layout.delete_entity(entity)
     return {
         "status": "partial" if unsupported else "passed",
         "scope": "all" if selectors is None else "selected",

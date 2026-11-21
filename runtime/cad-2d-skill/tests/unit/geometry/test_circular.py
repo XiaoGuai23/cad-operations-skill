@@ -14,7 +14,11 @@ from pathlib import Path
 from cad_skill_core.standards.profile import load_standard
 
 from cad_skill_core.fonts.models import ResolvedFont, ResolvedFontRun
+from cad_skill_core.layout.plan import plan_layout
 from cad_skill_core.schema.models import DrawingSpec
+from tests.helpers import RUNTIME_ROOT
+
+PROFILE_PATH = RUNTIME_ROOT / "knowledge/standards/gb-mechanical.yaml"
 
 
 def resolved_font_map() -> dict[str, ResolvedFont]:
@@ -55,7 +59,7 @@ def test_circular_full_sweep_writes_native_circle_and_partial_writes_arc(tmp_pat
         {"kind": "circular", "layer": "OUTLINE", "center": [20.0, 0.0], "radius": 5.0,
          "start_angle": 30.0, "sweep": 90.0, "source_id": "src"},
     ])
-    standard = load_standard(Path("knowledge/standards/gb-mechanical.yaml"))
+    standard = load_standard(PROFILE_PATH)
 
     result = write_dxf(spec, standard, resolved_font_map(), tmp_path / "circular.dxf")
     entities = list(ezdxf.readfile(result.path).modelspace())
@@ -81,7 +85,7 @@ def test_circular_rejects_out_of_range_sweep(tmp_path, sweep):
         {"kind": "circular", "layer": "OUTLINE", "center": [0.0, 0.0], "radius": 5.0,
          "start_angle": 0.0, "sweep": sweep, "source_id": "src"},
     ])
-    standard = load_standard(Path("knowledge/standards/gb-mechanical.yaml"))
+    standard = load_standard(PROFILE_PATH)
 
     with pytest.raises(ValueError, match="sweep"):
         write_dxf(spec, standard, resolved_font_map(), tmp_path / "bad.dxf")
@@ -112,7 +116,7 @@ def test_partial_circle_preserves_sweep_and_native_arc_type(tmp_path, start, swe
         {"kind": "circular", "layer": "OUTLINE", "center": [0.0, 0.0], "radius": 5.0,
          "start_angle": start, "sweep": sweep, "source_id": "src"},
     ])
-    standard = load_standard(Path("knowledge/standards/gb-mechanical.yaml"))
+    standard = load_standard(PROFILE_PATH)
     result = write_dxf(spec, standard, {}, tmp_path / "partial.dxf")
     arc = ezdxf.readfile(result.path).modelspace()[0]
     assert arc.dxftype() == "ARC"
@@ -125,8 +129,19 @@ def test_unrepresentable_partial_arc_is_rejected_before_publication(tmp_path):
         {"kind": "circular", "layer": "OUTLINE", "center": [0.0, 0.0], "radius": 5.0,
          "start_angle": 30.0, "sweep": 360 - 1e-10, "source_id": "src"},
     ])
-    standard = load_standard(Path("knowledge/standards/gb-mechanical.yaml"))
+    standard = load_standard(PROFILE_PATH)
     output = tmp_path / "ambiguous.dxf"
     with pytest.raises(ValueError, match="precision"):
         write_dxf(spec, standard, {}, output)
     assert not output.exists()
+
+
+def test_plan_layout_computes_exact_bounds_for_full_and_partial_circular_entities():
+    spec = _spec_with_entities([
+        {"kind": "circular", "layer": "OUTLINE", "center": [0.0, 0.0], "radius": 15.0,
+         "start_angle": 0.0, "sweep": 360.0, "source_id": "src"},
+        {"kind": "circular", "layer": "OUTLINE", "center": [40.0, 0.0], "radius": 10.0,
+         "start_angle": 30.0, "sweep": 120.0, "source_id": "src"},
+    ])
+    plan = plan_layout(spec, load_standard(PROFILE_PATH))
+    assert plan.views[0].source_bounds == pytest.approx((-15.0, -15.0, 48.66025403784439, 15.0))

@@ -11,6 +11,8 @@ from .models import FontFace, FontInventory
 
 
 _FONT_SUFFIXES = {".otf", ".shx", ".ttc", ".ttf"}
+_DEFAULT_TTFONT = TTFont
+_FONT_FACE_CACHE: dict[tuple[str, int, int], FontFace | None] = {}
 
 
 def build_font_search_roots(
@@ -41,7 +43,7 @@ def discover_fonts(search_roots: Sequence[Path]) -> FontInventory:
     seen_names: set[str] = set()
     for root in search_roots:
         for path in _font_paths(root):
-            face = _read_font(path)
+            face = _read_font_cached(path)
             if face is None or face.name.casefold() in seen_names:
                 continue
             seen_names.add(face.name.casefold())
@@ -57,6 +59,23 @@ def _font_paths(root: Path) -> tuple[Path, ...]:
         return tuple(sorted(paths, key=lambda path: (str(path.relative_to(root)).casefold(), str(path))))
     except OSError:
         return ()
+
+
+def _read_font_cached(path: Path) -> FontFace | None:
+    if TTFont is not _DEFAULT_TTFONT:
+        return _read_font(path)
+    try:
+        metadata = path.stat()
+        key = (str(path.resolve()), int(metadata.st_size), int(metadata.st_mtime_ns))
+    except OSError:
+        return None
+    if key in _FONT_FACE_CACHE:
+        return _FONT_FACE_CACHE[key]
+    face = _read_font(path)
+    if len(_FONT_FACE_CACHE) >= 4096:
+        _FONT_FACE_CACHE.clear()
+    _FONT_FACE_CACHE[key] = face
+    return face
 
 
 def _read_font(path: Path) -> FontFace | None:

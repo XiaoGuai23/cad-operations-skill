@@ -265,3 +265,29 @@ def test_callout_conversion_rejects_metadata_it_cannot_preserve(metadata):
         apply_annotation(doc, {'type': 'link_callout', 'text': sel(text), 'lines': [sel(line)],
                                'arrow_target': [0, 0], 'arrow_name': '', 'arrow_size': 1}, TOL)
     assert serialized(doc) == before
+
+
+def test_dimension_updates_retire_superseded_private_anonymous_blocks(tmp_path):
+    doc = ezdxf.new('R2010')
+    entity = dimension(doc)
+    old_block = entity.dxf.geometry
+    assert old_block.startswith('*D')
+    assert old_block in doc.blocks
+
+    apply_annotation(doc, {'type': 'dimension_move', 'target': sel(entity), 'position': [8, 22]}, TOL)
+    moved_block = entity.dxf.geometry
+    assert moved_block != old_block
+    assert old_block not in doc.blocks
+    assert moved_block in doc.blocks
+
+    apply_annotation(doc, {'type': 'dimension_text_mode', 'target': sel(entity), 'mode': 1}, TOL)
+    final_block = entity.dxf.geometry
+    assert final_block != moved_block
+    assert moved_block not in doc.blocks
+    assert final_block in doc.blocks
+
+    reopened = reopen(doc, tmp_path)
+    dim_blocks = [block.name for block in reopened.blocks if block.name.startswith('*D')]
+    assert dim_blocks == [final_block]
+    assert not reopened.audit().has_errors
+

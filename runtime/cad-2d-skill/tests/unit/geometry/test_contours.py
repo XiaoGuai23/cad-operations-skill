@@ -9,9 +9,14 @@ import pytest
 
 from cad_skill_core.geometry import entities
 from cad_skill_core.geometry.dxf_writer import write_dxf
+from cad_skill_core.layout.plan import plan_layout
 from cad_skill_core.schema.io import load_spec
 from cad_skill_core.schema.models import DrawingSpec
 from cad_skill_core.standards.profile import load_standard
+from tests.helpers import RUNTIME_ROOT
+
+PROFILE_PATH = RUNTIME_ROOT / "knowledge/standards/gb-mechanical.yaml"
+SIMPLE_FLANGE_SPEC = RUNTIME_ROOT / "tests/fixtures/specs/simple-flange.json"
 
 
 def contour(**kwargs):
@@ -34,11 +39,11 @@ def test_save_readback_is_one_closed_polyline_with_true_semicircle(tmp_path):
         {"kind": "arc", "center": [0.0, 0.0], "radius": 10.0,
          "start_angle": 0.0, "sweep": 180.0},
     ])
-    data = load_spec(Path("tests/fixtures/specs/simple-flange.json")).model_dump(mode="json")
+    data = load_spec(SIMPLE_FLANGE_SPEC).model_dump(mode="json")
     boundary.source_id = data["provenance"][0]["id"]
     data["geometry"]["entities"] = [boundary.model_dump(mode="json")]
     spec = DrawingSpec.model_validate(data)
-    result = write_dxf(spec, load_standard(Path("knowledge/standards/gb-mechanical.yaml")), {}, tmp_path / "contour.dxf")
+    result = write_dxf(spec, load_standard(PROFILE_PATH), {}, tmp_path / "contour.dxf")
     modelspace = ezdxf.readfile(result.path).modelspace()
     assert result.entity_counts == {"LWPOLYLINE": 1}
     assert len(modelspace) == 1
@@ -217,3 +222,23 @@ def test_resolvable_shallow_arcs_keep_the_original_nonzero_bulge(scale):
                                         [(0, 0), (10, 0), (10, 10), (0, 10)]],
                               tolerance=1e-7 * scale)
     assert all(value[2] == 1e-4 for value in values)
+
+
+def test_plan_layout_computes_exact_arc_bulge_bounds_for_contour():
+    slot = contour(
+        require_tangent=True,
+        segments=[
+            {"kind": "line", "start": [0.0, -5.0], "end": [20.0, -5.0]},
+            {"kind": "arc", "center": [20.0, 0.0], "radius": 5.0, "start_angle": -90.0, "sweep": 180.0},
+            {"kind": "line", "start": [20.0, 5.0], "end": [0.0, 5.0]},
+            {"kind": "arc", "center": [0.0, 0.0], "radius": 5.0, "start_angle": 90.0, "sweep": 180.0},
+        ],
+    )
+    data = load_spec(SIMPLE_FLANGE_SPEC).model_dump(mode="json")
+    slot.source_id = data["provenance"][0]["id"]
+    data["sheet"]["scale"] = "1:1"
+    data["dimensions"] = []
+    data["geometry"]["entities"] = [slot.model_dump(mode="json")]
+    spec = DrawingSpec.model_validate(data)
+    plan = plan_layout(spec, load_standard(PROFILE_PATH))
+    assert plan.views[0].source_bounds == pytest.approx((-5.0, -5.0, 25.0, 5.0))

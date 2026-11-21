@@ -37,6 +37,7 @@ else:
     REPORTLAB_IMPORT_ERROR = None
 
 MM_TO_PT = 72.0 / 25.4
+DOUBLE_BUS_GAP = 6.0
 
 
 @dataclass
@@ -82,15 +83,20 @@ class Diagram:
 
 # ----------------------------- primitives -----------------------------
 
-def draw_ground(d: Diagram, x: float, y: float, s: float = 1.0):
-    d.line(x, y, x, y - 2.0 * s, "EQUIP")
-    d.line(x - 3.0 * s, y - 2.0 * s, x + 3.0 * s, y - 2.0 * s, "EQUIP")
-    d.line(x - 2.0 * s, y - 3.2 * s, x + 2.0 * s, y - 3.2 * s, "EQUIP")
-    d.line(x - 1.0 * s, y - 4.3 * s, x + 1.0 * s, y - 4.3 * s, "EQUIP")
+def draw_junction(d: Diagram, x: float, y: float, r: float = 0.75):
+    d.circle(x, y, r, "EQUIP", width=0.35)
+
+
+def draw_ground(d: Diagram, x: float, y: float, s: float = 1.0, downward: bool = True):
+    dirn = -1 if downward else 1
+    d.line(x, y, x, y + dirn * 2.0 * s, "EQUIP")
+    d.line(x - 3.0 * s, y + dirn * 2.0 * s, x + 3.0 * s, y + dirn * 2.0 * s, "EQUIP")
+    d.line(x - 2.0 * s, y + dirn * 3.2 * s, x + 2.0 * s, y + dirn * 3.2 * s, "EQUIP")
+    d.line(x - 1.0 * s, y + dirn * 4.3 * s, x + 1.0 * s, y + dirn * 4.3 * s, "EQUIP")
 
 
 def draw_disconnector(d: Diagram, x: float, y: float, orientation: str = "vertical", s: float = 1.0):
-    # Open knife contact; port-to-port length is about 12*s.
+    # Open knife contact; port-to-port length is 12*s (ports at y +/- 6*s or x +/- 6*s).
     if orientation == "vertical":
         d.line(x, y + 6 * s, x, y + 2.2 * s, "WIRE")
         d.line(x, y - 6 * s, x, y - 2.2 * s, "WIRE")
@@ -106,7 +112,7 @@ def draw_disconnector(d: Diagram, x: float, y: float, orientation: str = "vertic
 
 
 def draw_breaker(d: Diagram, x: float, y: float, orientation: str = "vertical", s: float = 1.0):
-    # Simplified circuit breaker: a small X/contact mark in series.
+    # Simplified circuit breaker: port-to-port length is 11*s (ports at y +/- 5.5*s or x +/- 5.5*s).
     if orientation == "vertical":
         d.line(x, y + 5.5 * s, x, y + 1.8 * s, "WIRE")
         d.line(x, y - 5.5 * s, x, y - 1.8 * s, "WIRE")
@@ -120,7 +126,6 @@ def draw_breaker(d: Diagram, x: float, y: float, orientation: str = "vertical", 
 
 
 def draw_earthing_switch(d: Diagram, x: float, y: float, side: str = "right", s: float = 1.0):
-    # Tap from a vertical conductor to an earthing switch and ground.
     sign = 1 if side == "right" else -1
     d.line(x, y, x + sign * 5 * s, y, "EQUIP")
     d.line(x + sign * 5 * s, y, x + sign * 8.5 * s, y - 4 * s, "EQUIP")
@@ -129,91 +134,136 @@ def draw_earthing_switch(d: Diagram, x: float, y: float, side: str = "right", s:
 
 
 def draw_transformer(d: Diagram, x: float, y: float, label: str = "主变", s: float = 1.0):
+    # Terminal ports at y +/- 3.2 * r = y +/- 17.6 * s.
     r = 5.5 * s
     d.circle(x, y + r * 0.85, r, "EQUIP")
     d.circle(x, y - r * 0.85, r, "EQUIP")
     d.circle(x - r * 0.85, y, r, "EQUIP")
-    d.line(x, y + 2 * r, x, y + 3.2 * r, "WIRE")
-    d.line(x, y - 2 * r, x, y - 3.2 * r, "WIRE")
+    d.line(x, y + 1.85 * r, x, y + 3.2 * r, "WIRE")
+    d.line(x, y - 1.85 * r, x, y - 3.2 * r, "WIRE")
     # winding marks
     d.line(x - 2.8 * s, y + r * 0.85, x + 2.8 * s, y + r * 0.85, "EQUIP")
     d.line(x - 2.8 * s, y - r * 0.85, x + 2.8 * s, y - r * 0.85, "EQUIP")
-    d.text(label, x + 11 * s, y + 2 * s, 3.2 * s, align="left")
+    d.text(label, x + 9.5 * s, y + 1.5 * s, 3.1 * s, align="left")
 
 
-def draw_pt(d: Diagram, x: float, y_bus: float, label: str = "PT", s: float = 1.0, downward: bool = True):
+def draw_bus_tap(d: Diagram, x: float, y_bus: float, is_double: bool, direction: str, s: float = 1.0) -> float:
+    """Connect a bay at x to a single or double busbar and return the outgoing y-port."""
+    if not is_double:
+        draw_junction(d, x, y_bus, r=0.7 * s)
+        return y_bus
+
+    y1 = y_bus
+    y2 = y_bus + DOUBLE_BUS_GAP
+    dx = 2.1 * s
+    ds = 0.36 * s
+    if direction == "up":
+        y_merge = y2 + 7.2 * s
+        y_disc = y2 + 3.6 * s
+        draw_junction(d, x - dx, y1, r=0.65 * s)
+        draw_junction(d, x + dx, y2, r=0.65 * s)
+        d.line(x - dx, y1, x - dx, y_disc - 6 * ds, "WIRE")
+        d.line(x + dx, y2, x + dx, y_disc - 6 * ds, "WIRE")
+        draw_disconnector(d, x - dx, y_disc, "vertical", s=ds)
+        draw_disconnector(d, x + dx, y_disc, "vertical", s=ds)
+        d.line(x - dx, y_disc + 6 * ds, x - dx, y_merge, "WIRE")
+        d.line(x + dx, y_disc + 6 * ds, x + dx, y_merge, "WIRE")
+        d.line(x - dx, y_merge, x + dx, y_merge, "WIRE")
+        draw_junction(d, x, y_merge, r=0.65 * s)
+        return y_merge
+
+    y_merge = y1 - 7.2 * s
+    y_disc = y1 - 3.6 * s
+    draw_junction(d, x - dx, y1, r=0.65 * s)
+    draw_junction(d, x + dx, y2, r=0.65 * s)
+    d.line(x - dx, y1, x - dx, y_disc + 6 * ds, "WIRE")
+    d.line(x + dx, y2, x + dx, y_disc + 6 * ds, "WIRE")
+    draw_disconnector(d, x - dx, y_disc, "vertical", s=ds)
+    draw_disconnector(d, x + dx, y_disc, "vertical", s=ds)
+    d.line(x - dx, y_disc - 6 * ds, x - dx, y_merge, "WIRE")
+    d.line(x + dx, y_disc - 6 * ds, x + dx, y_merge, "WIRE")
+    d.line(x - dx, y_merge, x + dx, y_merge, "WIRE")
+    draw_junction(d, x, y_merge, r=0.65 * s)
+    return y_merge
+
+
+def draw_pt(d: Diagram, x: float, y_port: float, label: str = "PT", s: float = 1.0, downward: bool = True):
     dirn = -1 if downward else 1
-    y = y_bus + dirn * 18 * s
-    d.line(x, y_bus, x, y + dirn * 2 * s, "WIRE")
+    y = y_port + dirn * 18 * s
+    d.line(x, y_port, x, y + dirn * 2 * s, "WIRE")
     draw_disconnector(d, x, y + dirn * 7 * s, "vertical", s=0.8 * s)
     d.line(x, y + dirn * 12 * s, x, y + dirn * 18 * s, "WIRE")
-    d.circle(x - 4 * s, y + dirn * 23 * s, 4 * s, "EQUIP")
-    d.circle(x + 4 * s, y + dirn * 23 * s, 4 * s, "EQUIP")
-    d.circle(x, y + dirn * 28 * s, 4 * s, "EQUIP")
-    d.line(x, y + dirn * 27 * s, x, y + dirn * 34 * s, "WIRE")
-    draw_ground(d, x, y + dirn * 34 * s, s=0.8 * s)
-    d.text(label, x, y + dirn * 43 * s, 3.0 * s)
+    d.circle(x - 3.4 * s, y + dirn * 22 * s, 3.4 * s, "EQUIP")
+    d.circle(x + 3.4 * s, y + dirn * 22 * s, 3.4 * s, "EQUIP")
+    d.circle(x, y + dirn * 26.5 * s, 3.4 * s, "EQUIP")
+    d.line(x, y + dirn * 26 * s, x, y + dirn * 33 * s, "WIRE")
+    draw_ground(d, x, y + dirn * 33 * s, s=0.75 * s, downward=downward)
+    d.text(label, x, y + dirn * 42 * s, 2.9 * s)
 
 
-def draw_reactor(d: Diagram, x: float, y_bus: float, label: str = "电抗器", s: float = 1.0, downward: bool = True):
+def draw_reactor(d: Diagram, x: float, y_port: float, label: str = "电抗器", s: float = 1.0, downward: bool = True):
     dirn = -1 if downward else 1
-    d.line(x, y_bus, x, y_bus + dirn * 10 * s, "WIRE")
-    draw_breaker(d, x, y_bus + dirn * 16 * s, "vertical", s=0.75 * s)
-    y0 = y_bus + dirn * 28 * s
-    # coil-like loops as repeated small circles around conductor
+    d.line(x, y_port, x, y_port + dirn * 10 * s, "WIRE")
+    draw_breaker(d, x, y_port + dirn * 16 * s, "vertical", s=0.75 * s)
+    y0 = y_port + dirn * 27 * s
     for row in range(3):
         for col in range(3):
-            d.circle(x + (col - 1) * 3.2 * s, y0 + dirn * row * 3.2 * s, 1.6 * s, "EQUIP")
-    d.line(x, y_bus + dirn * 21 * s, x, y0 - dirn * 4 * s, "WIRE")
-    d.line(x, y0 + dirn * 10 * s, x, y0 + dirn * 16 * s, "WIRE")
-    d.text(label, x, y0 + dirn * 25 * s, 3.0 * s)
+            d.circle(x + (col - 1) * 2.8 * s, y0 + dirn * row * 2.8 * s, 1.4 * s, "EQUIP")
+    d.line(x, y_port + dirn * 20.2 * s, x, y0 - dirn * 3 * s, "WIRE")
+    d.line(x, y0 + dirn * 9 * s, x, y0 + dirn * 15 * s, "WIRE")
+    d.text(label, x, y0 + dirn * 23 * s, 2.9 * s)
 
 
-def draw_capacitor(d: Diagram, x: float, y_bus: float, label: str = "电容器", s: float = 1.0, downward: bool = True):
+def draw_capacitor(d: Diagram, x: float, y_port: float, label: str = "电容器", s: float = 1.0, downward: bool = True):
     dirn = -1 if downward else 1
-    d.line(x, y_bus, x, y_bus + dirn * 9 * s, "WIRE")
-    draw_disconnector(d, x, y_bus + dirn * 15 * s, "vertical", s=0.75 * s)
-    draw_breaker(d, x, y_bus + dirn * 24 * s, "vertical", s=0.75 * s)
-    y = y_bus + dirn * 36 * s
-    d.line(x, y_bus + dirn * 29 * s, x, y - dirn * 4 * s, "WIRE")
-    d.line(x - 6 * s, y, x + 6 * s, y, "EQUIP")
-    d.line(x - 4 * s, y + dirn * 3 * s, x + 4 * s, y + dirn * 3 * s, "EQUIP")
-    d.line(x, y + dirn * 3 * s, x, y + dirn * 8 * s, "WIRE")
-    draw_ground(d, x, y + dirn * 8 * s, s=0.75 * s)
-    d.text(label, x, y + dirn * 19 * s, 3.0 * s)
+    d.line(x, y_port, x, y_port + dirn * 9 * s, "WIRE")
+    draw_disconnector(d, x, y_port + dirn * 15 * s, "vertical", s=0.75 * s)
+    draw_breaker(d, x, y_port + dirn * 24 * s, "vertical", s=0.75 * s)
+    y = y_port + dirn * 35 * s
+    d.line(x, y_port + dirn * 28.2 * s, x, y, "WIRE")
+    d.line(x - 5.2 * s, y, x + 5.2 * s, y, "EQUIP")
+    d.line(x - 3.6 * s, y + dirn * 2.8 * s, x + 3.6 * s, y + dirn * 2.8 * s, "EQUIP")
+    d.line(x, y + dirn * 2.8 * s, x, y + dirn * 8 * s, "WIRE")
+    draw_ground(d, x, y + dirn * 8 * s, s=0.72 * s, downward=downward)
+    d.text(label, x, y + dirn * 18 * s, 2.9 * s)
 
 
-def draw_vertical_bay(d: Diagram, x: float, y_bus: float, label: str, direction: str = "up", s: float = 1.0, with_ground: bool = True):
+def draw_vertical_bay(d: Diagram, x: float, y_port: float, label: str, direction: str = "up", s: float = 1.0, with_ground: bool = True):
     up = direction == "up"
     dirn = 1 if up else -1
-    end_y = y_bus + dirn * 55 * s
-    d.line(x, y_bus, x, y_bus + dirn * 7 * s, "WIRE")
-    draw_disconnector(d, x, y_bus + dirn * 13 * s, "vertical", s=0.75 * s)
+    end_y = y_port + dirn * 54 * s
+    d.line(x, y_port, x, y_port + dirn * 8.5 * s, "WIRE")
+    draw_disconnector(d, x, y_port + dirn * 13 * s, "vertical", s=0.75 * s)
     if with_ground:
-        draw_earthing_switch(d, x, y_bus + dirn * 18 * s, side="right", s=0.7 * s)
-    draw_breaker(d, x, y_bus + dirn * 26 * s, "vertical", s=0.75 * s)
-    draw_disconnector(d, x, y_bus + dirn * 39 * s, "vertical", s=0.75 * s)
-    d.line(x, y_bus + dirn * 45 * s, x, end_y, "WIRE")
+        draw_earthing_switch(d, x, y_port + dirn * 18 * s, side="right", s=0.65 * s)
+    d.line(x, y_port + dirn * 17.5 * s, x, y_port + dirn * 21.8 * s, "WIRE")
+    draw_breaker(d, x, y_port + dirn * 26 * s, "vertical", s=0.75 * s)
+    d.line(x, y_port + dirn * 30.2 * s, x, y_port + dirn * 34.5 * s, "WIRE")
+    draw_disconnector(d, x, y_port + dirn * 39 * s, "vertical", s=0.75 * s)
+    d.line(x, y_port + dirn * 43.5 * s, x, end_y, "WIRE")
     # terminal arrow
     if up:
-        d.line(x, end_y, x - 3 * s, end_y - 7 * s, "WIRE")
-        d.line(x, end_y, x + 3 * s, end_y - 7 * s, "WIRE")
-        d.text(label, x, end_y + 5 * s, 3.4 * s)
+        d.line(x, end_y, x - 2.8 * s, end_y - 6.5 * s, "WIRE")
+        d.line(x, end_y, x + 2.8 * s, end_y - 6.5 * s, "WIRE")
+        d.text(label, x, end_y + 4.8 * s, 3.1 * s)
     else:
-        d.line(x, end_y, x - 3 * s, end_y + 7 * s, "WIRE")
-        d.line(x, end_y, x + 3 * s, end_y + 7 * s, "WIRE")
-        d.text(label, x, end_y - 10 * s, 3.4 * s)
+        d.line(x, end_y, x - 2.8 * s, end_y + 6.5 * s, "WIRE")
+        d.line(x, end_y, x + 2.8 * s, end_y + 6.5 * s, "WIRE")
+        d.text(label, x, end_y - 8.5 * s, 3.1 * s)
 
 
 def draw_horizontal_feeder(d: Diagram, x_bus: float, y: float, label: str, direction: str = "left", s: float = 1.0):
     left = direction == "left"
     sign = -1 if left else 1
-    d.line(x_bus, y, x_bus + sign * 12 * s, y, "WIRE")
+    draw_junction(d, x_bus, y, r=0.7 * s)
+    d.line(x_bus, y, x_bus + sign * 17.5 * s, y, "WIRE")
     draw_disconnector(d, x_bus + sign * 22 * s, y, "horizontal", s=0.75 * s)
+    d.line(x_bus + sign * 26.5 * s, y, x_bus + sign * 30.2 * s, y, "WIRE")
     draw_breaker(d, x_bus + sign * 34 * s, y, "horizontal", s=0.7 * s)
+    d.line(x_bus + sign * 37.8 * s, y, x_bus + sign * 42.5 * s, y, "WIRE")
     draw_disconnector(d, x_bus + sign * 47 * s, y, "horizontal", s=0.75 * s)
     end_x = x_bus + sign * 60 * s
-    d.line(x_bus + sign * 53 * s, y, end_x, y, "WIRE")
+    d.line(x_bus + sign * 51.5 * s, y, end_x, y, "WIRE")
     # outgoing arrow
     d.line(end_x, y, end_x - sign * 6 * s, y + 2.8 * s, "WIRE")
     d.line(end_x, y, end_x - sign * 6 * s, y - 2.8 * s, "WIRE")
@@ -249,6 +299,66 @@ def normalize_level(item: Any, idx: int) -> Dict[str, Any]:
     return out
 
 
+def _is_double_bus(bus: str) -> bool:
+    return any(k in bus for k in ["双母", "double", "Double"])
+
+
+def _is_split_bus(bus: str) -> bool:
+    return any(k in bus for k in ["分段", "section", "Section"])
+
+
+def _compute_level_y_buses(total: int, height: float) -> List[float]:
+    if total <= 1:
+        return [height * 0.55]
+    if total == 2:
+        return [height - 95.0, 105.0]
+    return [
+        height - 74.0,
+        height - 152.0,
+        max(86.0, 96.0),
+    ][:total]
+
+
+def _level_bus_sections(d: Diagram, level: Dict[str, Any], idx: int, total: int) -> Tuple[float, float, List[Tuple[float, float]]]:
+    x1 = 48.0
+    # Bottom voltage level leaves clearance for the right-hand title block (x0 = d.width - 148).
+    x2 = (d.width - 158.0) if idx == total - 1 else (d.width - 48.0)
+    if x2 <= x1 + 60.0:
+        x2 = d.width - 48.0
+    bus = str(level.get("bus", "单母线"))
+    if _is_split_bus(bus):
+        gap = 11.0
+        mid = (x1 + x2) / 2.0
+        return x1, x2, [(x1, mid - gap), (mid + gap, x2)]
+    return x1, x2, [(x1, x2)]
+
+
+def _distribute_positions(sections: List[Tuple[float, float]], count: int) -> Tuple[List[float], float]:
+    """Distribute `count` bay x-coordinates across bus `sections` without overlaps."""
+    if count <= 0:
+        return [], 40.0
+    total_span = sum(max(1.0, sx2 - sx1) for sx1, sx2 in sections)
+    raw_counts = [max(0, round(count * (sx2 - sx1) / total_span)) for sx1, sx2 in sections]
+    while sum(raw_counts) < count:
+        idx = min(range(len(sections)), key=lambda k: raw_counts[k] / max(1.0, sections[k][1] - sections[k][0]))
+        raw_counts[idx] += 1
+    while sum(raw_counts) > count:
+        idx = max(range(len(sections)), key=lambda k: raw_counts[k])
+        if raw_counts[idx] > 0:
+            raw_counts[idx] -= 1
+
+    positions: List[float] = []
+    min_pitch = 40.0
+    for (sx1, sx2), n_sec in zip(sections, raw_counts):
+        if n_sec <= 0:
+            continue
+        pitch = (sx2 - sx1) / (n_sec + 1)
+        min_pitch = min(min_pitch, pitch)
+        for j in range(n_sec):
+            positions.append(sx1 + (j + 1) * pitch)
+    return positions, min_pitch
+
+
 def draw_title_block(d: Diagram, spec: Dict[str, Any]):
     tb = spec.get("title_block") or {}
     title = spec.get("title") or tb.get("title") or "电气主接线图"
@@ -257,18 +367,15 @@ def draw_title_block(d: Diagram, spec: Dict[str, Any]):
     w = 130
     h = 52
     d.rect(x0, y0, w, h, "TITLE", width=0.8)
-    # top empty project field and title field
     d.line(x0, y0 + 18, x0 + w, y0 + 18, "TITLE", width=0.3)
     d.line(x0, y0 + 32, x0 + w, y0 + 32, "TITLE", width=0.3)
     left_w = 70
     d.line(x0 + left_w, y0, x0 + left_w, y0 + 32, "TITLE", width=0.3)
-    # left table rows
     for yy in [8, 16, 24]:
         d.line(x0, y0 + yy, x0 + left_w, y0 + yy, "TITLE", width=0.25)
     d.line(x0 + 12, y0, x0 + 12, y0 + 32, "TITLE", width=0.25)
     d.line(x0 + 48, y0, x0 + 48, y0 + 32, "TITLE", width=0.25)
     d.line(x0 + 60, y0, x0 + 60, y0 + 32, "TITLE", width=0.25)
-    # right title and figure number
     d.text(title, x0 + left_w + (w - left_w) / 2, y0 + 24.5, 7.0, layer="TEXT")
     d.line(x0 + left_w + 14, y0, x0 + left_w + 14, y0 + 18, "TITLE", width=0.25)
     d.text("图号", x0 + left_w + 7, y0 + 9, 4.0, layer="TEXT")
@@ -284,106 +391,190 @@ def draw_title_block(d: Diagram, spec: Dict[str, Any]):
 
 
 def draw_frames(d: Diagram):
-    # outer paper margin and heavy drawing frame, similar to AutoCAD plot style.
     d.rect(5, 5, d.width - 10, d.height - 10, "BORDER", width=0.25)
     d.rect(18, 18, d.width - 36, d.height - 36, "BORDER", width=1.2)
 
 
-def draw_level_bus(d: Diagram, level: Dict[str, Any], idx: int, total: int, spec: Dict[str, Any]):
-    margin = 40
-    title_keepout = 125 if idx == total - 1 else 30
-    content_w = d.width - 2 * margin - (title_keepout if idx == total - 1 else 0)
+def _draw_transformer_link(
+    d: Diagram,
+    x: float,
+    label: str,
+    y_upper_bus: float,
+    upper_is_double: bool,
+    y_lower_bus: float,
+    lower_is_double: bool,
+):
+    """Connect main transformer from upper voltage bus all the way to lower voltage bus."""
+    y_top = draw_bus_tap(d, x, y_upper_bus, upper_is_double, direction="down", s=0.8)
+    y_bot = draw_bus_tap(d, x, y_lower_bus, lower_is_double, direction="up", s=0.8)
+    span = y_top - y_bot
+    if span <= 24.0:
+        d.line(x, y_top, x, y_bot, "WIRE")
+        draw_transformer(d, x, (y_top + y_bot) / 2.0, label, s=0.45)
+        return
+
+    s = min(0.82, max(0.42, span / 128.0))
+    y_mid = (y_top + y_bot) / 2.0
+    t_half = 17.6 * s  # transformer wire ports at y_mid +/- 17.6*s
+
+    # Upper HV switchgear (disconnector + breaker)
+    hv_disc_y = y_top - 10.0 * s
+    hv_brk_y = y_mid + t_half + 10.0 * s
+    d.line(x, y_top, x, hv_disc_y + 6.0 * (0.72 * s), "WIRE")
+    draw_disconnector(d, x, hv_disc_y, "vertical", s=0.72 * s)
+    d.line(x, hv_disc_y - 6.0 * (0.72 * s), x, hv_brk_y + 5.5 * (0.72 * s), "WIRE")
+    draw_breaker(d, x, hv_brk_y, "vertical", s=0.72 * s)
+    d.line(x, hv_brk_y - 5.5 * (0.72 * s), x, y_mid + t_half, "WIRE")
+
+    # Main transformer symbol
+    draw_transformer(d, x, y_mid, label, s=s)
+
+    # Lower LV switchgear (breaker + disconnector) down to lower busbar
+    lv_brk_y = y_mid - t_half - 10.0 * s
+    lv_disc_y = y_bot + 10.0 * s
+    d.line(x, y_mid - t_half, x, lv_brk_y + 5.5 * (0.72 * s), "WIRE")
+    draw_breaker(d, x, lv_brk_y, "vertical", s=0.72 * s)
+    d.line(x, lv_brk_y - 5.5 * (0.72 * s), x, lv_disc_y + 6.0 * (0.72 * s), "WIRE")
+    draw_disconnector(d, x, lv_disc_y, "vertical", s=0.72 * s)
+    d.line(x, lv_disc_y - 6.0 * (0.72 * s), x, y_bot, "WIRE")
+
+
+def draw_level_bus(
+    d: Diagram,
+    level: Dict[str, Any],
+    idx: int,
+    total: int,
+    spec: Dict[str, Any],
+    *,
+    y_buses: Optional[List[float]] = None,
+    next_level: Optional[Dict[str, Any]] = None,
+):
     name = str(level.get("name", f"L{idx+1}"))
     bus = str(level.get("bus", "单母线"))
+    conductor = str(level.get("conductor", "")).strip()
+    bus_title = f"{name} {conductor}".strip()
     feeders = [str(x) for x in as_list(level.get("feeders"))]
     transformers = [str(x) for x in as_list(level.get("transformers"))]
-    y_positions = [d.height - 76, d.height - 145, 102]
-    if total == 1:
-        y_bus = d.height * 0.55
-    elif total == 2:
-        y_bus = [d.height - 95, 105][idx]
-    else:
-        y_bus = y_positions[idx] if idx < len(y_positions) else max(80, d.height - 75 - idx * 62)
 
-    is_split = any(k in bus for k in ["分段", "section", "Section"])
-    x1 = margin + 25
-    x2 = margin + content_w - 5
-    if is_split:
-        gap = 12
-        mid = (x1 + x2) / 2
-        d.line(x1, y_bus, mid - gap, y_bus, "BUS", width=0.55)
-        d.line(mid + gap, y_bus, x2, y_bus, "BUS", width=0.55)
-        d.text(f"{name} {level.get('conductor', '')}".strip(), (x1 + mid - gap) / 2, y_bus + 4.5, 3.4)
-        d.text(f"{name} {level.get('conductor', '')}".strip(), (mid + gap + x2) / 2, y_bus + 4.5, 3.4)
-        # bus coupler/section bay below bus
-        d.line(mid - gap, y_bus, mid - gap, y_bus - 28, "WIRE")
-        d.line(mid + gap, y_bus, mid + gap, y_bus - 28, "WIRE")
-        d.line(mid - gap, y_bus - 28, mid + gap, y_bus - 28, "WIRE")
-        draw_breaker(d, mid, y_bus - 28, "horizontal", s=0.9)
-        sections = [(x1, mid - gap), (mid + gap, x2)]
-    else:
-        d.line(x1, y_bus, x2, y_bus, "BUS", width=0.55)
-        d.text(f"{name} {level.get('conductor', '')}".strip(), (x1 + x2) / 2, y_bus + 4.5, 3.4)
-        sections = [(x1, x2)]
+    computed_ys = y_buses or _compute_level_y_buses(total, d.height)
+    y_bus = computed_ys[idx]
+    is_double = _is_double_bus(bus)
+    is_split = _is_split_bus(bus)
+    x1, x2, sections = _level_bus_sections(d, level, idx, total)
 
-    # top/high voltage levels: draw feeders upward; bottom levels: draw downward. For a left-side compact 110kV style, user can set orientation=left.
+    # Draw single or double busbars (with optional section coupler / bus-tie)
+    bus_ys = [y_bus, y_bus + DOUBLE_BUS_GAP] if is_double else [y_bus]
+    for sec_idx, (sx1, sx2) in enumerate(sections):
+        for bar_idx, yb in enumerate(bus_ys):
+            d.line(sx1, yb, sx2, yb, "BUS", width=0.55)
+            if is_double:
+                roman = "I母" if bar_idx == 0 else "II母"
+                sec_tag = f"{sec_idx + 1}段" if is_split else ""
+                d.text(f"{name} {roman}{sec_tag}", sx1 - 2.0, yb, 2.7, align="right")
+        label_y = bus_ys[-1] + 4.2
+        sec_suffix = f" ({'I' if sec_idx == 0 else 'II'}段)" if is_split and not is_double else ""
+        d.text(f"{bus_title}{sec_suffix}", (sx1 + sx2) / 2.0, label_y, 3.3)
+
+    if is_split and len(sections) == 2:
+        left_end = sections[0][1]
+        right_start = sections[1][0]
+        mid = (left_end + right_start) / 2.0
+        coupler_y = y_bus - 18.0
+        draw_junction(d, left_end, y_bus, r=0.7)
+        draw_junction(d, right_start, y_bus, r=0.7)
+        d.line(left_end, y_bus, left_end, coupler_y, "WIRE")
+        d.line(right_start, y_bus, right_start, coupler_y, "WIRE")
+        d.line(left_end, coupler_y, mid - 4.95, coupler_y, "WIRE")
+        d.line(mid + 4.95, coupler_y, right_start, coupler_y, "WIRE")
+        draw_breaker(d, mid, coupler_y, "horizontal", s=0.9)
+
+    if is_double:
+        # Bus-tie breaker (母联) at the right end of section 0
+        tie_x = sections[0][1] - 5.0
+        draw_junction(d, tie_x, y_bus, r=0.65)
+        draw_junction(d, tie_x, y_bus + DOUBLE_BUS_GAP, r=0.65)
+        draw_breaker(d, tie_x, y_bus + DOUBLE_BUS_GAP / 2.0, "vertical", s=DOUBLE_BUS_GAP / 11.0)
+        d.text("母联", tie_x + 4.5, y_bus + DOUBLE_BUS_GAP / 2.0, 2.5, align="left")
+
     orientation = str(level.get("orientation", ""))
     if not orientation:
         orientation = "up" if idx == 0 else ("down" if idx == total - 1 else "up")
 
-    if orientation in ["left", "right"]:
-        x_bus = x1 if orientation == "left" else x2
-        d.line(x_bus, y_bus - 55, x_bus, y_bus + 55, "BUS", width=0.55)
-        step = 14
-        top_y = y_bus + (len(feeders) - 1) * step / 2
-        for i, lab in enumerate(feeders):
-            draw_horizontal_feeder(d, x_bus, top_y - i * step, lab, direction=orientation, s=0.85)
-    else:
-        # Distribute feeders across sections and draw vertical bays.
-        count = max(len(feeders), 1)
-        available = []
-        for sx1, sx2 in sections:
-            n = max(1, math.ceil(count / len(sections)))
-            for j in range(n):
-                available.append(sx1 + (j + 1) * (sx2 - sx1) / (n + 1))
-        if len(available) < len(feeders):
-            available = [x1 + (i + 1) * (x2 - x1) / (len(feeders) + 1) for i in range(len(feeders))]
-        for i, lab in enumerate(feeders):
-            draw_vertical_bay(d, available[i], y_bus, lab, direction=orientation, s=0.8, with_ground=True)
-
-    # PT/reactor/capacitor devices normally hang from lower-voltage buses.
-    downward_devices = orientation != "up"
     pt_n = int(level.get("pt", 0) or 0)
     reac_n = int(level.get("reactors", 0) or 0)
     cap_n = int(level.get("capacitors", 0) or 0)
-    device_labels = []
-    device_labels += [("pt", f"PT{i+1 if pt_n>1 else ''}") for i in range(pt_n)]
-    device_labels += [("reactor", f"电抗器{i+1 if reac_n>1 else ''}") for i in range(reac_n)]
-    device_labels += [("capacitor", f"电容器{i+1 if cap_n>1 else ''}") for i in range(cap_n)]
-    if device_labels:
-        n = len(device_labels)
-        # place devices centered on bus, avoid title block area
-        dev_x1 = x1 + 35
-        dev_x2 = x2 - 35
-        for i, (kind, lab) in enumerate(device_labels):
-            x = dev_x1 + (i + 0.5) * (dev_x2 - dev_x1) / n
-            if kind == "pt":
-                draw_pt(d, x, y_bus, lab.strip(), s=0.75, downward=downward_devices)
-            elif kind == "reactor":
-                draw_reactor(d, x, y_bus, lab, s=0.75, downward=downward_devices)
-            else:
-                draw_capacitor(d, x, y_bus, lab, s=0.75, downward=downward_devices)
+    device_bays: List[Tuple[str, str]] = []
+    device_bays += [("pt", f"PT{i+1 if pt_n > 1 else ''}".strip()) for i in range(pt_n)]
+    device_bays += [("reactor", f"电抗器{i+1 if reac_n > 1 else ''}") for i in range(reac_n)]
+    device_bays += [("capacitor", f"电容器{i+1 if cap_n > 1 else ''}") for i in range(cap_n)]
 
-    # Transformers listed on this level: draw them below this bus unless a target is explicitly handled later.
+    if orientation in ["left", "right"]:
+        x_bus = x1 if orientation == "left" else x2
+        d.line(x_bus, y_bus - 55, x_bus, y_bus + 55, "BUS", width=0.55)
+        step = 14.0
+        top_y = y_bus + (len(feeders) - 1) * step / 2.0
+        for i, lab in enumerate(feeders):
+            draw_horizontal_feeder(d, x_bus, top_y - i * step, lab, direction=orientation, s=0.85)
+        bays_to_place = device_bays
+        bay_direction = "down"
+    else:
+        # Unify feeders and shunt/PT devices along the same bus sections to prevent overlaps
+        bays_to_place = [("feeder", lab) for lab in feeders] + device_bays
+        bay_direction = orientation
+
+    # Usable section spans (leave room for double-bus tie if present)
+    usable_sections = [
+        (sx1 + 4.0, sx2 - (10.0 if is_double and sec_i == 0 else 4.0))
+        for sec_i, (sx1, sx2) in enumerate(sections)
+    ]
+    positions, min_pitch = _distribute_positions(usable_sections, len(bays_to_place))
+    bay_scale = min(0.78, max(0.50, min_pitch / 21.0))
+    downward_bay = bay_direction == "down"
+
+    for x_pos, (kind, lab) in zip(positions, bays_to_place):
+        y_port = draw_bus_tap(d, x_pos, y_bus, is_double, direction=bay_direction, s=bay_scale)
+        if kind == "feeder":
+            draw_vertical_bay(d, x_pos, y_port, lab, direction=bay_direction, s=bay_scale, with_ground=True)
+        elif kind == "pt":
+            draw_pt(d, x_pos, y_port, lab, s=bay_scale, downward=downward_bay)
+        elif kind == "reactor":
+            draw_reactor(d, x_pos, y_port, lab, s=bay_scale, downward=downward_bay)
+        else:
+            draw_capacitor(d, x_pos, y_port, lab, s=bay_scale, downward=downward_bay)
+
+    # Connect main transformers continuously from this bus down to the next lower voltage bus
     if transformers and idx < total - 1:
-        n = len(transformers)
-        for i, lab in enumerate(transformers):
-            x = x1 + (i + 1) * (x2 - x1) / (n + 1)
-            y_t = y_bus - 58
-            d.line(x, y_bus, x, y_t + 18, "WIRE")
-            draw_disconnector(d, x, y_bus - 12, "vertical", s=0.75)
-            draw_breaker(d, x, y_bus - 27, "vertical", s=0.75)
-            draw_transformer(d, x, y_t, lab, s=0.85)
+        next_y_bus = computed_ys[idx + 1]
+        next_lvl = next_level or {}
+        next_is_double = _is_double_bus(str(next_lvl.get("bus", "单母线")))
+        _, _, lower_sections = _level_bus_sections(d, next_lvl, idx + 1, total)
+
+        # Intersect upper & lower section spans so every transformer lands solidly on both buses
+        candidate_spans: List[Tuple[float, float]] = []
+        for lx1, lx2 in lower_sections:
+            for ux1, ux2 in sections:
+                cx1 = max(lx1 + 8.0, ux1 + 8.0)
+                cx2 = min(lx2 - 8.0, ux2 - 8.0)
+                if cx2 > cx1 + 6.0:
+                    candidate_spans.append((cx1, cx2))
+        if not candidate_spans:
+            candidate_spans = [(max(x1, lower_sections[0][0]) + 8.0, min(x2, lower_sections[-1][1]) - 8.0)]
+
+        tx_positions, _ = _distribute_positions(candidate_spans, len(transformers))
+        # Avoid exact x-coincidence with upward bays on the same bus if any
+        for tx_raw, lab in zip(tx_positions, transformers):
+            tx = tx_raw
+            if any(abs(tx - px) < 4.5 for px in positions):
+                tx += 5.5
+            _draw_transformer_link(
+                d,
+                tx,
+                lab,
+                y_upper_bus=y_bus,
+                upper_is_double=is_double,
+                y_lower_bus=next_y_bus,
+                lower_is_double=next_is_double,
+            )
 
 
 def draw_diagram(spec: Dict[str, Any]) -> Diagram:
@@ -398,9 +589,13 @@ def draw_diagram(spec: Dict[str, Any]) -> Diagram:
             {"name": "110kV", "bus": "单母线", "feeders": ["出线1回", "出线2回", "出线3回"], "transformers": ["1#主变"]},
             {"name": "35kV", "bus": "单母分段", "feeders": ["出线1", "出线2", "出线3", "出线4"], "pt": 2, "reactors": 1, "capacitors": 2, "conductor": "TMY-125×10"},
         ]
-    for idx, level in enumerate(levels[:3]):
-        draw_level_bus(d, level, idx, min(len(levels), 3), spec)
-    # Optional left compact vertical bus, useful for matching sample with many 110kV outgoing lines.
+    active_levels = levels[:3]
+    total = len(active_levels)
+    y_buses = _compute_level_y_buses(total, d.height)
+    for idx, level in enumerate(active_levels):
+        next_level = active_levels[idx + 1] if idx + 1 < total else None
+        draw_level_bus(d, level, idx, total, spec, y_buses=y_buses, next_level=next_level)
+
     left = spec.get("left_vertical_bus")
     if isinstance(left, dict):
         x = mm(left.get("x"), 100)
@@ -425,14 +620,16 @@ def export_dxf(d: Diagram, path: Path):
         raise RuntimeError(f"ezdxf is required for DXF output: {EZDXF_IMPORT_ERROR}")
     doc = ezdxf.new("R2010")
     doc.header["$INSUNITS"] = 4  # millimeters
+    doc.header["$EXTMIN"] = (0.0, 0.0, 0.0)
+    doc.header["$EXTMAX"] = (d.width, d.height, 0.0)
     for name, cfg in d.layers.items():
         if name not in doc.layers:
             doc.layers.add(name, color=cfg["color"], lineweight=cfg["lineweight"])
-    # Try to create a Chinese-capable style; consumers may substitute if absent.
-    try:
-        doc.styles.new("CN", dxfattribs={"font": "simsun.ttc"})
-    except Exception:
-        pass
+    if "CN" not in doc.styles:
+        try:
+            doc.styles.new("CN", dxfattribs={"font": "simsun.ttc"})
+        except Exception:
+            pass
     msp = doc.modelspace()
     for e in d.entities:
         a = e.data
@@ -448,7 +645,6 @@ def export_dxf(d: Diagram, path: Path):
             halign = {"left": 0, "center": 1, "right": 2}.get(align, 1)
             txt = msp.add_text(a["text"], dxfattribs={"layer": layer, "height": a["size"], "style": "CN", "rotation": a.get("rotate", 0)})
             try:
-                # ezdxf >= 1.x
                 if align == "left":
                     txt.set_placement((a["x"], a["y"]), align=ezdxf.enums.TextEntityAlignment.MIDDLE_LEFT)
                 elif align == "right":
@@ -461,8 +657,10 @@ def export_dxf(d: Diagram, path: Path):
                 txt.dxf.valign = 2
                 txt.dxf.align_point = (a["x"], a["y"])
     doc.saveas(path)
-    # validation pass
-    ezdxf.readfile(path)
+    reopened = ezdxf.readfile(path)
+    auditor = reopened.audit()
+    if auditor.has_errors:
+        raise RuntimeError(f"Generated SLD DXF failed audit with {len(auditor.errors)} error(s)")
 
 
 def svg_y(d: Diagram, y: float) -> float:
@@ -482,7 +680,6 @@ def export_svg(d: Diagram, path: Path):
         elif e.kind == "circle":
             parts.append(f'<circle cx="{a["x"]:.3f}" cy="{svg_y(d,a["y"]):.3f}" r="{a["r"]:.3f}" stroke-width="{sw}"/>')
         elif e.kind == "arc":
-            # approximate arc with polyline
             start = math.radians(a["start"])
             end = math.radians(a["end"])
             if end < start:

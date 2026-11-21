@@ -17,6 +17,7 @@ from cad_skill_core.layout.models import LayoutPlan
 from cad_skill_core.layout.plan import plan_layout
 from cad_skill_core.schema.models import DrawingSpec
 from cad_skill_core.standards.profile import DrawingStandard, load_standard
+from tests.helpers import RUNTIME_ROOT
 
 
 @dataclass(frozen=True, slots=True)
@@ -186,7 +187,7 @@ def _drawing_spec() -> DrawingSpec:
 @pytest.fixture
 def valid_context(tmp_path: Path) -> ValidContext:
     spec = _drawing_spec()
-    standard = load_standard(Path("knowledge/standards/gb-mechanical.yaml"))
+    standard = load_standard(RUNTIME_ROOT / "knowledge/standards/gb-mechanical.yaml")
     fonts = _resolved_fonts()
     source = write_dxf(spec, standard, fonts, tmp_path / "inspection-source.dxf")
     document = ezdxf.readfile(source.path)

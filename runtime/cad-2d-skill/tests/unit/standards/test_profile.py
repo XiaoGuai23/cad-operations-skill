@@ -5,9 +5,10 @@ import pytest
 from pydantic import ValidationError
 
 from cad_skill_core.standards.profile import DrawingStandard, load_standard
+from tests.helpers import RUNTIME_ROOT
 
 
-PROFILE_PATH = Path("knowledge/standards/gb-mechanical.yaml")
+PROFILE_PATH = RUNTIME_ROOT / "knowledge/standards/gb-mechanical.yaml"
 
 
 def test_gb_profile_has_required_mechanical_layers():

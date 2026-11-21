@@ -3,13 +3,12 @@ from pydantic import ValidationError
 
 from cad_skill_core.schema.io import load_spec, save_spec
 from cad_skill_core.schema.models import DrawingSpec
+from tests.helpers import RUNTIME_ROOT
 
 
 @pytest.mark.parametrize("field", ["material-text", "material-source", "note-source", "part-source", "provenance-id", "duplicate-id"])
 def test_rejects_blank_or_ambiguous_manufacturing_provenance(field):
-    from pathlib import Path
-
-    values = load_spec(Path("examples/flange-assembly/work/drawing-spec.json")).model_dump(mode="json")
+    values = load_spec(RUNTIME_ROOT / "examples/flange-assembly/work/drawing-spec.json").model_dump(mode="json")
     if field == "material-text":
         values["requirements"]["material"]["text"] = " \t"
     elif field == "material-source":

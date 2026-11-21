@@ -17,6 +17,7 @@ from ezdxf.render import ARROWS
 from ezdxf.render.mleader import ConnectionSide
 
 from .common import RevisionError, resolve_entity, resolve_entities, validate_tolerance
+from .transaction import DocumentCheckpoint
 
 
 _KINDS = {"dimension_move", "dimension_text_mode", "leader_move", "link_callout"}
@@ -363,6 +364,25 @@ def _convert(doc, operation, tolerance):
     return result, before, deleted
 
 
+def _unshared_private_dim_block(doc, entity) -> str | None:
+    name = entity.dxf.get("geometry", "")
+    if not name or not name.upper().startswith("*D") or name not in doc.blocks:
+        return None
+    for other in doc.entitydb.values():
+        if not other.is_alive or other.dxf.get("handle") == entity.dxf.handle:
+            continue
+        if (
+            (other.dxftype() == "DIMENSION" and other.dxf.get("geometry", "").casefold() == name.casefold())
+            or (other.dxftype() == "INSERT" and other.dxf.get("name", "").casefold() == name.casefold())
+        ):
+            return None
+    block = doc.blocks.get(name)
+    for child in [block.block_record, block.block, block.endblk, *block]:
+        if child.appdata or child.has_extension_dict or child.reactors or child.proxy_graphic or child.xdata:
+            return None
+    return name
+
+
 def _apply(doc, operation, tolerance):
     if not isinstance(operation, dict) or operation.get("type") not in _KINDS:
         raise RevisionError("unknown annotation operation")
@@ -390,10 +410,14 @@ def _apply(doc, operation, tolerance):
                     raise RevisionError("dimension text mode must be 0, 1 or 2")
                 changed = entity.override().get("dimtmove", 0) != mode
             if changed:
+                previous_cache = _unshared_private_dim_block(doc, entity)
                 override = entity.override()
                 if kind == "dimension_text_mode":
                     override.update({"dimtmove": operation["mode"]})
                 override.render()
+                current_cache = entity.dxf.get("geometry", "")
+                if previous_cache and current_cache and previous_cache.casefold() != current_cache.casefold():
+                    doc.blocks.delete_block(previous_cache, safe=False)
                 touched = [entity.dxf.handle]
             after = _dimension_snapshot(entity)
             for key in ("origins", "measurement", "text", "dimstyle", "dimtype"):
@@ -434,7 +458,12 @@ def apply_annotation(doc, operation, tolerance):
     try:
         _validate_operation(operation)
         _apply(copy.deepcopy(doc), operation, tolerance)
-        return _apply(doc, operation, tolerance)
+        checkpoint = DocumentCheckpoint(doc)
+        try:
+            return _apply(doc, operation, tolerance)
+        except BaseException:
+            checkpoint.restore()
+            raise
     except RevisionError:
         raise
     except Exception as error:
