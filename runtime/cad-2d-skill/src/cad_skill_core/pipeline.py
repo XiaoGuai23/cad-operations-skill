@@ -524,6 +524,11 @@ def _resolve_fonts(spec: DrawingSpec, options: PipelineOptions) -> Mapping[str, 
         build_font_search_roots(autocad_roots=autocad_roots, windows_roots=[windows_root])
     )
     policy = load_font_policy(_FONT_POLICY_PATH)
+    zh_labels = (
+        "图名 图号 比例 投影 第一角投影 技术要求 明细栏 序号 名称 数量 主视图 俯视图 仰视图 左视图 右视图 剖视"
+        if spec.sheet.title_block_language == "zh"
+        else "TITLE DRAWING SCALE PROJECTION TECHNICAL NOTES PARTS LIST ITEM DESCRIPTION QTY"
+    )
     text = " ".join(
         filter(
             None,
@@ -539,11 +544,11 @@ def _resolve_fonts(spec: DrawingSpec, options: PipelineOptions) -> Mapping[str, 
                 *(item.text for item in spec.requirements.technical_notes),
                 *(item.text for item in spec.annotations),
                 *(item.item for item in spec.parts_list),
-                "TITLE DRAWING SCALE PROJECTION TECHNICAL NOTES PARTS LIST ITEM DESCRIPTION QTY",
+                zh_labels,
             ),
         )
     )
-    dimensions = " ".join(f"{item.value:g}" for item in spec.dimensions) or "0"
+    dimensions = " ".join(item.format_label() for item in spec.dimensions) or "0"
     try:
         return {
             "TEXT": resolve_font(text, inventory, policy),

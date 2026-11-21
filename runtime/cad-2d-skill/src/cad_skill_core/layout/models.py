@@ -127,6 +127,7 @@ class AnnotationLayout:
     owner_zone: str | None = None
     allowed_contact: tuple[str, ...] = ()
     entity_handles: tuple[str, ...] = ()
+    dim_kind: str = "aligned"
 
 
 @dataclass(frozen=True, slots=True)

@@ -50,7 +50,16 @@ def resolve_material_handles(
 
 
 def _declares_material(text: str, material: str) -> bool:
-    return text == material or text.casefold() == f"MATERIAL: {material}".casefold()
+    folded = text.strip().casefold()
+    target = material.strip().casefold()
+    return folded in {
+        target,
+        f"material: {target}",
+        f"材料：{target}",
+        f"材料: {target}",
+        f"材质：{target}",
+        f"材质: {target}",
+    }
 
 
 def _entity_text(entity: object) -> str:

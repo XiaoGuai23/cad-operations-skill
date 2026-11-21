@@ -275,11 +275,34 @@ def _candidate_plans(plan: LayoutPlan) -> Iterable[LayoutPlan]:
         {annotation.group_id for annotation in plan.annotations if annotation.group_id.startswith("balloon-")},
         key=lambda value: int(value.rsplit("-", 1)[1]),
     )
-    if not balloon_groups:
-        yield plan
+    base_plans = (
+        [_place_balloon_lane(plan, balloon_groups, lane) for lane in ("top", "right", "bottom", "left")]
+        if balloon_groups
+        else [plan]
+    )
+    for base in base_plans:
+        yield from _dimension_variant_plans(base)
+
+
+def _dimension_variant_plans(plan: LayoutPlan) -> Iterable[LayoutPlan]:
+    yield plan
+    has_flexible = any(
+        a.kind == "dimension" and a.dim_kind in {"diameter", "radius", "true_aligned"}
+        for a in plan.annotations
+    )
+    if not has_flexible:
         return
-    for lane in ("top", "right", "bottom", "left"):
-        yield _place_balloon_lane(plan, balloon_groups, lane)
+    for angle_delta, aligned_mult in ((90.0, -1.0), (180.0, 1.5), (270.0, -1.8), (55.0, 2.2)):
+        updated: list[AnnotationLayout] = []
+        for a in plan.annotations:
+            if a.kind == "dimension" and a.dim_kind in {"diameter", "radius"} and len(a.points) >= 2:
+                new_ang = (a.points[1][0] + angle_delta) % 360.0
+                updated.append(replace(a, points=(a.points[0], (new_ang, a.points[1][1]))))
+            elif a.kind == "dimension" and a.dim_kind == "true_aligned" and a.radius is not None:
+                updated.append(replace(a, radius=a.radius * aligned_mult))
+            else:
+                updated.append(a)
+        yield replace(plan, annotations=tuple(updated))
 
 
 def _place_balloon_lane(
@@ -372,10 +395,13 @@ def _validate_final_layout(plan: LayoutPlan) -> None:
                 if (
                     annotation.kind == "dimension"
                     and annotation.owner_view == view_name
-                    and _shallow_edge_overlap(
-                        annotation.bounds,
-                        view_bounds,
-                        plan.dimension_arrow_size_mm,
+                    and (
+                        "own-view-feature" in annotation.allowed_contact
+                        or _shallow_edge_overlap(
+                            annotation.bounds,
+                            view_bounds,
+                            plan.dimension_arrow_size_mm,
+                        )
                     )
                 ):
                     continue
@@ -571,15 +597,66 @@ def _emit(modelspace: ezdxf.layouts.Modelspace, annotation: AnnotationLayout, pl
     elif annotation.kind in {"title-label", "title", "drawing-number", "scale", "projection", "notes-header", "parts-header", "parts-column", "parts-row", "view-label", "technical-note", "annotation", "balloon-text"}:
         modelspace.add_text(annotation.text, dxfattribs={"layer": annotation.layer, "style": annotation.style, "height": plan.text_height_mm}).set_placement(annotation.points[0])
     elif annotation.kind == "dimension":
-        dimension = modelspace.add_aligned_dim(
-            annotation.points[0],
-            (annotation.points[1][0], annotation.points[0][1]),
-            annotation.points[1][1] - annotation.points[0][1],
-            text=annotation.text,
-            dimstyle="DIM",
-            dxfattribs={"layer": annotation.layer},
-        )
-        dimension.render()
+        if annotation.dim_kind == "vertical":
+            (x_edge, y0), (x_line, y1) = annotation.points
+            dimension = modelspace.add_linear_dim(
+                base=(x_line, (y0 + y1) / 2.0),
+                p1=(x_edge, y0),
+                p2=(x_edge, y1),
+                angle=90.0,
+                text=annotation.text,
+                dimstyle="DIM",
+                dxfattribs={"layer": annotation.layer},
+            )
+            dimension.render()
+        elif annotation.dim_kind == "true_aligned":
+            p1, p2 = annotation.points[0], annotation.points[1]
+            dist = annotation.radius if annotation.radius is not None else -plan.dimension_gap_mm
+            dimension = modelspace.add_aligned_dim(
+                p1,
+                p2,
+                dist,
+                text=annotation.text,
+                dimstyle="DIM",
+                dxfattribs={"layer": annotation.layer},
+            )
+            dimension.render()
+        elif annotation.dim_kind == "diameter":
+            center = annotation.points[0]
+            angle_deg = annotation.points[1][0] if len(annotation.points) > 1 else 45.0
+            radius_val = annotation.radius if annotation.radius is not None else 10.0
+            dimension = modelspace.add_diameter_dim(
+                center=center,
+                radius=radius_val,
+                angle=angle_deg,
+                text=annotation.text,
+                dimstyle="DIM",
+                dxfattribs={"layer": annotation.layer},
+            )
+            dimension.render()
+        elif annotation.dim_kind == "radius":
+            center = annotation.points[0]
+            angle_deg = annotation.points[1][0] if len(annotation.points) > 1 else 45.0
+            radius_val = annotation.radius if annotation.radius is not None else 10.0
+            dimension = modelspace.add_radius_dim(
+                center=center,
+                radius=radius_val,
+                angle=angle_deg,
+                text=annotation.text,
+                dimstyle="DIM",
+                dxfattribs={"layer": annotation.layer},
+            )
+            dimension.render()
+        else:
+            dimension = modelspace.add_aligned_dim(
+                annotation.points[0],
+                (annotation.points[1][0], annotation.points[0][1]),
+                annotation.points[1][1] - annotation.points[0][1],
+                text=annotation.text,
+                dimstyle="DIM",
+                dxfattribs={"layer": annotation.layer},
+            )
+            dimension.render()
     elif annotation.kind == "leader":
         modelspace.add_leader(annotation.points, dxfattribs={"layer": annotation.layer})
     elif annotation.kind == "balloon":

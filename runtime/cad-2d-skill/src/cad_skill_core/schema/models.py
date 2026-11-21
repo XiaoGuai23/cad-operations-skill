@@ -31,6 +31,7 @@ class Sheet(SchemaModel):
     size: Literal["A0", "A1", "A2", "A3", "A4"]
     orientation: Literal["landscape", "portrait"]
     scale: str
+    title_block_language: Literal["en", "zh"] = "en"
 
 
 NonBlankText = Annotated[str, StringConstraints(pattern=r"\S")]
@@ -75,6 +76,36 @@ class Dimension(SchemaModel):
     kind: str
     value: float
     source_id: str
+    owner_view: str | None = None
+    target_entity_index: int | None = None
+    orientation: Literal["horizontal", "vertical", "aligned", "diameter", "radius"] | None = None
+    prefix: str | None = None
+    tolerance_upper: float | None = None
+    tolerance_lower: float | None = None
+
+    def format_label(self) -> str:
+        auto_prefix = self.prefix
+        if auto_prefix is None:
+            if self.orientation == "diameter":
+                auto_prefix = "⌀"
+            elif self.orientation == "radius":
+                auto_prefix = "R"
+            else:
+                auto_prefix = ""
+        base = f"{auto_prefix}{self.value:g}"
+        if self.tolerance_upper is not None and self.tolerance_lower is not None:
+            if abs(self.tolerance_upper + self.tolerance_lower) <= 1e-9 and self.tolerance_upper > 0:
+                return f"{base}±{abs(self.tolerance_upper):g}"
+            up = f"+{self.tolerance_upper:g}" if self.tolerance_upper >= 0 else f"{self.tolerance_upper:g}"
+            lo = f"+{self.tolerance_lower:g}" if self.tolerance_lower > 0 else f"{self.tolerance_lower:g}"
+            return f"{base} ({up}/{lo})"
+        if self.tolerance_upper is not None:
+            up = f"+{self.tolerance_upper:g}" if self.tolerance_upper >= 0 else f"{self.tolerance_upper:g}"
+            return f"{base} {up}"
+        if self.tolerance_lower is not None:
+            lo = f"+{self.tolerance_lower:g}" if self.tolerance_lower > 0 else f"{self.tolerance_lower:g}"
+            return f"{base} {lo}"
+        return base
 
 
 class Annotation(SchemaModel):
@@ -174,4 +205,14 @@ class DrawingSpec(SchemaModel):
             raise ValueError("view entity indices must be assigned exactly once")
         if any(index not in entity_indices for index in grouped_indices):
             raise ValueError("view entity indices must be in range for geometry entities")
+        requested_views = set(self.requirements.views)
+        for dim_idx, dimension in enumerate(self.dimensions, start=1):
+            if dimension.owner_view is not None and dimension.owner_view not in requested_views:
+                raise ValueError(
+                    f"dimension {dim_idx} owner_view is not in requested views: {dimension.owner_view}"
+                )
+            if dimension.target_entity_index is not None and dimension.target_entity_index not in entity_indices:
+                raise ValueError(
+                    f"dimension {dim_idx} target_entity_index is out of range: {dimension.target_entity_index}"
+                )
         return self

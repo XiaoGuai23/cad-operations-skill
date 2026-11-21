@@ -13,6 +13,7 @@ from ezdxf import bbox, units
 
 from cad_skill_core.fonts.models import ResolvedFont
 from cad_skill_core.geometry.dxf_writer import GenerationResult
+from cad_skill_core.geometry.parametric import verify_orthographic_consistency
 from cad_skill_core.layout.material_binding import resolve_material_handles
 from cad_skill_core.layout.models import AnnotationLayout, Bounds, GeometryBounds, LayoutPlan
 from cad_skill_core.schema.models import DrawingSpec
@@ -487,6 +488,25 @@ def _semantic_issues(
 
     if spec.project.drawing_type == "assembly":
         issues.extend(_assembly_issues(spec, plan, annotation_entities))
+    if spec.geometry.parameters.get("orthographic_check", True) is not False:
+        ortho_violations = verify_orthographic_consistency(
+            spec.geometry.entities,
+            spec.geometry.view_entity_indices,
+        )
+        all_source_handles = tuple(
+            handle for view in plan.views for handle in view.source_handles
+        )
+        for violation in ortho_violations:
+            issues.append(
+                AuditIssue(
+                    "SEMANTIC_ORTHOGRAPHIC_PROJECTION",
+                    "error",
+                    "semantic",
+                    violation,
+                    all_source_handles,
+                    False,
+                )
+            )
     return issues
 
 
@@ -816,10 +836,13 @@ def _layout_issues(
                 if (
                     annotation.kind == "dimension"
                     and annotation.owner_view == view.name
-                    and _shallow_edge_overlap(
-                        item.bounds,
-                        _bounds_tuple(view.bounds),
-                        plan.dimension_arrow_size_mm,
+                    and (
+                        "own-view-feature" in annotation.allowed_contact
+                        or _shallow_edge_overlap(
+                            item.bounds,
+                            _bounds_tuple(view.bounds),
+                            plan.dimension_arrow_size_mm,
+                        )
                     )
                 ):
                     continue
