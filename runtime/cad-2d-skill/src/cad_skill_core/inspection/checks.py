@@ -1207,6 +1207,12 @@ def _allowed_pair(
         return True
     if first.group_id != second.group_id:
         return False
+    if (
+        first.annotation_id
+        and first.annotation_id == second.annotation_id
+        and first.kind in {"surface-roughness", "datum-symbol", "gdt-frame"}
+    ):
+        return True
     kinds = {first.kind, second.kind}
     if kinds == {"balloon", "balloon-text"}:
         return "own-balloon-text" in first.allowed_contact or "own-balloon-text" in second.allowed_contact

@@ -43,8 +43,8 @@ def probe_3d_capabilities() -> dict[str, Any]:
     return {
         "builtin_manifold_mesh": {
             "available": True,
-            "formats": ["stl", "obj", "glb", "dxf3d", "png_iso"],
-            "note": "Zero-external-install deterministic watertight mesh & 3D->2D projection engine.",
+            "formats": ["step", "stl", "obj", "glb", "dxf3d", "png_iso"],
+            "note": "Zero-external-install deterministic watertight B-Rep/mesh & 3D->2D projection engine.",
         },
         "build123d_brep": {
             "available": has_build123d,

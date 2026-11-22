@@ -53,7 +53,7 @@ def test_mcp_lists_all_fifteen_2d_3d_and_driver_tools_with_strict_json_schemas(t
     resp = dispatcher.handle_payload({"jsonrpc": "2.0", "id": 10, "method": "tools/list"})
     tools = resp["result"]["tools"]
     names = [t["name"] for t in tools]
-    assert len(names) == 19
+    assert len(names) == 20
     assert names == [
         "cad_doctor",
         "cad_compile_spec",
@@ -74,6 +74,7 @@ def test_mcp_lists_all_fifteen_2d_3d_and_driver_tools_with_strict_json_schemas(t
         "cad_app_load_scene",
         "cad_score_drawing",
         "cad_run_cad1k_eval",
+        "cad_revise_by_nl",
     ]
     for tool in tools:
         schema = tool["inputSchema"]

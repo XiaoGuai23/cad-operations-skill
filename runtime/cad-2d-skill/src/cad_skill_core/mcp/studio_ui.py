@@ -419,8 +419,9 @@ def render_studio_html() -> str:
           <span class="badge">就绪 — 选择左侧参数点击“立即生成”，鼠标滚轮无级缩放图纸</span>
         </div>
         <div class="row">
+          <button class="ghost" id="btnQuickDiff2D" style="display:none;" title="一键对比框选口语改图前后的像素差异">🔍 改图前后对比</button>
           <button class="ghost" id="btnSendToRevise" style="display:none;">✏️ 送入局部改图台</button>
-          <button class="ghost active" id="btnMarquee2D" title="像图一一样在图纸上拉出蓝色虚线框，直接针对局部提问或筛选框内图元改图">🟦 框选提问/改图</button>
+          <button class="ghost active" id="btnMarquee2D" title="拉出蓝色虚线框，在胶囊里输入『把孔改成Φ18』『删掉虚线』即可原地改图！">🟦 框选一句话改图/提问</button>
           <button class="ghost" id="btnFit2D">⛶ 适应窗口</button>
           <button class="ghost" id="btnTheme2D">☀️ 白纸蓝图</button>
           <button class="ghost" id="btnGrid2D"># 坐标网格</button>
@@ -435,7 +436,7 @@ def render_studio_html() -> str:
           <div class="floating-layers" id="layerPanel" style="display:none;"></div>
           <!-- Image 1 Style Floating White Rounded Prompt Pill -->
           <div class="prompt-pill" id="promptPill2D">
-            <input id="pillInput2D" type="text" placeholder="问题一" autocomplete="off" />
+            <input id="pillInput2D" type="text" placeholder="输入指令如：把孔改成Φ18 / 删掉虚线 / 问题一" autocomplete="off" />
             <span class="hit-tag" id="pillHits2D">0 图元</span>
             <button class="pill-cancel" id="pillCancel2D" title="取消选框">✕</button>
             <button class="pill-submit" id="pillSubmit2D" title="确认标注并锁定框内图元">
@@ -587,24 +588,30 @@ def render_studio_html() -> str:
             <div class="field"><label>图号</label><input id="m2dNo" value="GEAR-2026-01" /></div>
           </div>
           <div id="m2dParamFields" class="form-grid"></div>
+          <label style="font-size:12px;color:var(--muted);display:flex;align-items:center;gap:6px;margin:2px 0;">
+            <input type="checkbox" id="chkProSymbols" checked /> ✨ 附加国标表面粗糙度 Ra 三角勾 + 基准 [A] + 形位公差框
+          </label>
           <button class="secondary" onclick="checkCompile2D()">🔍 预检参数完整性 (缺失/冲突检查)</button>
         `;
         syncM2DFormVisibility();
       } else if (activeTab === "model3d") {
         body.innerHTML = `
-          <div class="sec-title">三维参数化建模 + 3D→2D 国标工程图联动</div>
+          <div class="sec-title">三维参数化水密实体 (.STEP/.GLB/.STL) + 3D→2D 国标工程图联动</div>
           <div class="field full">
-            <label>建模方式</label>
+            <label>三维零件族 (与二维 1:1 全对齐，自动导出工业 .STEP)</label>
             <select id="m3dMode" onchange="syncM3DFields()">
+              <option value="spur_gear_3d">⚙ 直齿圆柱齿轮三维实体 (Spur Gear 3D · 真实轮齿+键槽)</option>
+              <option value="bearing_cap_3d">🔩 减速器轴承透盖三维实体 (Bearing Cap 3D · 止口+双腔)</option>
+              <option value="ribbed_bracket_3d">📐 带三角形加强筋 L 型支座 (Ribbed Bracket 3D)</option>
               <option value="compound_3d">✨ 多特征组合实体 (底座 + 凸台 + 沉头孔 + 通孔)</option>
               <option value="flange_3d">带颈螺栓连接法兰 (Flange 3D)</option>
               <option value="stepped_shaft_3d">空心/实心多阶梯轴 (Shaft 3D)</option>
-              <option value="brief_3d">口语一句话直出三维模型</option>
+              <option value="brief_3d">口语一句话直出三维模型 + .STEP</option>
             </select>
           </div>
           <div id="m3dDynamic"></div>
           <label style="font-size:12px;color:var(--muted);display:flex;align-items:center;gap:6px;">
-            <input type="checkbox" id="chk3DWith2D" checked /> 同时正交投影生成二维国标工程图（双视口同屏检视）
+            <input type="checkbox" id="chk3DWith2D" checked /> 同时正交投影生成二维国标三视图（双视口同屏检视）
           </label>
         `;
         syncM3DFields();
@@ -759,7 +766,41 @@ def render_studio_html() -> str:
     function syncM3DFields() {
       const m = document.getElementById("m3dMode").value;
       const box = document.getElementById("m3dDynamic");
-      if (m === "compound_3d") {
+      if (m === "spur_gear_3d") {
+        box.innerHTML = `
+          <div class="form-grid">
+            <div class="field"><label>模数 m (mm)</label><input type="number" id="g3_m" value="3" step="0.5" /></div>
+            <div class="field"><label>齿数 z</label><input type="number" id="g3_z" value="28" /></div>
+            <div class="field"><label>齿宽 b (mm)</label><input type="number" id="g3_b" value="30" /></div>
+            <div class="field"><label>轴孔径 d0 (mm)</label><input type="number" id="g3_bore" value="24" /></div>
+          </div>
+        `;
+      } else if (m === "bearing_cap_3d") {
+        box.innerHTML = `
+          <div class="form-grid">
+            <div class="field"><label>凸缘外径 (mm)</label><input type="number" id="bc3_od" value="130" /></div>
+            <div class="field"><label>止口外径 (mm)</label><input type="number" id="bc3_sp" value="90" /></div>
+            <div class="field"><label>轴通孔径 (mm)</label><input type="number" id="bc3_id" value="42" /></div>
+            <div class="field"><label>总高度 (mm)</label><input type="number" id="bc3_h" value="32" /></div>
+            <div class="field"><label>凸缘厚度 (mm)</label><input type="number" id="bc3_ft" value="12" /></div>
+            <div class="field"><label>螺钉节圆 BCD</label><input type="number" id="bc3_bcd" value="110" /></div>
+            <div class="field"><label>螺钉孔数</label><input type="number" id="bc3_hc" value="6" /></div>
+            <div class="field"><label>螺钉孔径 (mm)</label><input type="number" id="bc3_hd" value="9" /></div>
+          </div>
+        `;
+      } else if (m === "ribbed_bracket_3d") {
+        box.innerHTML = `
+          <div class="form-grid">
+            <div class="field"><label>底板长 L (mm)</label><input type="number" id="rb3_l" value="130" /></div>
+            <div class="field"><label>底板宽 W (mm)</label><input type="number" id="rb3_w" value="84" /></div>
+            <div class="field"><label>支座总高 H (mm)</label><input type="number" id="rb3_h" value="92" /></div>
+            <div class="field"><label>底板/立板厚 (mm)</label><input type="number" id="rb3_t" value="14" /></div>
+            <div class="field"><label>加强筋厚 (mm)</label><input type="number" id="rb3_rt" value="10" /></div>
+            <div class="field"><label>立板轴承孔 (mm)</label><input type="number" id="rb3_bd" value="28" /></div>
+            <div class="field"><label>底板安装孔径 (mm)</label><input type="number" id="rb3_hd" value="12" /></div>
+          </div>
+        `;
+      } else if (m === "compound_3d") {
         box.innerHTML = `
           <div class="form-grid">
             <div class="field"><label>底板长度 W (mm)</label><input type="number" id="c3_w" value="150" /></div>
@@ -825,8 +866,9 @@ def render_studio_html() -> str:
     function buildGeneratePayload() {
       if (activeTab === "mech2d") {
         const stdProf = document.getElementById("m2dStdProfile")?.value || "gb-mechanical";
+        const proSym = document.getElementById("chkProSymbols") ? document.getElementById("chkProSymbols").checked : true;
         const brief = document.getElementById("m2dBrief").value.trim();
-        if (brief) return { domain: "mechanical_2d", markdown_brief: brief, standard_profile: stdProf };
+        if (brief) return { domain: "mechanical_2d", markdown_brief: brief, standard_profile: stdProf, include_pro_symbols: proSym };
         const fam = document.getElementById("m2dFamily").value;
         const name = document.getElementById("m2dName").value.trim() || "机械零件";
         const dno = document.getElementById("m2dNo").value.trim() || "MECH-01";
@@ -850,7 +892,7 @@ def render_studio_html() -> str:
         } else {
           md += `宽度：${+document.getElementById("b_w").value} mm\n高度：${+document.getElementById("b_h").value} mm\n厚度：${+document.getElementById("b_t").value} mm\n圆角：R${+document.getElementById("b_r").value}\n腰形槽长：${+document.getElementById("b_sl").value} mm\n腰形槽宽：${+document.getElementById("b_sw").value} mm\n`;
         }
-        return { domain: "mechanical_2d", markdown_brief: md, standard_profile: stdProf };
+        return { domain: "mechanical_2d", markdown_brief: md, standard_profile: stdProf, include_pro_symbols: proSym };
       }
 
       if (activeTab === "model3d") {
@@ -861,7 +903,48 @@ def render_studio_html() -> str:
         }
         let bodyObj;
         let pName = "三维参数化零件";
-        if (m === "compound_3d") {
+        let mat3d = "45钢";
+        if (m === "spur_gear_3d") {
+          pName = "直齿圆柱齿轮";
+          bodyObj = {
+            kind: "spur_gear_3d",
+            module_mm: +document.getElementById("g3_m").value,
+            teeth: +document.getElementById("g3_z").value,
+            face_width: +document.getElementById("g3_b").value,
+            bore_diameter: +document.getElementById("g3_bore").value,
+            source_id: "src"
+          };
+        } else if (m === "bearing_cap_3d") {
+          pName = "减速器轴承透盖";
+          mat3d = "HT200";
+          bodyObj = {
+            kind: "bearing_cap_3d",
+            flange_diameter: +document.getElementById("bc3_od").value,
+            spigot_diameter: +document.getElementById("bc3_sp").value,
+            bore_diameter: +document.getElementById("bc3_id").value,
+            total_height: +document.getElementById("bc3_h").value,
+            flange_thickness: +document.getElementById("bc3_ft").value,
+            bolt_circle_diameter: +document.getElementById("bc3_bcd").value,
+            hole_count: +document.getElementById("bc3_hc").value,
+            hole_diameter: +document.getElementById("bc3_hd").value,
+            source_id: "src"
+          };
+        } else if (m === "ribbed_bracket_3d") {
+          pName = "带加强筋L型直角支座";
+          mat3d = "Q235B";
+          bodyObj = {
+            kind: "ribbed_bracket_3d",
+            base_length: +document.getElementById("rb3_l").value,
+            base_width: +document.getElementById("rb3_w").value,
+            total_height: +document.getElementById("rb3_h").value,
+            base_thickness: +document.getElementById("rb3_t").value,
+            wall_thickness: +document.getElementById("rb3_t").value,
+            rib_thickness: +document.getElementById("rb3_rt").value,
+            boss_hole_diameter: +document.getElementById("rb3_bd").value,
+            mount_hole_diameter: +document.getElementById("rb3_hd").value,
+            source_id: "src"
+          };
+        } else if (m === "compound_3d") {
           pName = "轴承凸台沉孔安装座";
           const w = +document.getElementById("c3_w").value, d = +document.getElementById("c3_d").value, h = +document.getElementById("c3_h").value;
           const cx = w / 2 - 18, cy = d / 2 - 16;
@@ -910,7 +993,7 @@ def render_studio_html() -> str:
           spec: {
             schema_version: "1.0",
             project: { name: pName, drawing_number: "CAD3D-2026-01" },
-            material: { text: "45钢", source_id: "src" },
+            material: { text: mat3d, source_id: "src" },
             technical_notes: [{ text: "未注倒角 C1.5，去毛刺。", source_id: "src" }],
             body: bodyObj,
             provenance: [{ id: "src", file: "studio-form", locator: "form", confidence: 1.0 }]
@@ -1259,10 +1342,12 @@ def render_studio_html() -> str:
       draw2DScene();
     }
 
+    let lastNlDiffPair = null;
+
     async function submitPromptPill2D() {
       if (!activeMarquee2D) return;
       const inp = document.getElementById("pillInput2D");
-      const txt = inp.value.trim() || inp.placeholder.split("（")[0];
+      const txt = inp.value.trim() || "问题一";
       const boxMm = [
         +activeMarquee2D.wx0.toFixed(2),
         +activeMarquee2D.wy0.toFixed(2),
@@ -1270,32 +1355,133 @@ def render_studio_html() -> str:
         +activeMarquee2D.wy1.toFixed(2)
       ];
       const handles = activeMarquee2D.handles;
+      const marqueeSnap = { ...activeMarquee2D };
+      closePromptPill2D();
+
+      // Determine current 2D DXF source (supports continuous multi-step marquee edits!)
+      let dxfPath = revState.dxfPath || null;
+      let taskId = null;
+      let artName = "drawing.dxf";
+      if (!dxfPath && lastTaskData?.task_id) {
+        const dxfArt = (lastTaskData.artifacts || []).find(a => a.name.endsWith(".dxf") && a.name !== "model3d.dxf");
+        if (dxfArt) {
+          taskId = lastTaskData.task_id;
+          artName = dxfArt.name;
+        }
+      }
+
+      if (dxfPath || taskId) {
+        setAlert(`正在解析并执行框选指令：「${txt}」...`);
+        try {
+          const r = await fetch("/api/v1/tasks/revise-nl", {
+            method: "POST",
+            headers: authHeaders(),
+            body: JSON.stringify({
+              dxf_path: dxfPath,
+              task_id: dxfPath ? null : taskId,
+              artifact_name: artName,
+              prompt_text: txt,
+              region_box: boxMm,
+              candidate_handles: handles
+            })
+          });
+          const res = await r.json();
+          if (!r.ok) {
+            setAlert(res.error || res.detail || JSON.stringify(res), "warn");
+            return;
+          }
+
+          if (res.mode === "revision" && res.scene) {
+            cadScene = res.scene;
+            lastTaskData = res;
+            if (res.inventory) {
+              revState = {
+                dxfPath: res.output_path,
+                taskId: res.task_id,
+                artifactName: "revised.dxf",
+                sha256: res.inventory.sha256,
+                units: res.inventory.units,
+                entities: res.inventory.entities || [],
+                selectedEntity: null
+              };
+              if (activeTab === "revise") renderReviseSidebar();
+            }
+            if (res.source_dxf_path && res.output_path) {
+              lastNlDiffPair = { before: res.source_dxf_path, after: res.output_path, revTask: res };
+              document.getElementById("btnQuickDiff2D").style.display = "inline-block";
+            }
+            const badges = document.getElementById("auditBadges");
+            badges.innerHTML = `<span class="badge ok">✅ 口语局部改图完成 · ${res.task_id}</span>`;
+            if (res.rubric_score) appendRubricBadge(res.rubric_score, badges);
+
+            const bar = document.getElementById("artifactBar");
+            bar.innerHTML = "";
+            (res.artifacts || []).forEach(a => {
+              const chip = document.createElement("span");
+              chip.className = "dl-chip";
+              chip.textContent = `⬇ ${a.name} (${(a.size/1024).toFixed(1)} KB)`;
+              chip.onclick = async () => {
+                const dl = await fetch(a.download_url, { headers: authHeaders() });
+                const u = URL.createObjectURL(await dl.blob());
+                const l = document.createElement("a"); l.href = u; l.download = a.name; l.click();
+              };
+              bar.appendChild(chip);
+            });
+
+            highlightedHandleSet = null;
+            renderLayerPanel();
+            draw2DScene();
+            setAlert(`✅ ${res.summary_zh || "局部改图已原地生效！"}（可继续拉框连续修改，或点右上角“🔍 改图前后对比”）`, "ok");
+            return;
+          }
+
+          // Question / inspection pin mode
+          const pinNo = savedRegionPins2D.length + 1;
+          savedRegionPins2D.push({
+            idx: pinNo,
+            wx0: marqueeSnap.wx0, wy0: marqueeSnap.wy0, wx1: marqueeSnap.wx1, wy1: marqueeSnap.wy1,
+            text: txt, handles
+          });
+          highlightedHandleSet = new Set(handles);
+          draw2DScene();
+          setAlert(`💬 [批注 #${pinNo}] ${res.summary_zh || `命中 ${handles.length} 个图元`}`, "ok");
+          return;
+        } catch (err) {
+          setAlert(String(err), "error");
+          return;
+        }
+      }
+
       const pinNo = savedRegionPins2D.length + 1;
       savedRegionPins2D.push({
         idx: pinNo,
-        wx0: activeMarquee2D.wx0,
-        wy0: activeMarquee2D.wy0,
-        wx1: activeMarquee2D.wx1,
-        wy1: activeMarquee2D.wy1,
-        text: txt,
-        handles
+        wx0: marqueeSnap.wx0, wy0: marqueeSnap.wy0, wx1: marqueeSnap.wx1, wy1: marqueeSnap.wy1,
+        text: txt, handles
       });
       highlightedHandleSet = new Set(handles);
-      closePromptPill2D();
-
-      const promptSummary = `[CAD框选批注 #${pinNo}] task_id=${lastTaskData?.task_id || revState.taskId || "local"} · 区域=[${boxMm.join(", ")}]mm · 命中Handles=[${handles.slice(0, 20).join(", ")}] · 指令：${txt}`;
-      try { await navigator.clipboard.writeText(promptSummary); } catch (_) {}
-      setAlert(`已添加框选批注 #${pinNo}（命中 ${handles.length} 个图元，已复制精准上下文，可直接发给 AI 或点右上角“送入局部改图台”）`, "ok");
-      if (activeTab === "revise" && handles.length) {
-        const match = revState.entities.find(e => handles.includes(e.handle));
-        if (match) {
-          revState.selectedEntity = match;
-          highlightedHandle = match.handle;
-          renderEntityList();
-          renderRevOpParams();
-        }
-      }
+      draw2DScene();
+      setAlert(`已添加框选批注 #${pinNo}（命中 ${handles.length} 个图元）`, "ok");
     }
+
+    document.getElementById("btnQuickDiff2D").onclick = async () => {
+      if (!lastNlDiffPair) return;
+      const vpDiff = document.getElementById("vpDiff");
+      if (vpDiff.style.display === "block") {
+        vpDiff.style.display = "none";
+        document.getElementById("vp2d").style.display = "block";
+        draw2DScene();
+        return;
+      }
+      setAlert("正在渲染改图前后像素级对比图...");
+      const dr = await fetch("/api/v1/tasks/diff", {
+        method: "POST", headers: authHeaders(),
+        body: JSON.stringify({ before_dxf_path: lastNlDiffPair.before, after_dxf_path: lastNlDiffPair.after })
+      });
+      if (dr.ok) {
+        setAlert("✅ 分屏对比已打开（再次点击右上角“🔍 改图前后对比”可切回交互蓝图画布）", "ok");
+        await showBeforeAfterDiff(await dr.json(), lastNlDiffPair.revTask);
+      }
+    };
 
     document.getElementById("pillSubmit2D").onclick = submitPromptPill2D;
     document.getElementById("pillCancel2D").onclick = closePromptPill2D;
@@ -1614,6 +1800,11 @@ def render_studio_html() -> str:
 
     async function displayTaskResult(data) {
       lastTaskData = data;
+      if (activeTab !== "revise") {
+        revState.dxfPath = null;
+        lastNlDiffPair = null;
+        document.getElementById("btnQuickDiff2D").style.display = "none";
+      }
       highlightedHandle = null;
       highlightedHandleSet = null;
       savedRegionPins2D = [];

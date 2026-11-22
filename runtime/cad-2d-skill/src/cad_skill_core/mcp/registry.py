@@ -30,6 +30,7 @@ from cad_skill_core.modeling3d import (
 from cad_skill_core.pipeline import PipelineOptions, run_task
 from cad_skill_core.revision.common import sha256_file
 from cad_skill_core.revision.local_review import review_files
+from cad_skill_core.revision.nl_revise import execute_nl_region_revision
 from cad_skill_core.revision.operations import operation_catalog
 from cad_skill_core.revision.preview import preview_file
 from cad_skill_core.revision.workflow import apply_revision, inventory_drawing
@@ -102,6 +103,10 @@ class GenerateMechanical2DArgs(StrictInputModel):
     standard_profile: str | None = Field(
         default=None,
         description="Optional industry drawing standard preset ('gb-mechanical', 'gb-heavy-machinery', 'gb-civil-construction', 'iso-international').",
+    )
+    include_pro_symbols: bool = Field(
+        default=True,
+        description="Automatically synthesize GB/T 131 surface roughness Ra ticks, datum [A], and GD&T feature control frames on compiled mechanical parts.",
     )
     max_repair_iterations: int = Field(default=3, ge=0, le=3)
     include_image_base64: bool = Field(
@@ -258,6 +263,28 @@ class RunCAD1KEvalArgs(StrictInputModel):
     )
 
 
+class ReviseByNLArgs(StrictInputModel):
+    dxf_path: str | None = Field(default=None, description="Source DXF path inside allowed roots.")
+    task_id: str | None = Field(default=None, description="Existing MCP task_id containing source DXF.")
+    artifact_name: str = Field(default="drawing.dxf", description="Artifact filename inside task_id.")
+    prompt_text: str = Field(
+        description="Natural-language marquee region edit or inspection instruction (e.g. '把孔改成 Φ18', '删掉虚线', '材料改成 40Cr', '往右移 15')."
+    )
+    region_box: list[float] | None = Field(
+        default=None,
+        description="Optional [xmin, ymin, xmax, ymax] marquee box in CAD millimetre coordinates.",
+    )
+    candidate_handles: list[str] | None = Field(
+        default=None,
+        description="Optional list of DXF entity handles inside the marquee selection.",
+    )
+    expected_sha256: str | None = Field(
+        default=None,
+        description="Optional baseline SHA-256 fingerprint guard.",
+    )
+    dry_run: bool = Field(default=False, description="Simulate without writing revised DXF.")
+
+
 @dataclass(frozen=True, slots=True)
 class ToolDefinition:
     name: str
@@ -410,6 +437,7 @@ def _handle_generate_mechanical_2d(
         brief_path.write_text(args.markdown_brief, encoding="utf-8")
         compiled = compile_spec_from_files(
             [brief_path],
+            include_pro_symbols=args.include_pro_symbols,
             output_path=task_dir / "work" / "drawing-spec.json",
         )
         if compiled.validation.missing or compiled.validation.conflicts:
@@ -966,6 +994,75 @@ def _handle_run_cad1k_eval(
     return payload, None, False
 
 
+def _handle_revise_by_nl(
+    sandbox: MCPWorkspaceSandbox, args: ReviseByNLArgs
+) -> tuple[dict[str, Any], Path | None, bool]:
+    source_dxf = _resolve_dxf_source(sandbox, args.dxf_path, args.task_id, args.artifact_name)
+    task_id, task_dir = sandbox.allocate_task_dir("nlrev")
+    out_dir = task_dir / "output"
+
+    nl_res = execute_nl_region_revision(
+        source_dxf,
+        out_dir,
+        args.prompt_text,
+        region_box=args.region_box,
+        candidate_handles=args.candidate_handles,
+        expected_sha256=args.expected_sha256,
+        dry_run=args.dry_run,
+    )
+
+    if nl_res.get("mode") == "question_pin" or args.dry_run or not nl_res.get("output_path"):
+        payload = {
+            "task_id": task_id,
+            "domain": "nl_revision",
+            "source_dxf_path": str(source_dxf),
+            **nl_res,
+            "artifacts": [],
+        }
+        sandbox.write_task_metadata(task_id, payload)
+        return payload, None, False
+
+    out_dxf = Path(nl_res["output_path"])
+    rubric_dict = score_dxf_drawing(out_dxf).to_dict()
+    scene_data = extract_dxf_vector_scene(out_dxf)
+    inv_after = inventory_drawing(out_dxf)
+    font_map = build_auto_style_font_map(out_dxf)
+    with sandbox.render_lock:
+        prev = preview_file(out_dxf, task_dir / "preview", font_map=font_map)
+    png_src = task_dir / "preview" / prev["images"][0]
+    png_out = out_dir / "revised.png"
+    png_out.write_bytes(png_src.read_bytes())
+
+    artifacts = [
+        {
+            "name": p.name,
+            "path": str(p.resolve()),
+            "size": p.stat().st_size,
+            "sha256": sha256_file(p),
+        }
+        for p in sorted(out_dir.glob("*"))
+        if p.is_file()
+    ]
+    meta_payload = {
+        "task_id": task_id,
+        "domain": "nl_revision",
+        "source_dxf_path": str(source_dxf),
+        **nl_res,
+        "rubric_score": rubric_dict,
+        "artifacts": artifacts,
+    }
+    sandbox.write_task_metadata(task_id, meta_payload)
+    return (
+        {
+            **meta_payload,
+            "scene": scene_data,
+            "inventory": inv_after,
+        },
+        None,
+        False,
+    )
+
+
 TOOLS: tuple[ToolDefinition, ...] = (
     ToolDefinition(
         "cad_doctor",
@@ -1095,6 +1192,13 @@ TOOLS: tuple[ToolDefinition, ...] = (
         "Run the video-free cad-1000-hours offline engineering benchmark suite and return 100-point rubric scorecards.",
         RunCAD1KEvalArgs,
         _handle_run_cad1k_eval,
+    ),
+    ToolDefinition(
+        "cad_revise_by_nl",
+        "Apply a conversational natural-language marquee region revision or inspection pin onto an existing DXF drawing.",
+        ReviseByNLArgs,
+        _handle_revise_by_nl,
+        meta={"ui": {"resourceUri": MCP_APP_RESOURCE_URI}},
     ),
 )
 

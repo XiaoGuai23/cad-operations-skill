@@ -9,6 +9,7 @@ from typing import Sequence
 import numpy as np
 
 from .models import (
+    BearingCap3D,
     Body3D,
     Box3D,
     BoxBoss3D,
@@ -19,7 +20,9 @@ from .models import (
     ExtrudePolygon3D,
     Flange3D,
     Model3DSpec,
+    RibbedBracket3D,
     SlottedBracket3D,
+    SpurGear3D,
     SteppedShaft3D,
 )
 
@@ -164,6 +167,15 @@ def build_solid_mesh(spec: Model3DSpec | Body3D, *, circle_segments: int = 64) -
 
     if isinstance(body, CompoundSolid3D):
         return _build_compound_3d_mesh(body, n_seg)
+
+    if isinstance(body, SpurGear3D):
+        return _build_spur_gear_3d_mesh(body, n_seg)
+
+    if isinstance(body, BearingCap3D):
+        return _build_bearing_cap_3d_mesh(body, n_seg)
+
+    if isinstance(body, RibbedBracket3D):
+        return _build_ribbed_bracket_3d_mesh(body, n_seg)
 
     raise TypeError(f"unsupported 3D body kind: {type(body)!r}")
 
@@ -812,3 +824,353 @@ def _point_in_triangle_inclusive(
     has_neg = (c1 < -1e-11) or (c2 < -1e-11) or (c3 < -1e-11)
     has_pos = (c1 > 1e-11) or (c2 > 1e-11) or (c3 > 1e-11)
     return not (has_neg and has_pos)
+
+
+def _build_spur_gear_3d_mesh(body: SpurGear3D, n_seg: int) -> SolidMesh3D:
+    from math import asin
+
+    m = body.module_mm
+    z = body.teeth
+    b = body.face_width
+    r_p = m * z / 2.0
+    r_a = m * (z + 2.0) / 2.0
+    r_f = m * (z - 2.5) / 2.0
+    r_bore = body.bore_diameter / 2.0
+    dtheta = 2.0 * pi / z
+
+    outer_ccw: list[tuple[float, float]] = []
+    for k in range(z):
+        tc = k * dtheta
+        profile_steps = (
+            (tc - 0.36 * dtheta, r_f),
+            (tc - 0.25 * dtheta, r_p),
+            (tc - 0.13 * dtheta, r_a),
+            (tc, r_a),
+            (tc + 0.13 * dtheta, r_a),
+            (tc + 0.25 * dtheta, r_p),
+            (tc + 0.36 * dtheta, r_f),
+            (tc + 0.50 * dtheta, r_f),
+        )
+        for ang, rad in profile_steps:
+            outer_ccw.append((rad * cos(ang), rad * sin(ang)))
+
+    holes_cw: list[list[tuple[float, float]]] = []
+    if r_bore > 0.0:
+        kw = body.keyway_width if body.keyway_width is not None else round(max(4.0, body.bore_diameter * 0.28), 1)
+        kd = body.keyway_depth if body.keyway_depth is not None else round(max(1.8, kw * 0.42), 1)
+        half_ratio = min(0.82, (kw / 2.0) / r_bore)
+        alpha = asin(half_ratio)
+        x_int = r_bore * cos(alpha)
+        y_kw = r_bore * sin(alpha)
+        x_back = min(r_f - 1.5, r_bore + kd)
+        bore_loop_cw: list[tuple[float, float]] = [
+            (x_int, y_kw),
+            (x_back, y_kw),
+            (x_back, -y_kw),
+            (x_int, -y_kw),
+        ]
+        arc_n = max(24, n_seg)
+        span = 2.0 * pi - 2.0 * alpha
+        for j in range(1, arc_n):
+            ang = -alpha - span * (j / arc_n)
+            bore_loop_cw.append((r_bore * cos(ang), r_bore * sin(ang)))
+        holes_cw.append(bore_loop_cw)
+
+    net_area = abs(_signed_area_2d(outer_ccw)) - sum(abs(_signed_area_2d(h)) for h in holes_cw)
+    vol = net_area * b
+    xs = [p[0] for p in outer_ccw]
+    ys = [p[1] for p in outer_ccw]
+    bbox = (min(xs), min(ys), 0.0, max(xs), max(ys), b)
+    return _extrude_with_holes(outer_ccw, holes_cw, 0.0, b, vol, bbox)
+
+
+def _build_bearing_cap_3d_mesh(body: BearingCap3D, n_seg: int) -> SolidMesh3D:
+    r_flg = body.flange_diameter / 2.0
+    r_sp = body.spigot_diameter / 2.0
+    r_bore = body.bore_diameter / 2.0
+    h_tot = body.total_height
+    t_flg = body.flange_thickness
+    r_cham = round(min(r_sp - 5.0, (r_sp + r_bore) / 2.0), 2)
+    z_floor = round(max(4.0, t_flg * 0.65), 2)
+
+    bolt_holes_cw: list[list[tuple[float, float]]] = []
+    if body.hole_count > 0:
+        r_bcd = body.bolt_circle_diameter / 2.0
+        r_h = body.hole_diameter / 2.0
+        h_steps = max(20, n_seg // 2)
+        for k in range(body.hole_count):
+            ang = 2.0 * pi * k / body.hole_count
+            bolt_holes_cw.append(_circle_loop(r_bcd * cos(ang), r_bcd * sin(ang), r_h, h_steps, ccw=False))
+
+    flg_ccw = _circle_loop(0.0, 0.0, r_flg, n_seg, ccw=True)
+    sp_cw = _circle_loop(0.0, 0.0, r_sp, n_seg, ccw=False)
+    sp_ccw = list(reversed(sp_cw))
+    bore_cw = _circle_loop(0.0, 0.0, r_bore, n_seg, ccw=False)
+    cham_cw = _circle_loop(0.0, 0.0, r_cham, n_seg, ccw=False)
+    cham_ccw = list(reversed(cham_cw))
+
+    verts_3d: list[tuple[float, float, float]] = []
+    faces: list[tuple[int, int, int]] = []
+
+    def add_ring(pts_2d: Sequence[tuple[float, float]], z_val: float) -> list[int]:
+        base = len(verts_3d)
+        for x, y in pts_2d:
+            verts_3d.append((x, y, z_val))
+        return list(range(base, base + len(pts_2d)))
+
+    # 1. Bottom cap at z=0: flg_ccw minus [bolt_holes_cw + bore_cw]
+    bot_outer_idx = add_ring(flg_ccw, 0.0)
+    bot_bolts_idx = [add_ring(h, 0.0) for h in bolt_holes_cw]
+    bot_bore_idx = add_ring(bore_cw, 0.0)
+    bot_holes = [*bolt_holes_cw, bore_cw]
+    bot_map = bot_outer_idx + [i for r in bot_bolts_idx for i in r] + bot_bore_idx
+    for i0, i1, i2 in _triangulate_polygon_with_holes(flg_ccw, bot_holes):
+        faces.append((bot_map[i0], bot_map[i2], bot_map[i1]))
+
+    # 2. Flange step shoulder at z=t_flg: flg_ccw minus [bolt_holes_cw + sp_cw]
+    mid_outer_idx = add_ring(flg_ccw, t_flg)
+    mid_bolts_idx = [add_ring(h, t_flg) for h in bolt_holes_cw]
+    mid_sp_cw_idx = add_ring(sp_cw, t_flg)
+    mid_holes = [*bolt_holes_cw, sp_cw]
+    mid_map = mid_outer_idx + [i for r in mid_bolts_idx for i in r] + mid_sp_cw_idx
+    for i0, i1, i2 in _triangulate_polygon_with_holes(flg_ccw, mid_holes):
+        faces.append((mid_map[i0], mid_map[i1], mid_map[i2]))
+
+    _stitch_rings(faces, bot_outer_idx, mid_outer_idx)
+    for b_r, m_r in zip(bot_bolts_idx, mid_bolts_idx):
+        _stitch_rings(faces, b_r, m_r)
+
+    # 3. Spigot outer wall (z=t_flg -> z=h_tot)
+    mid_sp_ccw_idx = list(reversed(mid_sp_cw_idx))
+    top_sp_ccw_idx = add_ring(sp_ccw, h_tot)
+    _stitch_rings(faces, mid_sp_ccw_idx, top_sp_ccw_idx)
+
+    # 4. Internal stepped bearing chamber: bore (z=0..z_floor) -> +Z step annulus -> chamber (z=z_floor..h_tot)
+    step_bore_cw_idx = add_ring(bore_cw, z_floor)
+    _stitch_rings(faces, bot_bore_idx, step_bore_cw_idx)
+
+    step_cham_ccw_idx = add_ring(cham_ccw, z_floor)
+    step_cham_cw_idx = list(reversed(step_cham_ccw_idx))
+    step_map = step_cham_ccw_idx + step_bore_cw_idx
+    for i0, i1, i2 in _triangulate_polygon_with_holes(cham_ccw, [bore_cw]):
+        faces.append((step_map[i0], step_map[i1], step_map[i2]))
+
+    top_cham_cw_idx = add_ring(cham_cw, h_tot)
+    _stitch_rings(faces, step_cham_cw_idx, top_cham_cw_idx)
+
+    # 5. Top spigot rim annulus at z=h_tot: sp_ccw minus [cham_cw]
+    top_map = top_sp_ccw_idx + top_cham_cw_idx
+    for i0, i1, i2 in _triangulate_polygon_with_holes(sp_ccw, [cham_cw]):
+        faces.append((top_map[i0], top_map[i1], top_map[i2]))
+
+    # Exact polygon area volume matching discretized circles
+    flg_area = abs(_signed_area_2d(flg_ccw))
+    sp_area = abs(_signed_area_2d(sp_ccw))
+    bore_area = abs(_signed_area_2d(bore_cw))
+    cham_area = abs(_signed_area_2d(cham_ccw))
+    bolts_area = sum(abs(_signed_area_2d(h)) for h in bolt_holes_cw)
+    vol = (
+        (flg_area - bolts_area) * t_flg
+        + sp_area * (h_tot - t_flg)
+        - bore_area * z_floor
+        - cham_area * (h_tot - z_floor)
+    )
+    bbox = (-r_flg, -r_flg, 0.0, r_flg, r_flg, h_tot)
+    return SolidMesh3D(
+        vertices=np.asarray(verts_3d, dtype=np.float64),
+        faces=np.asarray(faces, dtype=np.int32),
+        expected_volume_mm3=vol,
+        expected_bbox_mm=bbox,
+    )
+
+
+def _build_ribbed_bracket_3d_mesh(body: RibbedBracket3D, n_seg: int) -> SolidMesh3D:
+    L = body.base_length
+    W = body.base_width
+    H = body.total_height
+    t1 = body.base_thickness
+    t2 = body.wall_thickness
+    tr = body.rib_thickness
+    r_boss = body.boss_hole_diameter / 2.0
+    r_mnt = body.mount_hole_diameter / 2.0
+
+    z_hole = round(H - max(r_boss + 12.0, H * 0.30), 2)
+    x_rib_end = round(L - max(22.0, r_mnt * 3.0), 2)
+    z_rib_top = round(min(H - 8.0, z_hole - r_boss - 2.5) if z_hole - r_boss - 2.5 > t1 + 10.0 else t1 + (H - t1) * 0.45, 2)
+    x_mnt = round(L - max(18.0, r_mnt * 2.2), 2)
+    y_mnt = round(W / 2.0 - max(15.0, r_mnt * 1.8), 2)
+
+    c_steps = max(24, n_seg // 2)
+    vert_map: dict[tuple[int, int, int], int] = {}
+    verts_3d: list[tuple[float, float, float]] = []
+    faces: list[tuple[int, int, int]] = []
+
+    def vid(x: float, y: float, z: float) -> int:
+        key = (round(x * 1e6), round(y * 1e6), round(z * 1e6))
+        if key not in vert_map:
+            vert_map[key] = len(verts_3d)
+            verts_3d.append((float(x), float(y), float(z)))
+        return vert_map[key]
+
+    def emit_planar(
+        outer_3d: Sequence[tuple[float, float, float]],
+        holes_3d: Sequence[Sequence[tuple[float, float, float]]],
+        u_axis: tuple[float, float, float],
+        v_axis: tuple[float, float, float],
+    ) -> None:
+        # (u_axis x v_axis) MUST point in desired outward normal direction!
+        def proj(pt: tuple[float, float, float]) -> tuple[float, float]:
+            return (
+                pt[0] * u_axis[0] + pt[1] * u_axis[1] + pt[2] * u_axis[2],
+                pt[0] * v_axis[0] + pt[1] * v_axis[1] + pt[2] * v_axis[2],
+            )
+
+        out_2d = _ensure_winding([proj(p) for p in outer_3d], ccw=True)
+        # Reorder outer_3d to match out_2d if reversed
+        raw_out_2d = [proj(p) for p in outer_3d]
+        out_3d_ord = list(outer_3d) if _signed_area_2d(raw_out_2d) > 0 else list(reversed(outer_3d))
+
+        holes_2d: list[list[tuple[float, float]]] = []
+        holes_3d_ord: list[list[tuple[float, float, float]]] = []
+        for h3 in holes_3d:
+            rh2 = [proj(p) for p in h3]
+            if _signed_area_2d(rh2) < 0:
+                holes_2d.append(rh2)
+                holes_3d_ord.append(list(h3))
+            else:
+                holes_2d.append(list(reversed(rh2)))
+                holes_3d_ord.append(list(reversed(h3)))
+
+        idx_map = [vid(*p) for p in out_3d_ord] + [vid(*p) for h in holes_3d_ord for p in h]
+        for i0, i1, i2 in _triangulate_polygon_with_holes(out_2d, holes_2d):
+            faces.append((idx_map[i0], idx_map[i1], idx_map[i2]))
+
+    # Mounting holes in XY plane (CCW in +X,+Y)
+    mnt_loops_xy = [
+        _circle_loop(x_mnt, y_mnt, r_mnt, c_steps, ccw=True),
+        _circle_loop(x_mnt, -y_mnt, r_mnt, c_steps, ccw=True),
+    ]
+    # Boss hole in YZ plane centered at (0, z_hole)
+    boss_loop_yz = _circle_loop(0.0, z_hole, r_boss, c_steps, ccw=True)
+
+    hw = W / 2.0
+    hr = tr / 2.0
+
+    # 1. Bottom face z=0, normal (0, 0, -1): u=(1,0,0), v=(0,-1,0) -> u x v = (0,0,-1)
+    emit_planar(
+        [(0, -hw, 0), (L, -hw, 0), (L, hw, 0), (0, hw, 0)],
+        [[(x, y, 0.0) for x, y in lp] for lp in mnt_loops_xy],
+        (1.0, 0.0, 0.0),
+        (0.0, -1.0, 0.0),
+    )
+
+    # 2. Front toe x=L, normal (+1, 0, 0): u=(0,1,0), v=(0,0,1) -> u x v = (+1,0,0)
+    emit_planar([(L, -hw, 0), (L, hw, 0), (L, hw, t1), (L, -hw, t1)], [], (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
+
+    # 3. Top of vertical wall z=H, normal (0, 0, +1): u=(1,0,0), v=(0,1,0)
+    emit_planar([(0, -hw, H), (t2, -hw, H), (t2, hw, H), (0, hw, H)], [], (1.0, 0.0, 0.0), (0.0, 1.0, 0.0))
+
+    # 4. -Y outer L-face y=-hw, normal (0, -1, 0): u=(1,0,0), v=(0,0,1) -> u x v = (0,-1,0)
+    emit_planar(
+        [(0, -hw, 0), (L, -hw, 0), (L, -hw, t1), (t2, -hw, t1), (t2, -hw, H), (0, -hw, H)],
+        [],
+        (1.0, 0.0, 0.0),
+        (0.0, 0.0, 1.0),
+    )
+
+    # 5. +Y outer L-face y=+hw, normal (0, +1, 0): u=(-1,0,0), v=(0,0,1) -> u x v = (0,+1,0)
+    emit_planar(
+        [(0, hw, 0), (L, hw, 0), (L, hw, t1), (t2, hw, t1), (t2, hw, H), (0, hw, H)],
+        [],
+        (-1.0, 0.0, 0.0),
+        (0.0, 0.0, 1.0),
+    )
+
+    # 6. Back wall x=0, normal (-1, 0, 0): u=(0,-1,0), v=(0,0,1) -> u x v = (-1,0,0)
+    emit_planar(
+        [(0, -hw, 0), (0, hw, 0), (0, hw, H), (0, -hw, H)],
+        [[(0.0, y, z) for y, z in boss_loop_yz]],
+        (0.0, -1.0, 0.0),
+        (0.0, 0.0, 1.0),
+    )
+
+    # 7. Exposed base top deck z=t1, normal (0, 0, +1): u=(1,0,0), v=(0,1,0)
+    emit_planar(
+        [
+            (t2, -hw, t1),
+            (L, -hw, t1),
+            (L, hw, t1),
+            (t2, hw, t1),
+            (t2, hr, t1),
+            (x_rib_end, hr, t1),
+            (x_rib_end, -hr, t1),
+            (t2, -hr, t1),
+        ],
+        [[(x, y, t1) for x, y in lp] for lp in mnt_loops_xy],
+        (1.0, 0.0, 0.0),
+        (0.0, 1.0, 0.0),
+    )
+
+    # 8. Exposed inner vertical wall x=t2, normal (+1, 0, 0): u=(0,1,0), v=(0,0,1)
+    emit_planar(
+        [
+            (t2, -hw, t1),
+            (t2, -hr, t1),
+            (t2, -hr, z_rib_top),
+            (t2, hr, z_rib_top),
+            (t2, hr, t1),
+            (t2, hw, t1),
+            (t2, hw, H),
+            (t2, -hw, H),
+        ],
+        [[(t2, y, z) for y, z in boss_loop_yz]],
+        (0.0, 1.0, 0.0),
+        (0.0, 0.0, 1.0),
+    )
+
+    # 9. Rib -Y triangle (y=-hr, normal (0, -1, 0)) & +Y triangle (y=+hr, normal (0, +1, 0))
+    emit_planar([(t2, -hr, t1), (x_rib_end, -hr, t1), (t2, -hr, z_rib_top)], [], (1.0, 0.0, 0.0), (0.0, 0.0, 1.0))
+    emit_planar([(t2, hr, t1), (x_rib_end, hr, t1), (t2, hr, z_rib_top)], [], (-1.0, 0.0, 0.0), (0.0, 0.0, 1.0))
+
+    # 10. Rib slanted hypotenuse quad: outward normal in (+X, +Z)
+    dx_r = x_rib_end - t2
+    dz_r = z_rib_top - t1
+    r_len = hypot(dx_r, dz_r)
+    # u = (0, 1, 0), v = (-dx_r/r_len, 0, dz_r/r_len) -> u x v = (dz_r/r_len, 0, dx_r/r_len) (+X, +Z outward!)
+    emit_planar(
+        [(x_rib_end, -hr, t1), (x_rib_end, hr, t1), (t2, hr, z_rib_top), (t2, -hr, z_rib_top)],
+        [],
+        (0.0, 1.0, 0.0),
+        (-dx_r / r_len, 0.0, dz_r / r_len),
+    )
+
+    # 11. Cylindrical inner walls for 2 vertical mounting holes (CW in XY so normal points inward toward hole center)
+    for lp in mnt_loops_xy:
+        cw_lp = list(reversed(lp))
+        b_ring = [vid(x, y, 0.0) for x, y in cw_lp]
+        t_ring = [vid(x, y, t1) for x, y in cw_lp]
+        _stitch_rings(faces, b_ring, t_ring)
+
+    # 12. Cylindrical inner wall for horizontal boss hole from x=0 -> x=t2
+    # In YZ plane with +X extrusion (u=(0,1,0), v=(0,0,1)), CW in YZ gives inward hole normal!
+    cw_boss_yz = list(reversed(boss_loop_yz))
+    x0_ring = [vid(0.0, y, z) for y, z in cw_boss_yz]
+    xt2_ring = [vid(t2, y, z) for y, z in cw_boss_yz]
+    _stitch_rings(faces, x0_ring, xt2_ring)
+
+    mnt_poly_area = sum(abs(_signed_area_2d(lp)) for lp in mnt_loops_xy)
+    boss_poly_area = abs(_signed_area_2d(boss_loop_yz))
+    vol = (
+        L * W * t1
+        + t2 * W * (H - t1)
+        + 0.5 * (x_rib_end - t2) * (z_rib_top - t1) * tr
+        - mnt_poly_area * t1
+        - boss_poly_area * t2
+    )
+    bbox = (0.0, -hw, 0.0, L, hw, H)
+    return SolidMesh3D(
+        vertices=np.asarray(verts_3d, dtype=np.float64),
+        faces=np.asarray(faces, dtype=np.int32),
+        expected_volume_mm3=vol,
+        expected_bbox_mm=bbox,
+    )

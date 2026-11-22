@@ -681,7 +681,33 @@ _MCP_APP_HTML = r"""<!DOCTYPE html>
         `用户指令/问题: ${text}`
       ].join("\n");
 
+      const handlesSnap = [...activeSelection.handles];
       closePromptPill();
+
+      if (mcpInitialized && (currentDxfPath || currentTaskId)) {
+        try {
+          const toolRes = await sendRpcRequest("tools/call", {
+            name: "cad_revise_by_nl",
+            arguments: {
+              dxf_path: currentDxfPath || null,
+              task_id: currentDxfPath ? null : currentTaskId,
+              prompt_text: text,
+              region_box: regionMm,
+              candidate_handles: handlesSnap
+            }
+          });
+          const sc = toolRes?.structuredContent;
+          if (sc && sc.mode === "revision" && sc.scene) {
+            savedPins.pop();
+            cadScene = sc.scene;
+            currentDxfPath = sc.output_path || currentDxfPath;
+            currentTaskId = sc.task_id || currentTaskId;
+            draw2D();
+            document.getElementById("coordInfo").textContent = `✅ ${sc.summary_zh || "框选改图已生效"}`;
+            return;
+          }
+        } catch (_) {}
+      }
 
       if (mcpInitialized) {
         try {

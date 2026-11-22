@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from cad_skill_core.cad_drivers import probe_all_cad_drivers
 from cad_skill_core.documents.spec_compiler import PartFamily
+from cad_skill_core.modeling3d import Part3DFamily
 from cad_skill_core.standards.profile import list_builtin_standards
 
 from .cad_scene import extract_dxf_vector_scene
@@ -32,6 +33,8 @@ _MEDIA_TYPES = {
     ".svg": "image/svg+xml",
     ".png": "image/png",
     ".pdf": "application/pdf",
+    ".step": "application/step",
+    ".stp": "application/step",
     ".stl": "model/stl",
     ".obj": "model/obj",
     ".glb": "model/gltf-binary",
@@ -58,14 +61,7 @@ class WebCompile3DRequest(BaseModel):
 
     markdown_text: str | None = None
     input_paths: list[str] = Field(default_factory=list)
-    part_family: Literal[
-        "auto",
-        "flange_3d",
-        "stepped_shaft_3d",
-        "slotted_bracket_3d",
-        "cylinder",
-        "box",
-    ] = "auto"
+    part_family: Part3DFamily = "auto"
 
 
 class WebGenerateRequest(BaseModel):
@@ -75,6 +71,7 @@ class WebGenerateRequest(BaseModel):
     spec: dict[str, Any] | None = None
     markdown_brief: str | None = None
     standard_profile: str | None = None
+    include_pro_symbols: bool = True
     with_2d_sheet: bool = False
     run_native_cad: bool = False
     driver_preference: Literal["auto", "autocad", "zwcad", "gstarcad"] = "auto"
@@ -88,6 +85,19 @@ class WebReviseRequest(BaseModel):
     dxf_path: str | None = None
     artifact_name: str = "drawing.dxf"
     plan: dict[str, Any]
+    dry_run: bool = False
+
+
+class WebNLReviseRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    task_id: str | None = None
+    dxf_path: str | None = None
+    artifact_name: str = "drawing.dxf"
+    prompt_text: str
+    region_box: list[float] | None = None
+    candidate_handles: list[str] | None = None
+    expected_sha256: str | None = None
     dry_run: bool = False
 
 
@@ -152,6 +162,7 @@ def _map_generate_to_tool(req: WebGenerateRequest) -> tuple[str, dict[str, Any]]
                 "spec": req.spec,
                 "markdown_brief": req.markdown_brief,
                 "standard_profile": req.standard_profile,
+                "include_pro_symbols": req.include_pro_symbols,
                 "max_repair_iterations": req.max_repair_iterations,
             },
         )
@@ -378,6 +389,13 @@ def create_mcp_http_app(
     @app.post("/api/v1/tasks/revise")
     def web_revise(req: WebReviseRequest) -> JSONResponse:
         res = call_mcp_tool(sandbox, "cad_revise_dxf", req.model_dump())
+        structured = _attach_download_urls(res["structuredContent"])
+        status_code = 400 if res["isError"] else 200
+        return JSONResponse(status_code=status_code, content=structured)
+
+    @app.post("/api/v1/tasks/revise-nl")
+    def web_revise_nl(req: WebNLReviseRequest) -> JSONResponse:
+        res = call_mcp_tool(sandbox, "cad_revise_by_nl", req.model_dump())
         structured = _attach_download_urls(res["structuredContent"])
         status_code = 400 if res["isError"] else 200
         return JSONResponse(status_code=status_code, content=structured)

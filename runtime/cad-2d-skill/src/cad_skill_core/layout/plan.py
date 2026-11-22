@@ -297,7 +297,8 @@ def _balance_placed_views(
     if not placed:
         return placed
 
-    top_label_pad = 9.5
+    has_pro_symbols = bool(spec.surface_finishes or spec.datums or spec.gdt_frames)
+    top_label_pad = 25.0 if has_pro_symbols else 9.5
     max_view_y = max(b.max_y for b in placed.values())
     min_view_y = min(b.min_y for b in placed.values())
     bottom_extra = 12.0 * max(
@@ -342,7 +343,7 @@ def _balance_placed_views(
         left_col_avail_max_x = right_zone_min_x - gap - front_right_pad
         cur_front = placed["front"]
         if left_col_avail_max_x > cur_front.max_x + 8.0:
-            balloon_pad = (8.0 * len(spec.parts_list) + 12.0) if (spec.project.drawing_type == "assembly" and spec.parts_list) else 0.0
+            balloon_pad = (8.0 * len(spec.parts_list) + 12.0) if (spec.project.drawing_type == "assembly" and spec.parts_list) else (16.0 if spec.datums else 0.0)
             ideal_front_cx = (printable.min_x + balloon_pad + left_col_avail_max_x) / 2.0
             want_dx = round(max(0.0, min(left_col_avail_max_x - cur_front.max_x, ideal_front_cx - cur_front.center[0])) * 2.0) / 2.0
             if want_dx > 2.0:
@@ -903,7 +904,144 @@ def _annotation_layouts(spec: DrawingSpec, views: tuple[ViewLayout, ...], printa
             group = f"balloon-{row.item_no}"
             center = (front.bounds.min_x - 8 - (row.item_no - 1) * 8, front.bounds.max_y - 8)
             result += [AnnotationLayout("balloon", str(row.item_no), Bounds(center[0] - 3.5, center[1] - 3.5, center[0] + 3.5, center[1] + 3.5), "DIM", points=(center,), radius=3.5, annotation_id=f"{group}-circle", group_id=group, owner_view=front.name, allowed_contact=("own-balloon-text", "own-leader")), _text("balloon-text", str(row.item_no), center[0] - 1, center[1] - 1.5, height, width_factor=width_factor, annotation_id=f"{group}-text", group_id=group, owner_view=front.name, allowed_contact=("own-balloon",)), AnnotationLayout("leader", "", Bounds(min(center[0], front.bounds.min_x), center[1] - 0.001, max(center[0], front.bounds.min_x), center[1] + 0.001), "DIM", points=(center, (front.bounds.min_x, center[1])), annotation_id=f"{group}-leader", group_id=group, owner_view=front.name, allowed_contact=("own-balloon", "own-view-endpoint"))]
+        result += _engineering_symbol_layouts(spec, views_by_name, front, printable, height, width_factor, is_zh=is_zh)
     return tuple(result)
+
+
+def _engineering_symbol_layouts(
+    spec: DrawingSpec,
+    views_by_name: dict[str, ViewLayout],
+    default_view: ViewLayout,
+    printable: Bounds,
+    text_h: float,
+    width_factor: float,
+    *,
+    is_zh: bool,
+) -> list[AnnotationLayout]:
+    """Plan collision-free GB/T 131 surface roughness, GB/T 1182 datum, and GD&T frame annotations."""
+    out: list[AnnotationLayout] = []
+    s30 = 0.5773502691896257
+    sym_h = min(3.0, text_h * 0.88)
+
+    # 1. Surface roughness symbols (general upper-right sheet callout + mating surface symbols)
+    local_sf_idx = 0
+    for idx, sf in enumerate(spec.surface_finishes, start=1):
+        mode_tag = "machined" if sf.machining_required else "unmachined"
+        if sf.is_general:
+            prefix = "其余" if is_zh else "REST"
+            pref_w = max(sym_h, measure_text_width_mm(prefix, text_h, width_factor=width_factor))
+            val_w = max(sym_h, measure_text_width_mm(sf.value, sym_h, width_factor=width_factor))
+            h1, h2 = 4.6, 9.6
+            tx = printable.max_x - max(h2 * s30 + 3.0, val_w + 3.0)
+            ty = printable.max_y - h2 - 3.5
+            b_min_x = tx - h1 * s30 - pref_w - 2.5
+            b_max_x = max(tx + h2 * s30, tx - h1 * s30 + val_w) + 0.8
+            b_min_y = ty
+            b_max_y = max(ty + h2, ty + h1 + 1.0 + sym_h) + 0.5
+            if b_min_x > printable.min_x + 4.0 and b_min_y > printable.min_y + 4.0:
+                out.append(
+                    AnnotationLayout(
+                        "surface-roughness",
+                        f"{prefix}|{sf.value}",
+                        Bounds(b_min_x, b_min_y, b_max_x, b_max_y),
+                        "DIM",
+                        points=((tx, ty),),
+                        annotation_id=f"roughness-{idx}",
+                        group_id=f"roughness-{idx}",
+                        dim_kind=f"general-{mode_tag}",
+                    )
+                )
+            continue
+
+        v = views_by_name.get(sf.owner_view or default_view.name, default_view)
+        local_sf_idx += 1
+        h1, h2 = 3.8, 8.0
+        val_w = max(sym_h, measure_text_width_mm(sf.value, sym_h, width_factor=width_factor))
+        sym_right_span = max(h2 * s30, val_w - h1 * s30) + 0.8
+        lbl_half_w = max(text_h, measure_text_width_mm(v.label, text_h, width_factor=width_factor)) / 2.0 + 3.5
+
+        # Prefer top-left of view if view is wide enough to stay clear of centered view-label
+        tx_cand = v.bounds.min_x + h1 * s30 + 2.0
+        if sf.placement == "top-left" and (tx_cand + sym_right_span) < (v.bounds.center[0] - lbl_half_w):
+            ty = v.bounds.max_y + 0.25
+            out.append(
+                AnnotationLayout(
+                    "surface-roughness",
+                    sf.value,
+                    Bounds(tx_cand - h1 * s30 - 0.3, ty, tx_cand + sym_right_span, ty + h2 + 0.5),
+                    "DIM",
+                    points=((tx_cand, ty),),
+                    annotation_id=f"roughness-{idx}",
+                    group_id=f"roughness-{idx}",
+                    owner_view=v.name,
+                    dim_kind=f"top-{mode_tag}",
+                )
+            )
+        elif v.bounds.min_x - (sym_right_span + h1 * s30 + 3.0) > printable.min_x + 2.0:
+            # Place cleanly on upper-left vertical contour edge (upright check symbol with short horizontal shelf)
+            shelf_x = v.bounds.min_x - 0.25
+            shelf_y = v.bounds.min_y + v.bounds.height * (0.72 if local_sf_idx == 1 else 0.52)
+            tx = shelf_x - sym_right_span - 1.2
+            ty = shelf_y
+            out.append(
+                AnnotationLayout(
+                    "surface-roughness",
+                    sf.value,
+                    Bounds(tx - h1 * s30 - 0.3, ty, shelf_x, ty + h2 + 0.5),
+                    "DIM",
+                    points=((tx, ty), (shelf_x, shelf_y)),
+                    annotation_id=f"roughness-{idx}",
+                    group_id=f"roughness-{idx}",
+                    owner_view=v.name,
+                    dim_kind=f"shelf-{mode_tag}",
+                )
+            )
+
+    # 2. Datum feature symbols ([A]) on left contour of owner_view
+    for idx, dat in enumerate(spec.datums, start=1):
+        v = views_by_name.get(dat.owner_view, default_view)
+        ax = v.bounds.min_x - 0.25
+        ay = v.bounds.min_y + v.bounds.height * (0.26 if idx == 1 else 0.14)
+        box_size = 6.2
+        total_left = 6.2 + box_size
+        if ax - total_left > printable.min_x + 1.5:
+            out.append(
+                AnnotationLayout(
+                    "datum-symbol",
+                    dat.letter.strip()[:2],
+                    Bounds(ax - total_left, ay - box_size / 2.0, ax, ay + box_size / 2.0),
+                    "DIM",
+                    points=((ax, ay),),
+                    annotation_id=f"datum-{idx}",
+                    group_id=f"datum-{idx}",
+                    owner_view=v.name,
+                )
+            )
+
+    # 3. GD&T Feature Control Frames ([⊥ | 0.02 | A]) cleanly above view-label band
+    for idx, gdt in enumerate(spec.gdt_frames, start=1):
+        v = views_by_name.get(gdt.owner_view, default_view)
+        box_h = 6.2
+        tol_w = max(11.5, measure_text_width_mm(gdt.tolerance, sym_h, width_factor=width_factor) + 3.8)
+        ref_count = len(gdt.datum_refs)
+        frame_w = box_h + tol_w + ref_count * box_h
+        fy0 = v.bounds.max_y + 10.2 + (idx - 1) * (box_h + 2.2)
+        fx0 = max(printable.min_x + 2.0, min(v.bounds.center[0] - frame_w / 2.0, printable.max_x - frame_w - 4.0))
+        if fy0 + box_h < printable.max_y - 1.5:
+            payload_str = "|".join([gdt.symbol, gdt.tolerance, *gdt.datum_refs])
+            out.append(
+                AnnotationLayout(
+                    "gdt-frame",
+                    payload_str,
+                    Bounds(fx0, fy0, fx0 + frame_w, fy0 + box_h),
+                    "DIM",
+                    points=((fx0, fy0), (tol_w, box_h)),
+                    annotation_id=f"gdt-{idx}",
+                    group_id=f"gdt-{idx}",
+                    owner_view=v.name,
+                )
+            )
+    return out
 
 
 def _dimension_layout(

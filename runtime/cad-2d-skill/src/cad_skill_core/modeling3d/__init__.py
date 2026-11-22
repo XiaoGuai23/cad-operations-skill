@@ -12,10 +12,12 @@ from .exporters import (
     export_binary_stl,
     export_glb,
     export_obj,
+    export_step,
     render_isometric_png,
 )
 from .mesh_kernel import SolidMesh3D, build_solid_mesh
 from .models import (
+    BearingCap3D,
     Body3D,
     Box3D,
     BoxBoss3D,
@@ -26,7 +28,9 @@ from .models import (
     ExtrudePolygon3D,
     Flange3D,
     Model3DSpec,
+    RibbedBracket3D,
     SlottedBracket3D,
+    SpurGear3D,
     SteppedShaft3D,
 )
 from .pipeline3d import load_model3d_spec, run_3d_task
@@ -36,6 +40,7 @@ from .verify import Audit3DIssue, Audit3DReport, verify_3d_artifacts
 __all__ = [
     "Audit3DIssue",
     "Audit3DReport",
+    "BearingCap3D",
     "Body3D",
     "Box3D",
     "BoxBoss3D",
@@ -47,8 +52,10 @@ __all__ = [
     "Flange3D",
     "Model3DSpec",
     "Part3DFamily",
+    "RibbedBracket3D",
     "SlottedBracket3D",
     "SolidMesh3D",
+    "SpurGear3D",
     "SteppedShaft3D",
     "build_solid_mesh",
     "compile_model3d_from_files",
@@ -58,6 +65,7 @@ __all__ = [
     "export_binary_stl",
     "export_glb",
     "export_obj",
+    "export_step",
     "generate_autocad_3d_script",
     "load_model3d_spec",
     "probe_3d_capabilities",

@@ -29,6 +29,9 @@ Part3DFamily = Literal[
     "flange_3d",
     "stepped_shaft_3d",
     "slotted_bracket_3d",
+    "spur_gear_3d",
+    "bearing_cap_3d",
+    "ribbed_bracket_3d",
     "cylinder",
     "box",
 ]
@@ -162,12 +165,17 @@ def compile_model3d_from_fragments(
                 shaft_steps.append((float(m_cs.group("len")), float(m_cs.group("dia"))))
                 step_spans.append(sp)
 
+        claimed_spans: list[tuple[int, int]] = []
         for pname, pat in _PARAM_PATTERNS:
             for match in pat.finditer(line):
                 if step_spans and pname in {"width", "height"}:
                     continue
                 nm = _NUMBER_TOL_RE.match(line[match.end() :])
                 if nm:
+                    abs_sp = (match.end() + nm.start(), match.end() + nm.end())
+                    if any(not (abs_sp[1] <= a or abs_sp[0] >= b) for a, b in claimed_spans):
+                        continue
+                    claimed_spans.append(abs_sp)
                     val = float(nm.group("val"))
                     if pname in params and abs(params[pname] - val) > 1e-6:
                         conflicts.append(f"3D parameter '{pname}' conflict: {params[pname]:g} vs {val:g}")
@@ -177,7 +185,13 @@ def compile_model3d_from_fragments(
     # Infer 3D body kind
     fam = part_family
     if fam == "auto":
-        if shaft_steps or re.search(r"阶梯轴|传动轴|stepped\s*shaft", all_text, re.IGNORECASE):
+        if "module_mm" in params or "teeth" in params or re.search(r"齿轮|spur\s*gear|圆柱齿轮", all_text, re.IGNORECASE):
+            fam = "spur_gear_3d"
+        elif "spigot_diameter" in params or re.search(r"轴承(?:透|闷|端)?盖|端盖|bearing\s*cap", all_text, re.IGNORECASE):
+            fam = "bearing_cap_3d"
+        elif "rib_thickness" in params or re.search(r"加强筋|肋板|直角支座|L型支座|ribbed\s*bracket", all_text, re.IGNORECASE):
+            fam = "ribbed_bracket_3d"
+        elif shaft_steps or re.search(r"阶梯轴|传动轴|stepped\s*shaft", all_text, re.IGNORECASE):
             fam = "stepped_shaft_3d"
         elif any(k in params for k in ("slot_length", "slot_width")) or re.search(r"腰形槽|支架", all_text):
             fam = "slotted_bracket_3d"
@@ -195,6 +209,9 @@ def compile_model3d_from_fragments(
         "flange_3d": "三维连接法兰",
         "stepped_shaft_3d": "三维阶梯传动轴",
         "slotted_bracket_3d": "三维腰形槽安装板",
+        "spur_gear_3d": "三维直齿圆柱齿轮",
+        "bearing_cap_3d": "三维减速器轴承透盖",
+        "ribbed_bracket_3d": "三维带加强筋L型支座",
         "cylinder": "三维轴套零件",
         "box": "三维矩形基座",
     }
@@ -261,6 +278,70 @@ def compile_model3d_from_fragments(
             "slot_width": params.get("slot_width", 14.0),
             "hole_diameter": hd_val,
             "hole_inset": params.get("hole_inset", 15.0),
+            "source_id": primary_sid,
+        }
+    elif fam == "spur_gear_3d":
+        for req_k in ("module_mm", "teeth"):
+            if req_k not in params:
+                missing.append(f"missing {req_k} for spur_gear_3d")
+        m_val = params.get("module_mm", 3.0)
+        z_val = int(round(params.get("teeth", 24.0)))
+        fw_val = params.get("face_width") or params.get("thickness") or round(m_val * 9.0, 1)
+        bore_val = params.get("bore_diameter", round(max(12.0, m_val * z_val * 0.28), 1))
+        body_dict = {
+            "kind": "spur_gear_3d",
+            "module_mm": m_val,
+            "teeth": z_val,
+            "face_width": fw_val,
+            "bore_diameter": bore_val,
+            "source_id": primary_sid,
+        }
+    elif fam == "bearing_cap_3d":
+        for req_k in ("outer_diameter", "bore_diameter"):
+            if req_k not in params:
+                missing.append(f"missing {req_k} for bearing_cap_3d")
+        flg_d = params.get("outer_diameter", 130.0)
+        bore_d = params.get("bore_diameter", 42.0)
+        sp_d = params.get("spigot_diameter", round((flg_d + bore_d) * 0.52, 1))
+        h_tot = params.get("height", 32.0)
+        t_flg = params.get("thickness", 12.0)
+        bcd_v = params.get("bolt_circle_diameter", round((flg_d + sp_d) * 0.5, 1))
+        hd_v = params.get("hole_diameter", 9.0)
+        hc_v = int(round(params.get("hole_count", 6.0)))
+        body_dict = {
+            "kind": "bearing_cap_3d",
+            "flange_diameter": flg_d,
+            "spigot_diameter": sp_d,
+            "bore_diameter": bore_d,
+            "total_height": h_tot,
+            "flange_thickness": t_flg,
+            "bolt_circle_diameter": bcd_v,
+            "hole_diameter": hd_v,
+            "hole_count": hc_v,
+            "source_id": primary_sid,
+        }
+    elif fam == "ribbed_bracket_3d":
+        for req_k in ("width", "height"):
+            if req_k not in params:
+                missing.append(f"missing {req_k} for ribbed_bracket_3d")
+        b_len = params.get("width", 130.0)
+        b_wid = params.get("depth", round(b_len * 0.65, 1))
+        t_h = params.get("height", 92.0)
+        b_th = params.get("thickness", 14.0)
+        w_th = params.get("wall_thickness", b_th)
+        r_th = params.get("rib_thickness", round(max(8.0, b_th * 0.72), 1))
+        boss_d = params.get("boss_hole_diameter") or params.get("bore_diameter") or 28.0
+        mnt_d = params.get("hole_diameter", 12.0)
+        body_dict = {
+            "kind": "ribbed_bracket_3d",
+            "base_length": b_len,
+            "base_width": b_wid,
+            "total_height": t_h,
+            "base_thickness": b_th,
+            "wall_thickness": w_th,
+            "rib_thickness": r_th,
+            "boss_hole_diameter": boss_d,
+            "mount_hole_diameter": mnt_d,
             "source_id": primary_sid,
         }
     elif fam == "cylinder":

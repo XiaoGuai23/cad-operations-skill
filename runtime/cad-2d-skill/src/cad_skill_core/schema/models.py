@@ -120,6 +120,43 @@ class PartListItem(SchemaModel):
     material: str | None = None
 
 
+class SurfaceFinish(SchemaModel):
+    """GB/T 131 / ISO 1302 surface roughness symbol specification."""
+
+    value: NonBlankText
+    source_id: NonBlankText
+    machining_required: bool = True
+    is_general: bool = False
+    owner_view: str | None = None
+    placement: Literal["top-left", "top-right", "left-upper", "right-upper"] = "top-left"
+
+
+class DatumSymbol(SchemaModel):
+    """GB/T 1182 / ISO 1101 datum feature symbol (triangle + boxed letter)."""
+
+    letter: NonBlankText
+    source_id: NonBlankText
+    owner_view: str = "front"
+    placement: Literal["left-center", "bottom-left", "top-right"] = "left-center"
+
+
+class GDTFrame(SchemaModel):
+    """GB/T 1182 / ISO 1101 geometric tolerance feature control frame."""
+
+    symbol: Literal[
+        "perpendicularity",
+        "coaxiality",
+        "parallelism",
+        "runout",
+        "flatness",
+    ] = "perpendicularity"
+    tolerance: NonBlankText
+    datum_refs: list[NonBlankText] = Field(default_factory=list)
+    source_id: NonBlankText
+    owner_view: str = "front"
+    placement: Literal["top-right", "above-label", "right-upper"] = "above-label"
+
+
 class Provenance(SchemaModel):
     id: NonBlankText
     file: str
@@ -143,6 +180,9 @@ class DrawingSpec(SchemaModel):
     dimensions: list[Dimension] = Field(default_factory=list)
     annotations: list[Annotation] = Field(default_factory=list)
     parts_list: list[PartListItem] = Field(default_factory=list)
+    surface_finishes: list[SurfaceFinish] = Field(default_factory=list)
+    datums: list[DatumSymbol] = Field(default_factory=list)
+    gdt_frames: list[GDTFrame] = Field(default_factory=list)
     provenance: list[Provenance] = Field(default_factory=list)
     validation: Validation = Field(default_factory=Validation)
 
@@ -216,4 +256,19 @@ class DrawingSpec(SchemaModel):
                 raise ValueError(
                     f"dimension {dim_idx} target_entity_index is out of range: {dimension.target_entity_index}"
                 )
+        for sf in self.surface_finishes:
+            if sf.source_id not in provenance_ids:
+                raise ValueError(f"surface_finish source_id is unknown: {sf.source_id}")
+            if sf.owner_view is not None and sf.owner_view not in requested_views:
+                raise ValueError(f"surface_finish owner_view is not in requested views: {sf.owner_view}")
+        for dat in self.datums:
+            if dat.source_id not in provenance_ids:
+                raise ValueError(f"datum source_id is unknown: {dat.source_id}")
+            if dat.owner_view not in requested_views:
+                raise ValueError(f"datum owner_view is not in requested views: {dat.owner_view}")
+        for gdt in self.gdt_frames:
+            if gdt.source_id not in provenance_ids:
+                raise ValueError(f"gdt_frame source_id is unknown: {gdt.source_id}")
+            if gdt.owner_view not in requested_views:
+                raise ValueError(f"gdt_frame owner_view is not in requested views: {gdt.owner_view}")
         return self

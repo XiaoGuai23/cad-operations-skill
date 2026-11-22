@@ -472,6 +472,12 @@ def _allowed_pair(first: AnnotationLayout, second: AnnotationLayout) -> bool:
         return True
     if first.group_id != second.group_id:
         return False
+    if (
+        first.annotation_id
+        and first.annotation_id == second.annotation_id
+        and first.kind in {"surface-roughness", "datum-symbol", "gdt-frame"}
+    ):
+        return True
     kinds = {first.kind, second.kind}
     if kinds == {"balloon", "balloon-text"}:
         return "own-balloon-text" in first.allowed_contact or "own-balloon-text" in second.allowed_contact
@@ -722,8 +728,158 @@ def _emit(modelspace: ezdxf.layouts.Modelspace, annotation: AnnotationLayout, pl
         modelspace.add_leader(annotation.points, dxfattribs={"layer": annotation.layer})
     elif annotation.kind == "balloon":
         modelspace.add_circle(annotation.points[0], annotation.radius, dxfattribs={"layer": annotation.layer})
+    elif annotation.kind == "surface-roughness":
+        _emit_surface_roughness(modelspace, annotation, plan)
+    elif annotation.kind == "datum-symbol":
+        _emit_datum_symbol(modelspace, annotation, plan)
+    elif annotation.kind == "gdt-frame":
+        _emit_gdt_frame(modelspace, annotation, plan)
     else:
         raise ValueError(f"unsupported planned annotation: {annotation.kind}")
+
+
+def _emit_surface_roughness(
+    modelspace: ezdxf.layouts.Modelspace,
+    annotation: AnnotationLayout,
+    plan: LayoutPlan,
+) -> None:
+    s30 = 0.5773502691896257
+    tx, ty = annotation.points[0]
+    is_general = annotation.dim_kind.startswith("general-")
+    machined = annotation.dim_kind.endswith("machined") and not annotation.dim_kind.endswith("unmachined")
+    h1 = 4.6 if is_general else 3.8
+    h2 = 9.6 if is_general else 8.0
+    sym_h = min(3.0, plan.text_height_mm * 0.85)
+    lyr = annotation.layer
+
+    if is_general and "|" in annotation.text:
+        prefix, val_text = annotation.text.split("|", 1)
+        pref_x = annotation.bounds.min_x + 0.4
+        modelspace.add_text(
+            prefix,
+            dxfattribs={"layer": "TEXT", "style": "normal", "height": plan.text_height_mm},
+        ).set_placement((pref_x, ty + h1 - 1.0))
+    else:
+        val_text = annotation.text
+
+    # GB/T 131-2006 60-degree surface roughness tick + machining closing bar
+    p_left = (tx - h1 * s30, ty + h1)
+    p_tip = (tx, ty)
+    p_right_mid = (tx + h1 * s30, ty + h1)
+    p_right_top = (tx + h2 * s30, ty + h2)
+    modelspace.add_lwpolyline([p_left, p_tip, p_right_top], close=False, dxfattribs={"layer": lyr})
+    if machined:
+        modelspace.add_line(p_left, p_right_mid, dxfattribs={"layer": lyr})
+    else:
+        modelspace.add_circle((tx, ty + h1 * 0.66), h1 * 0.28, dxfattribs={"layer": lyr})
+
+    if annotation.dim_kind.startswith("shelf-") and len(annotation.points) >= 2:
+        sx, sy = annotation.points[1]
+        modelspace.add_line((p_left[0] - 0.5, sy), (sx, sy), dxfattribs={"layer": lyr})
+        # Small arrowhead touching left contour
+        modelspace.add_lwpolyline([(sx - 1.8, sy + 0.55), (sx, sy), (sx - 1.8, sy - 0.55)], close=False, dxfattribs={"layer": lyr})
+
+    modelspace.add_text(
+        val_text,
+        dxfattribs={"layer": "TEXT", "style": "normal", "height": sym_h},
+    ).set_placement((tx - h1 * s30 + 0.2, ty + h1 + 0.9))
+
+
+def _emit_datum_symbol(
+    modelspace: ezdxf.layouts.Modelspace,
+    annotation: AnnotationLayout,
+    plan: LayoutPlan,
+) -> None:
+    ax, ay = annotation.points[0]
+    box_s = 6.2
+    lyr = annotation.layer
+    # Datum triangle touching vertical surface at (ax, ay)
+    tri = [(ax, ay - 2.1), (ax, ay + 2.1), (ax - 3.4, ay)]
+    modelspace.add_lwpolyline(tri, close=True, dxfattribs={"layer": lyr})
+    # Fill shading lines inside datum triangle per GB/T 1182
+    for frac in (0.28, 0.55):
+        vx = ax - 3.4 * frac
+        half_h = 2.1 * (1.0 - frac)
+        modelspace.add_line((vx, ay - half_h), (vx, ay + half_h), dxfattribs={"layer": lyr})
+    # Stem + boxed datum letter
+    bx1 = ax - 6.2
+    bx0 = bx1 - box_s
+    modelspace.add_line((ax - 3.4, ay), (bx1, ay), dxfattribs={"layer": lyr})
+    modelspace.add_lwpolyline(
+        [(bx0, ay - box_s / 2.0), (bx1, ay - box_s / 2.0), (bx1, ay + box_s / 2.0), (bx0, ay + box_s / 2.0)],
+        close=True,
+        dxfattribs={"layer": lyr},
+    )
+    txt_h = min(3.2, plan.text_height_mm * 0.92)
+    modelspace.add_text(
+        annotation.text,
+        dxfattribs={"layer": "TEXT", "style": "normal", "height": txt_h},
+    ).set_placement(((bx0 + bx1) / 2.0, ay), align=TextEntityAlignment.MIDDLE_CENTER)
+
+
+def _emit_gdt_frame(
+    modelspace: ezdxf.layouts.Modelspace,
+    annotation: AnnotationLayout,
+    plan: LayoutPlan,
+) -> None:
+    fx0, fy0 = annotation.points[0]
+    tol_w, box_h = annotation.points[1]
+    parts = annotation.text.split("|")
+    sym_kind = parts[0] if parts else "perpendicularity"
+    tol_txt = parts[1] if len(parts) >= 2 else "0.02"
+    refs = parts[2:] if len(parts) > 2 else []
+    total_w = box_h + tol_w + len(refs) * box_h
+    lyr = annotation.layer
+
+    # Outer rectangular feature control frame
+    modelspace.add_lwpolyline(
+        [(fx0, fy0), (fx0 + total_w, fy0), (fx0 + total_w, fy0 + box_h), (fx0, fy0 + box_h)],
+        close=True,
+        dxfattribs={"layer": lyr},
+    )
+    # Compartment vertical dividers
+    x_div1 = fx0 + box_h
+    modelspace.add_line((x_div1, fy0), (x_div1, fy0 + box_h), dxfattribs={"layer": lyr})
+    x_cur = x_div1 + tol_w
+    for _ in refs:
+        modelspace.add_line((x_cur, fy0), (x_cur, fy0 + box_h), dxfattribs={"layer": lyr})
+        x_cur += box_h
+
+    # Compartment 1: crisp ISO 1101 / GB/T 1182 vector geometric symbol (font-independent!)
+    icx = fx0 + box_h / 2.0
+    icy = fy0 + box_h / 2.0
+    if sym_kind == "coaxiality":
+        modelspace.add_circle((icx, icy), 1.9, dxfattribs={"layer": lyr})
+        modelspace.add_circle((icx, icy), 0.95, dxfattribs={"layer": lyr})
+    elif sym_kind == "parallelism":
+        modelspace.add_line((icx - 1.7, icy - 1.7), (icx - 0.2, icy + 1.7), dxfattribs={"layer": lyr})
+        modelspace.add_line((icx + 0.2, icy - 1.7), (icx + 1.7, icy + 1.7), dxfattribs={"layer": lyr})
+    elif sym_kind == "runout":
+        modelspace.add_line((icx - 1.7, icy - 1.7), (icx + 1.6, icy + 1.6), dxfattribs={"layer": lyr})
+        modelspace.add_lwpolyline([(icx + 0.4, icy + 1.5), (icx + 1.6, icy + 1.6), (icx + 1.5, icy + 0.4)], close=False, dxfattribs={"layer": lyr})
+    elif sym_kind == "flatness":
+        modelspace.add_lwpolyline(
+            [(icx - 2.0, icy - 1.3), (icx + 1.1, icy - 1.3), (icx + 2.0, icy + 1.3), (icx - 1.1, icy + 1.3)],
+            close=True,
+            dxfattribs={"layer": lyr},
+        )
+    else:  # perpendicularity
+        modelspace.add_line((icx - 1.9, icy - 1.6), (icx + 1.9, icy - 1.6), dxfattribs={"layer": lyr})
+        modelspace.add_line((icx, icy - 1.6), (icx, icy + 1.9), dxfattribs={"layer": lyr})
+
+    txt_h = min(2.9, plan.text_height_mm * 0.86)
+    modelspace.add_text(
+        tol_txt,
+        dxfattribs={"layer": "TEXT", "style": "normal", "height": txt_h},
+    ).set_placement((x_div1 + tol_w / 2.0, icy), align=TextEntityAlignment.MIDDLE_CENTER)
+
+    rx = x_div1 + tol_w
+    for r_lbl in refs:
+        modelspace.add_text(
+            r_lbl,
+            dxfattribs={"layer": "TEXT", "style": "normal", "height": txt_h},
+        ).set_placement((rx + box_h / 2.0, icy), align=TextEntityAlignment.MIDDLE_CENTER)
+        rx += box_h
 
 
 def _serialized(doc: ezdxf.document.Drawing) -> str:

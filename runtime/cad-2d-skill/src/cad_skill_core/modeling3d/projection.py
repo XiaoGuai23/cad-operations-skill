@@ -13,11 +13,17 @@ from cad_skill_core.geometry.entities import (
     PolylineEntity,
 )
 from cad_skill_core.geometry.parametric import (
+    BearingCapParameters,
     FlangeParameters,
+    RibbedBracketParameters,
     SlottedBracketParameters,
+    SpurGearParameters,
     SteppedShaftParameters,
+    build_bearing_cap_geometry,
     build_flange_geometry,
+    build_ribbed_bracket_geometry,
     build_slotted_bracket_geometry,
+    build_spur_gear_geometry,
     build_stepped_shaft_geometry,
 )
 from cad_skill_core.layout.models import LayoutOverflowError
@@ -26,6 +32,7 @@ from cad_skill_core.schema.models import DrawingSpec
 from cad_skill_core.standards.profile import load_standard
 
 from .models import (
+    BearingCap3D,
     Box3D,
     BoxBoss3D,
     CompoundSolid3D,
@@ -34,7 +41,9 @@ from .models import (
     ExtrudePolygon3D,
     Flange3D,
     Model3DSpec,
+    RibbedBracket3D,
     SlottedBracket3D,
+    SpurGear3D,
     SteppedShaft3D,
 )
 
@@ -175,6 +184,55 @@ def project_model3d_to_drawing_spec(
 
     elif isinstance(body, CompoundSolid3D):
         views, entities, view_indices, dims = _project_compound_3d(body, sid)
+
+    elif isinstance(body, SpurGear3D):
+        part = build_spur_gear_geometry(
+            SpurGearParameters(
+                module_mm=body.module_mm,
+                teeth=body.teeth,
+                face_width=body.face_width,
+                bore_diameter=body.bore_diameter,
+                keyway_width=body.keyway_width,
+                keyway_depth=body.keyway_depth,
+            ),
+            source_id=sid,
+        )
+        views, entities, view_indices, dims = part.views, part.entities, part.view_entity_indices, part.dimensions
+        params.update(part.parameters)
+
+    elif isinstance(body, BearingCap3D):
+        part = build_bearing_cap_geometry(
+            BearingCapParameters(
+                flange_diameter=body.flange_diameter,
+                spigot_diameter=body.spigot_diameter,
+                bore_diameter=body.bore_diameter,
+                total_height=body.total_height,
+                flange_thickness=body.flange_thickness,
+                bolt_circle_diameter=body.bolt_circle_diameter,
+                hole_diameter=body.hole_diameter,
+                hole_count=body.hole_count,
+            ),
+            source_id=sid,
+        )
+        views, entities, view_indices, dims = part.views, part.entities, part.view_entity_indices, part.dimensions
+        params.update(part.parameters)
+
+    elif isinstance(body, RibbedBracket3D):
+        part = build_ribbed_bracket_geometry(
+            RibbedBracketParameters(
+                base_length=body.base_length,
+                base_width=body.base_width,
+                total_height=body.total_height,
+                base_thickness=body.base_thickness,
+                wall_thickness=body.wall_thickness,
+                rib_thickness=body.rib_thickness,
+                boss_hole_diameter=body.boss_hole_diameter,
+                mount_hole_diameter=body.mount_hole_diameter,
+            ),
+            source_id=sid,
+        )
+        views, entities, view_indices, dims = part.views, part.entities, part.view_entity_indices, part.dimensions
+        params.update(part.parameters)
 
     else:
         raise TypeError(f"unsupported 3D body kind for 2D projection: {type(body)!r}")

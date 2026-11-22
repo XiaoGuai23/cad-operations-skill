@@ -380,6 +380,104 @@ class CompoundSolid3D(Strict3DModel):
         return self
 
 
+class SpurGear3D(Strict3DModel):
+    """3D external spur gear solid with involute-profile teeth, central bore, and flat keyway."""
+
+    kind: Literal["spur_gear_3d"]
+    module_mm: float = 3.0
+    teeth: int = 24
+    face_width: float = 28.0
+    bore_diameter: float = 20.0
+    keyway_width: float | None = None
+    keyway_depth: float | None = None
+    source_id: NonBlankStr
+
+    @model_validator(mode="after")
+    def validate_gear(self) -> SpurGear3D:
+        if not all(isfinite(v) for v in (self.module_mm, self.face_width, self.bore_diameter)):
+            raise ValueError("spur_gear_3d parameters must be finite")
+        if self.module_mm <= 0 or self.face_width <= 0 or self.teeth < 8:
+            raise ValueError("spur_gear_3d requires module_mm > 0, face_width > 0, and teeth >= 8")
+        root_d = self.module_mm * (self.teeth - 2.5)
+        if self.bore_diameter < 0 or self.bore_diameter >= root_d - 4.0:
+            raise ValueError("spur_gear_3d bore_diameter exceeds safe root cylinder wall")
+        return self
+
+
+class BearingCap3D(Strict3DModel):
+    """3D stepped reducer bearing end-cap with spigot, stepped internal chamber, and bolt holes."""
+
+    kind: Literal["bearing_cap_3d"]
+    flange_diameter: float = 130.0
+    spigot_diameter: float = 90.0
+    bore_diameter: float = 42.0
+    total_height: float = 32.0
+    flange_thickness: float = 12.0
+    bolt_circle_diameter: float = 110.0
+    hole_diameter: float = 9.0
+    hole_count: int = 6
+    source_id: NonBlankStr
+
+    @model_validator(mode="after")
+    def validate_cap(self) -> BearingCap3D:
+        vals = [
+            self.flange_diameter,
+            self.spigot_diameter,
+            self.bore_diameter,
+            self.total_height,
+            self.flange_thickness,
+            self.bolt_circle_diameter,
+            self.hole_diameter,
+        ]
+        if not all(isfinite(v) for v in vals):
+            raise ValueError("bearing_cap_3d parameters must be finite")
+        if not (0 < self.bore_diameter + 8.0 < self.spigot_diameter < self.flange_diameter - 10.0):
+            raise ValueError("bearing_cap_3d diameters must satisfy bore < spigot < flange")
+        if not (4.0 <= self.flange_thickness <= self.total_height - 6.0):
+            raise ValueError("bearing_cap_3d flange_thickness must lie within total_height")
+        if self.hole_count > 0:
+            if not (self.spigot_diameter + self.hole_diameter + 2.0 <= self.bolt_circle_diameter <= self.flange_diameter - self.hole_diameter - 2.0):
+                raise ValueError("bearing_cap_3d bolt circle interferes with spigot or outer flange rim")
+        return self
+
+
+class RibbedBracket3D(Strict3DModel):
+    """3D L-shaped right-angle bracket with central triangular stiffening rib, boss hole, and base holes."""
+
+    kind: Literal["ribbed_bracket_3d"]
+    base_length: float = 130.0
+    base_width: float = 84.0
+    total_height: float = 92.0
+    base_thickness: float = 14.0
+    wall_thickness: float = 14.0
+    rib_thickness: float = 10.0
+    boss_hole_diameter: float = 28.0
+    mount_hole_diameter: float = 12.0
+    source_id: NonBlankStr
+
+    @model_validator(mode="after")
+    def validate_ribbed(self) -> RibbedBracket3D:
+        vals = [
+            self.base_length,
+            self.base_width,
+            self.total_height,
+            self.base_thickness,
+            self.wall_thickness,
+            self.rib_thickness,
+            self.boss_hole_diameter,
+            self.mount_hole_diameter,
+        ]
+        if not all(isfinite(v) for v in vals):
+            raise ValueError("ribbed_bracket_3d parameters must be finite")
+        if self.base_length <= self.wall_thickness + 30.0 or self.total_height <= self.base_thickness + 30.0:
+            raise ValueError("ribbed_bracket_3d base_length or total_height too small")
+        if not (2.0 <= self.rib_thickness <= self.base_width - 24.0):
+            raise ValueError("ribbed_bracket_3d rib_thickness leaves insufficient margin for base holes")
+        if self.boss_hole_diameter <= 0 or self.boss_hole_diameter >= self.base_width - 12.0:
+            raise ValueError("ribbed_bracket_3d boss_hole_diameter invalid")
+        return self
+
+
 Body3D: TypeAlias = Annotated[
     Box3D
     | Cylinder3D
@@ -387,7 +485,10 @@ Body3D: TypeAlias = Annotated[
     | Flange3D
     | SteppedShaft3D
     | SlottedBracket3D
-    | CompoundSolid3D,
+    | CompoundSolid3D
+    | SpurGear3D
+    | BearingCap3D
+    | RibbedBracket3D,
     Field(discriminator="kind"),
 ]
 

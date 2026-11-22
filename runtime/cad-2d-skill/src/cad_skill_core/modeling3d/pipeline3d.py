@@ -17,6 +17,7 @@ from .exporters import (
     export_binary_stl,
     export_glb,
     export_obj,
+    export_step,
     render_isometric_png,
 )
 from .mesh_kernel import build_solid_mesh
@@ -54,6 +55,7 @@ def run_3d_task(
     mesh = build_solid_mesh(spec_3d, circle_segments=circle_segments)
 
     stl_path = export_binary_stl(mesh, out / "model.stl", header_label=spec_3d.project.name)
+    step_path = export_step(mesh, out / "model.step", part_name=spec_3d.project.name)
     obj_path = export_obj(mesh, out / "model.obj", object_name=spec_3d.body.kind)
     glb_path = export_glb(mesh, out / "model.glb", name=spec_3d.project.name)
     dxf3d_path = export_3d_dxf(mesh, out / "model3d.dxf")
@@ -74,6 +76,7 @@ def run_3d_task(
         stl_path=stl_path,
         glb_path=glb_path,
         dxf3d_path=dxf3d_path,
+        step_path=step_path,
         expected_volume_mm3=mesh.expected_volume_mm3,
         expected_bbox_mm=mesh.expected_bbox_mm,
     )
@@ -88,6 +91,7 @@ def run_3d_task(
 
     published_files = [
         spec_snapshot,
+        step_path,
         stl_path,
         obj_path,
         glb_path,
@@ -188,6 +192,8 @@ def run_3d_task(
         "audit_3d": {
             "status": audit_report.status,
             "watertight": audit_report.watertight,
+            "open_boundary_edges": audit_report.open_boundary_edges,
+            "degenerate_faces": audit_report.degenerate_faces,
             "triangle_count": audit_report.triangle_count,
             "vertex_count": audit_report.vertex_count,
             "actual_volume_mm3": audit_report.actual_volume_mm3,

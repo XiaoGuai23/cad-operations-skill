@@ -110,6 +110,7 @@ def verify_3d_artifacts(
     stl_path: Path,
     glb_path: Path | None = None,
     dxf3d_path: Path | None = None,
+    step_path: Path | None = None,
     expected_volume_mm3: float | None = None,
     expected_bbox_mm: tuple[float, float, float, float, float, float] | None = None,
     volume_rel_tol: float = 0.03,
@@ -253,6 +254,9 @@ def verify_3d_artifacts(
         except Exception as exc:
             issues.append(Audit3DIssue("DXF3D_OPEN_FAILED", "error", str(exc)))
 
+    if step_path is not None:
+        issues.extend(_verify_step_on_disk(step_path, int(faces.shape[0])))
+
     # 6. Spec validation blocking flags
     for m in spec_3d.validation.missing:
         issues.append(Audit3DIssue("SPEC3D_MISSING_PARAM", "error", m))
@@ -305,3 +309,37 @@ def write_audit_3d_reports(report: Audit3DReport, json_path: Path, md_path: Path
         for issue in report.issues:
             md_lines.append(f"- **[{issue.severity.upper()}] `{issue.code}`**：{issue.message}")
     md_path.write_text("\n".join(md_lines) + "\n", encoding="utf-8")
+
+
+def _verify_step_on_disk(step_path: Path, expected_faces: int) -> list[Audit3DIssue]:
+    import re
+
+    issues: list[Audit3DIssue] = []
+    try:
+        txt = Path(step_path).read_text(encoding="ascii")
+    except Exception as exc:
+        return [Audit3DIssue("STEP_READ_FAILED", "error", str(exc))]
+
+    if not txt.startswith("ISO-10303-21;") or "END-ISO-10303-21;" not in txt:
+        issues.append(Audit3DIssue("STEP_HEADER_INVALID", "error", "missing ISO-10303-21 envelope"))
+        return issues
+    if "FACETED_BREP(" not in txt or "CLOSED_SHELL(" not in txt or "SI_UNIT(.MILLI.,.METRE.)" not in txt:
+        issues.append(Audit3DIssue("STEP_TOPOLOGY_MISSING", "error", "STEP missing FACETED_BREP, CLOSED_SHELL, or mm SI_UNIT"))
+        return issues
+
+    defined_ids = {int(m.group(1)) for m in re.finditer(r"^#(\d+)\s*=", txt, re.MULTILINE)}
+    ref_ids = {int(m.group(1)) for m in re.finditer(r"(?<!^)#(\d+)", txt, re.MULTILINE)}
+    dangling = ref_ids - defined_ids
+    if dangling:
+        issues.append(Audit3DIssue("STEP_DANGLING_REF", "error", f"STEP contains {len(dangling)} unresolved #id reference(s)"))
+
+    face_count = txt.count("= FACE_SURFACE(")
+    if face_count != expected_faces:
+        issues.append(
+            Audit3DIssue(
+                "STEP_FACE_COUNT_MISMATCH",
+                "error",
+                f"STEP FACE_SURFACE count {face_count} != expected {expected_faces}",
+            )
+        )
+    return issues

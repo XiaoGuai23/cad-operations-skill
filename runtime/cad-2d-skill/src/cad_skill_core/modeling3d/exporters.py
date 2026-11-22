@@ -321,3 +321,109 @@ def render_isometric_png(
         finally:
             plt.close(fig)
     return dest
+
+
+def _step_string(text: str) -> str:
+    """Encode string per ISO 10303-21 (ASCII + \\X2\\XXXX\\X0\\ UCS-2 hex for CJK)."""
+    out: list[str] = []
+    for ch in text:
+        code = ord(ch)
+        if ch == "'":
+            out.append("''")
+        elif ch == "\\":
+            out.append("\\\\")
+        elif 32 <= code <= 126:
+            out.append(ch)
+        elif code <= 0xFFFF:
+            out.append(f"\\X2\\{code:04X}\\X0\\")
+    return "".join(out) or "CAD_PART"
+
+
+def export_step(mesh: SolidMesh3D, path: Path, *, part_name: str = "cad_solid") -> Path:
+    """Write a deterministic ISO 10303-21 AP214 (.step) solid B-Rep file (`CLOSED_SHELL` + `FACETED_BREP`)."""
+    dest = Path(path)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    safe_name = _step_string(part_name)
+
+    entities: list[str] = []
+
+    def add_ent(expr: str) -> int:
+        eid = len(entities) + 1
+        entities.append(f"#{eid} = {expr};")
+        return eid
+
+    # 1. AP214 Product & Millimetre Geometric Context
+    app_ctx = add_ent("APPLICATION_CONTEXT('automotive_design')")
+    add_ent(f"APPLICATION_PROTOCOL_DEFINITION('international standard','automotive_design',2000,#{app_ctx})")
+    prod_ctx = add_ent(f"PRODUCT_CONTEXT('',#{app_ctx},'mechanical')")
+    prod = add_ent(f"PRODUCT('{safe_name}','{safe_name}','',(#{prod_ctx}))")
+    pdf_ctx = add_ent(f"PRODUCT_DEFINITION_FORMATION_WITH_SPECIFIED_SOURCE('','',#{prod},.NOT_KNOWN.)")
+    pdef_ctx = add_ent(f"PRODUCT_DEFINITION_CONTEXT('part definition',#{app_ctx},'design')")
+    pdef = add_ent(f"PRODUCT_DEFINITION('design','',#{pdf_ctx},#{pdef_ctx})")
+    pds = add_ent(f"PRODUCT_DEFINITION_SHAPE('','',#{pdef})")
+
+    len_unit = add_ent("( LENGTH_UNIT() NAMED_UNIT(*) SI_UNIT(.MILLI.,.METRE.) )")
+    ang_unit = add_ent("( NAMED_UNIT(*) PLANE_ANGLE_UNIT() SI_UNIT($,.RADIAN.) )")
+    sol_unit = add_ent("( NAMED_UNIT(*) SOLID_ANGLE_UNIT() SI_UNIT($,.STERADIAN.) )")
+    unc = add_ent(f"UNCERTAINTY_MEASURE_WITH_UNIT(LENGTH_MEASURE(1.E-05),#{len_unit},'distance_accuracy_value','confusion accuracy')")
+    geom_ctx = add_ent(
+        f"( GEOMETRIC_REPRESENTATION_CONTEXT(3) GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT((#{unc})) "
+        f"GLOBAL_UNIT_ASSIGNED_CONTEXT((#{len_unit},#{ang_unit},#{sol_unit})) REPRESENTATION_CONTEXT('Context3D','3D Context') )"
+    )
+
+    origin_pt = add_ent("CARTESIAN_POINT('',(0.,0.,0.))")
+    dir_z = add_ent("DIRECTION('',(0.,0.,1.))")
+    dir_x = add_ent("DIRECTION('',(1.,0.,0.))")
+    world_ax = add_ent(f"AXIS2_PLACEMENT_3D('',#{origin_pt},#{dir_z},#{dir_x})")
+
+    # 2. Deduplicated shared topological CARTESIAN_POINT table
+    pt_ids: list[int] = []
+    for vx, vy, vz in mesh.vertices:
+        pt_ids.append(add_ent(f"CARTESIAN_POINT('',({vx:.6f},{vy:.6f},{vz:.6f}))"))
+
+    # 3. Oriented planar faces forming a closed manifold shell
+    normals = mesh.face_normals
+    verts = mesh.vertices
+    face_ids: list[int] = []
+    for f_idx, (i0, i1, i2) in enumerate(mesh.faces):
+        p0_id = pt_ids[int(i0)]
+        p1_id = pt_ids[int(i1)]
+        p2_id = pt_ids[int(i2)]
+        nx, ny, nz = float(normals[f_idx, 0]), float(normals[f_idx, 1]), float(normals[f_idx, 2])
+        edge_vec = verts[int(i1)] - verts[int(i0)]
+        e_norm = float(np.linalg.norm(edge_vec))
+        if e_norm > 1e-12:
+            tx, ty, tz = float(edge_vec[0] / e_norm), float(edge_vec[1] / e_norm), float(edge_vec[2] / e_norm)
+        else:
+            tx, ty, tz = 1.0, 0.0, 0.0
+        n_id = add_ent(f"DIRECTION('',({nx:.6f},{ny:.6f},{nz:.6f}))")
+        t_id = add_ent(f"DIRECTION('',({tx:.6f},{ty:.6f},{tz:.6f}))")
+        ax_id = add_ent(f"AXIS2_PLACEMENT_3D('',#{p0_id},#{n_id},#{t_id})")
+        pln_id = add_ent(f"PLANE('',#{ax_id})")
+        loop_id = add_ent(f"POLY_LOOP('',(#{p0_id},#{p1_id},#{p2_id}))")
+        bnd_id = add_ent(f"FACE_OUTER_BOUND('',#{loop_id},.T.)")
+        face_ids.append(add_ent(f"FACE_SURFACE('',(#{bnd_id}),#{pln_id},.T.)"))
+
+    face_refs = ",".join(f"#{fid}" for fid in face_ids)
+    shell_id = add_ent(f"CLOSED_SHELL('',({face_refs}))")
+    brep_id = add_ent(f"FACETED_BREP('{safe_name}',#{shell_id})")
+    shape_rep = add_ent(f"FACETED_BREP_SHAPE_REPRESENTATION('{safe_name}',(#{brep_id},#{world_ax}),#{geom_ctx})")
+    add_ent(f"SHAPE_DEFINITION_REPRESENTATION(#{pds},#{shape_rep})")
+
+    header = [
+        "ISO-10303-21;",
+        "HEADER;",
+        "FILE_DESCRIPTION(('CAD Operations Skill Watertight Solid B-Rep'),'2;1');",
+        f"FILE_NAME('{_step_string(dest.name)}','2026-01-01T00:00:00',('cad-operations-skill'),(''),"
+        "'cad-operations-skill/modeling3d','cad-operations-skill','');",
+        "FILE_SCHEMA(('AUTOMOTIVE_DESIGN { 1 0 10303 214 1 1 1 1 }'));",
+        "ENDSEC;",
+        "DATA;",
+    ]
+    footer = [
+        "ENDSEC;",
+        "END-ISO-10303-21;",
+        "",
+    ]
+    dest.write_text("\n".join(header + entities + footer), encoding="ascii")
+    return dest

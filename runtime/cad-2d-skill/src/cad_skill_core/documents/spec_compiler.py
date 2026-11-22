@@ -113,6 +113,7 @@ def compile_spec_from_files(
     *,
     part_family: PartFamily = "auto",
     title_block_language: Literal["auto", "en", "zh"] = "auto",
+    include_pro_symbols: bool = True,
     ocr: OCRCallable | None = None,
     output_path: Path | None = None,
 ) -> DrawingSpec:
@@ -123,6 +124,7 @@ def compile_spec_from_files(
         fragments,
         part_family=part_family,
         title_block_language=title_block_language,
+        include_pro_symbols=include_pro_symbols,
     )
     if output_path is not None:
         save_spec(spec, output_path)
@@ -134,6 +136,7 @@ def compile_spec_from_fragments(
     *,
     part_family: PartFamily = "auto",
     title_block_language: Literal["auto", "en", "zh"] = "auto",
+    include_pro_symbols: bool = True,
 ) -> DrawingSpec:
     """Analyze extracted SourceFragments, detect conflicts/missing dims, and emit DrawingSpec."""
 
@@ -626,6 +629,15 @@ def compile_spec_from_fragments(
     if explicit_scale is None:
         explicit_scale = "1:1"
 
+    surface_finishes_dump, datums_dump, gdt_frames_dump = _build_pro_engineering_symbols(
+        all_text=all_text,
+        family=inferred_family,
+        drawing_type=drawing_type,
+        requested_views=requested_views,
+        source_id=first_source_id,
+        enabled=include_pro_symbols and not missing and not conflicts,
+    )
+
     spec_dict: dict[str, Any] = {
         "schema_version": "1.0",
         "project": {
@@ -657,6 +669,9 @@ def compile_spec_from_fragments(
         "dimensions": dimensions_dump,
         "annotations": [],
         "parts_list": parts_list if drawing_type == "assembly" else [],
+        "surface_finishes": surface_finishes_dump,
+        "datums": datums_dump,
+        "gdt_frames": gdt_frames_dump,
         "provenance": list(provenance_map.values()) or [
             {"id": first_source_id, "file": "input", "locator": "line 1", "confidence": 1.0}
         ],
@@ -781,3 +796,100 @@ def _attach_tolerances(
             copy_dim["tolerance_lower"] = matched.tol_lower
         enriched.append(copy_dim)
     return enriched
+
+
+def _build_pro_engineering_symbols(
+    *,
+    all_text: str,
+    family: str,
+    drawing_type: str,
+    requested_views: list[str],
+    source_id: str,
+    enabled: bool,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    """Extract or synthesize GB/T 131 surface roughness, datum [A], and GD&T feature control frames."""
+    if not enabled or not requested_views:
+        return [], [], []
+    if re.search(r"关闭工程符号|不标粗糙度|pro_symbols\s*[:：=]\s*false", all_text, re.IGNORECASE):
+        return [], [], []
+    if family == "generic":
+        return [], [], []
+
+    # Parse user-specified Ra values if mentioned in text
+    m_gen_ra = re.search(r"其余\s*(?:表面)?(?:粗糙度)?\s*Ra\s*(\d+(?:\.\d+)?)", all_text, re.IGNORECASE)
+    gen_ra = f"Ra {m_gen_ra.group(1)}" if m_gen_ra else ("Ra 12.5" if family in {"bearing-cap", "ribbed-bracket"} else "Ra 6.3")
+
+    all_ras = [m.group(1) for m in re.finditer(r"(?<!其余)Ra\s*(\d+(?:\.\d+)?)", all_text, re.IGNORECASE)]
+    if all_ras:
+        mating_ra = f"Ra {all_ras[0]}"
+    else:
+        mating_ra = "Ra 1.6" if family in {"spur-gear", "stepped-shaft", "bearing-cap"} else "Ra 3.2"
+
+    finishes: list[dict[str, Any]] = [
+        {
+            "value": gen_ra,
+            "source_id": source_id,
+            "machining_required": family not in {"bearing-cap"},
+            "is_general": True,
+        }
+    ]
+    if "front" in requested_views:
+        finishes.append(
+            {
+                "value": mating_ra,
+                "source_id": source_id,
+                "machining_required": True,
+                "is_general": False,
+                "owner_view": "front",
+                "placement": "top-left",
+            }
+        )
+
+    if drawing_type == "assembly":
+        return finishes, [], []
+
+    datums: list[dict[str, Any]] = []
+    gdt_frames: list[dict[str, Any]] = []
+    primary_view = "front" if "front" in requested_views else requested_views[0]
+    gdt_view = "left" if "left" in requested_views else primary_view
+
+    datums.append(
+        {
+            "letter": "A",
+            "source_id": source_id,
+            "owner_view": primary_view,
+            "placement": "left-center",
+        }
+    )
+
+    # Check if user explicitly specified a geometric tolerance in text
+    gdt_sym: str
+    gdt_tol: str
+    m_coax = re.search(r"(?:同轴度|同心度|coaxiality)\s*[⌀∅Φφ]?\s*(\d+(?:\.\d+)?)", all_text, re.IGNORECASE)
+    m_perp = re.search(r"(?:垂直度|perpendicularity)\s*[⌀∅Φφ]?\s*(\d+(?:\.\d+)?)", all_text, re.IGNORECASE)
+    m_para = re.search(r"(?:平行度|parallelism)\s*(\d+(?:\.\d+)?)", all_text, re.IGNORECASE)
+    m_run = re.search(r"(?:圆?跳动|runout)\s*(\d+(?:\.\d+)?)", all_text, re.IGNORECASE)
+    if m_coax:
+        gdt_sym, gdt_tol = "coaxiality", f"⌀{m_coax.group(1)}"
+    elif m_perp:
+        gdt_sym, gdt_tol = "perpendicularity", m_perp.group(1)
+    elif m_para:
+        gdt_sym, gdt_tol = "parallelism", m_para.group(1)
+    elif m_run:
+        gdt_sym, gdt_tol = "runout", m_run.group(1)
+    elif family in {"spur-gear", "bearing-cap", "stepped-shaft"}:
+        gdt_sym, gdt_tol = "coaxiality", "⌀0.02"
+    else:
+        gdt_sym, gdt_tol = "perpendicularity", "0.03"
+
+    gdt_frames.append(
+        {
+            "symbol": gdt_sym,
+            "tolerance": gdt_tol,
+            "datum_refs": ["A"],
+            "source_id": source_id,
+            "owner_view": gdt_view,
+            "placement": "above-label",
+        }
+    )
+    return finishes, datums, gdt_frames
