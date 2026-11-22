@@ -312,10 +312,26 @@ def render_studio_html() -> str:
         {
           label: "110kV双母线/35kV单母分段主接线",
           text: JSON.stringify({
-            title: "110kV/35kV 变电站主接线图",
-            hv: { kv: "110kV", bus_mode: "double", incoming: ["110kV 进线I", "110kV 进线II"] },
-            transformers: [{ name: "1#主变", cap: "50MVA" }, { name: "2#主变", cap: "50MVA" }],
-            lv: { kv: "35kV", feeders: ["35kV 馈线1", "35kV 馈线2", "35kV 馈线3", "35kV 馈线4"] }
+            title: "110kV/35kV 变电站电气主接线图",
+            sheet: { width_mm: 440, height_mm: 317 },
+            title_block: { "专业": "电气", "比例": "示意", "图号": "SLD-2026-01" },
+            voltage_levels: [
+              {
+                name: "110kV",
+                bus: "双母线",
+                feeders: ["110kV进线1", "110kV进线2"],
+                transformers: ["1#主变", "2#主变"],
+                pt: 2
+              },
+              {
+                name: "35kV",
+                bus: "单母分段",
+                feeders: ["35kV出线1", "35kV出线2", "35kV出线3", "35kV出线4"],
+                pt: 2,
+                reactors: 2,
+                capacitors: 2
+              }
+            ]
           }, null, 2)
         }
       ],
@@ -324,13 +340,18 @@ def render_studio_html() -> str:
           label: "高等级沥青路面结构图",
           text: JSON.stringify({
             title: "主干路沥青混凝土路面结构图",
-            total_width_cm: 240,
+            project: "市政主干道工程",
+            drawing_no: "LM-2026-01",
+            width: 10000,
+            vertical_exaggeration: 5,
+            scale_note: "水平按实际尺寸，竖向放大5倍示意",
             layers: [
-              { name: "细粒式沥青混凝土 AC-13C", thickness_cm: 4, hatch: "ANSI31" },
-              { name: "中粒式沥青混凝土 AC-20C", thickness_cm: 6, hatch: "ANSI37" },
-              { name: "水泥稳定碎石基层", thickness_cm: 36, hatch: "AR-CONC" },
-              { name: "级配碎石垫层", thickness_cm: 20, hatch: "GRAVEL" }
-            ]
+              { name: "细粒式沥青混凝土", material: "AC-13C", thickness: 40, note: "上面层" },
+              { name: "中粒式沥青混凝土", material: "AC-20C", thickness: 60, note: "中面层" },
+              { name: "水泥稳定碎石基层", material: "5% 水泥稳定碎石", thickness: 200 },
+              { name: "级配碎石底基层", material: "级配碎石", thickness: 180 }
+            ],
+            annotations: ["未注明单位均为 mm", "结构层厚度以施工图为准"]
           }, null, 2)
         }
       ]
@@ -458,9 +479,13 @@ def render_studio_html() -> str:
 
       if (pngArt) {
         const r = await fetch(pngArt.download_url, { headers: authHeaders() });
-        const blob = await r.blob();
-        const imgUrl = URL.createObjectURL(blob);
-        pane2d.innerHTML = `<img src="${imgUrl}" alt="CAD Preview" />`;
+        if (!r.ok) {
+          pane2d.innerHTML = `<span style="color:var(--err);font-size:13px;">预览图加载失败 (HTTP ${r.status})</span>`;
+        } else {
+          const blob = await r.blob();
+          const imgUrl = URL.createObjectURL(blob);
+          pane2d.innerHTML = `<img src="${imgUrl}" alt="CAD Preview" />`;
+        }
       }
       if (objArt) {
         pane3d.style.display = "flex";

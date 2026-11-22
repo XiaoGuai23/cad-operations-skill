@@ -13,6 +13,7 @@ import threading
 import time
 import uuid
 from typing import Any, Literal
+from urllib.parse import quote
 
 from .sandbox import MCPSandboxError, MCPWorkspaceSandbox
 
@@ -31,7 +32,7 @@ def _attach_urls(payload: dict[str, Any]) -> dict[str, Any]:
     enriched["artifacts"] = [
         {
             **art,
-            "download_url": f"/api/v1/tasks/{task_id}/artifacts/{art['name']}",
+            "download_url": f"/api/v1/tasks/{task_id}/artifacts/{quote(str(art['name']), safe='')}",
         }
         for art in payload.get("artifacts", [])
     ]
