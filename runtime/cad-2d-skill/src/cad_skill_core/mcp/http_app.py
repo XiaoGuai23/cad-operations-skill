@@ -19,6 +19,10 @@ _MEDIA_TYPES = {
     ".svg": "image/svg+xml",
     ".png": "image/png",
     ".pdf": "application/pdf",
+    ".stl": "model/stl",
+    ".obj": "model/obj",
+    ".glb": "model/gltf-binary",
+    ".scr": "text/plain; charset=utf-8",
     ".json": "application/json",
     ".md": "text/markdown; charset=utf-8",
     ".yaml": "application/x-yaml",
@@ -37,9 +41,10 @@ class WebCompileRequest(BaseModel):
 class WebGenerateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    domain: Literal["mechanical_2d", "electrical_sld", "pavement"] = "mechanical_2d"
+    domain: Literal["mechanical_2d", "electrical_sld", "pavement", "model_3d"] = "mechanical_2d"
     spec: dict[str, Any] | None = None
     markdown_brief: str | None = None
+    with_2d_sheet: bool = False
     max_repair_iterations: int = Field(default=3, ge=0, le=3)
 
 
@@ -133,6 +138,14 @@ def create_mcp_http_app(
             if req.spec is None:
                 raise HTTPException(status_code=400, detail="electrical_sld requires 'spec'")
             res = call_mcp_tool(sandbox, "cad_generate_electrical_sld", {"spec": req.spec})
+        elif req.domain == "model_3d":
+            if req.spec is None:
+                raise HTTPException(status_code=400, detail="model_3d requires 'spec'")
+            res = call_mcp_tool(
+                sandbox,
+                "cad_generate_3d",
+                {"spec": req.spec, "with_2d_sheet": req.with_2d_sheet},
+            )
         else:
             if req.spec is None:
                 raise HTTPException(status_code=400, detail="pavement requires 'spec'")

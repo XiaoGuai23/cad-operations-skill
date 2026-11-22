@@ -15,6 +15,21 @@ def test_chinese_text_prefers_available_cjk_font(fake_inventory, font_policy):
     assert resolved.missing_characters == ()
 
 
+def test_leading_ascii_with_diameter_or_cjk_promotes_universal_covering_font(font_policy):
+    ascii_set = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.- ")
+    realistic_inventory = FontInventory(
+        (
+            FontFace("Arial", None, "ttf", ascii_set | frozenset("±°")),
+            FontFace("Microsoft YaHei", None, "ttf", ascii_set | frozenset("⌀±°技术要求")),
+        )
+    )
+    resolved_dim = resolve_font("100 ⌀38 ±0.05", realistic_inventory, font_policy)
+    assert resolved_dim.primary == "Microsoft YaHei"
+
+    resolved_txt = resolve_font("PRJ-01 技术要求", realistic_inventory, font_policy)
+    assert resolved_txt.primary == "Microsoft YaHei"
+
+
 def test_missing_engineering_symbol_is_not_silenced(fake_inventory, font_policy):
     with pytest.raises(MissingGlyphError) as error:
         resolve_font("⌖", fake_inventory.without_symbol("⌖"), font_policy)

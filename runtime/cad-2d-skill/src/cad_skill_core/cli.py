@@ -103,6 +103,17 @@ def _parser() -> argparse.ArgumentParser:
     mcp_http.add_argument('--port', type=int, default=8765)
     mcp_http.add_argument('--workspace', type=Path, default=None, dest='workspace_root')
 
+    val3d = commands.add_parser('validate-3d-spec', help='validate one 3D mechanical modeling specification')
+    val3d.add_argument('path', type=Path)
+    val3d.add_argument('--json', action='store_true', dest='as_json')
+
+    gen3d = commands.add_parser('generate-3d', help='generate and verify watertight 3D CAD models (.stl/.obj/.glb/.dxf) and optional 2D sheet')
+    gen3d.add_argument('spec_path', type=Path)
+    gen3d.add_argument('--out', type=Path, required=True, dest='output_dir')
+    gen3d.add_argument('--with-2d-sheet', action='store_true', dest='with_2d_sheet')
+    gen3d.add_argument('--segments', type=int, default=64)
+    gen3d.add_argument('--json', action='store_true', dest='as_json')
+
     for name, help_text in (
         ("generate", "generate and audit core DXF and previews"),
         ("inspect", "run a fresh zero-repair inspection generation"),
@@ -137,6 +148,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _phase2_command(arguments)
     if arguments.command in {'mcp-stdio', 'mcp-http'}:
         return _mcp_command(arguments)
+    if arguments.command in {'validate-3d-spec', 'generate-3d'}:
+        return _phase3_command(arguments)
 
     from .pipeline import PipelineInputError, PipelineOptions, run_task
     try:
@@ -302,6 +315,42 @@ def _phase2_command(arguments: argparse.Namespace) -> int:
         return 2
     except Exception as error:
         _write_error(f"phase2 command failure: {type(error).__name__}: {error}", arguments.as_json)
+        return 1
+
+
+def _phase3_command(arguments: argparse.Namespace) -> int:
+    try:
+        from .modeling3d import load_model3d_spec, run_3d_task
+
+        if arguments.command == "validate-3d-spec":
+            resolved = arguments.path.expanduser().resolve(strict=True)
+            spec_3d = load_model3d_spec(resolved)
+            payload = {
+                "command": "validate-3d-spec",
+                "path": str(resolved),
+                "status": "valid",
+                "body_kind": spec_3d.body.kind,
+            }
+            print(_stable_json(payload) if arguments.as_json else f"valid 3d spec ({spec_3d.body.kind}): {resolved}")
+            return 0
+
+        resolved_spec = arguments.spec_path.expanduser().resolve(strict=True)
+        spec_3d = load_model3d_spec(resolved_spec)
+        result = run_3d_task(
+            spec_3d,
+            arguments.output_dir,
+            with_2d_sheet=arguments.with_2d_sheet,
+            circle_segments=arguments.segments,
+        )
+        result.pop("iso_png_path", None)
+        payload = {"command": "generate-3d", **result}
+        print(_stable_json(payload) if arguments.as_json else json.dumps(payload, ensure_ascii=False, indent=2))
+        return 0 if result["status"] in {"passed", "partial"} else 1
+    except (ValueError, TypeError, OSError) as error:
+        _write_error(f"user/validation error: {error}", arguments.as_json)
+        return 2
+    except Exception as error:
+        _write_error(f"3D generation/audit failure: {type(error).__name__}: {error}", arguments.as_json)
         return 1
 
 

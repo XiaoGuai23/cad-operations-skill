@@ -49,16 +49,16 @@ D:\Python312\python.exe -B -m cad_skill_core.cli mcp-http --host 127.0.0.1 --por
 | `/mcp` | `POST` | 标准 MCP Streamable HTTP JSON-RPC 2.0 接口 |
 | `/api/v1/health` | `GET` | 服务状态、协议版本、已注册工具数与沙箱路径 |
 | `/api/v1/tasks/compile` | `POST` | 从项目书 Markdown / 参数表编译 `DrawingSpec` 并返回缺失与冲突项 |
-| `/api/v1/tasks/generate` | `POST` | 生成二维图纸（`mechanical_2d` / `electrical_sld` / `pavement`） |
+| `/api/v1/tasks/generate` | `POST` | 生成二维/三维图纸（`mechanical_2d` / `electrical_sld` / `pavement` / `model_3d`） |
 | `/api/v1/tasks/revise` | `POST` | 基于图元 Handle 与 SHA-256 指纹执行原子局部改图 |
 | `/api/v1/tasks/{task_id}` | `GET` | 查询任务状态、审计摘要与产物清单 |
-| `/api/v1/tasks/{task_id}/artifacts/{filename}` | `GET` | 安全下载 `.dxf` / `.svg` / `.png` / `.pdf` / `audit.json` |
+| `/api/v1/tasks/{task_id}/artifacts/{filename}` | `GET` | 安全下载 `.dxf` / `.svg` / `.png` / `.pdf` / `.stl` / `.obj` / `.glb` / `audit.json` |
 
 ---
 
-## 3. 已暴露的 10 个 MCP Tools（v1 二维生产集）
+## 3. 已暴露的 12 个 MCP Tools（二维 + 三维全闭环生产集）
 
-1. `cad_doctor`：诊断 Python 渲染栈、本机中文字体覆盖率与本地 AutoCAD 状态。
+1. `cad_doctor`：诊断 Python 渲染栈、本机中文字体覆盖率、三维内核能力与本地 AutoCAD 状态。
 2. `cad_compile_spec`：解析项目书/手册/CSV/DOCX/PDF，编译 `DrawingSpec` 并拦截缺失尺寸与冲突参数。
 3. `cad_validate_spec`：严格校验 `DrawingSpec` 结构、尺寸锚点与溯源完整性。
 4. `cad_learn_standard`：从参考样图 DXF 自动提取图层、线宽、字高、`DIMSTYLE` 与图幅标准。
@@ -68,12 +68,15 @@ D:\Python312\python.exe -B -m cad_skill_core.cli mcp-http --host 127.0.0.1 --por
 8. `cad_inventory_dxf`：列出 DXF 可编辑图元句柄（Handle）、坐标与当前 SHA-256。
 9. `cad_revise_dxf`：执行带 `DocumentCheckpoint` 回滚保护的局部原子改图（支持 `dry_run`）。
 10. `cad_preview_and_diff`：渲染局部放大 PNG 区域图或改图前后对比图。
+11. `cad_generate_3d`：生成并独立回测水密流形三维模型（`.stl` / `.obj` / `.glb` / `model3d.dxf` / `iso.png` / `audit-3d.json`），支持 `with_2d_sheet=true` 一键联动生成国标多视图二维工程图。
+12. `cad_project_3d_to_2d`：将三维规约 `Model3DSpec` 正交/剖视投影为多视图二维 `DrawingSpec`。
 
 ## 4. MCP Resources 与 Prompts
 
 - **Resources**：
   - `cad://standards/gb-mechanical`
   - `cad://schemas/drawing-spec`
+  - `cad://schemas/model-3d-spec`
   - `cad://revision/operations`
   - `cad://tasks/{task_id}/audit`
 - **Prompts**：
