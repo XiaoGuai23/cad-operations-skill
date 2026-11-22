@@ -53,7 +53,7 @@ def test_mcp_lists_all_fifteen_2d_3d_and_driver_tools_with_strict_json_schemas(t
     resp = dispatcher.handle_payload({"jsonrpc": "2.0", "id": 10, "method": "tools/list"})
     tools = resp["result"]["tools"]
     names = [t["name"] for t in tools]
-    assert len(names) == 17
+    assert len(names) == 19
     assert names == [
         "cad_doctor",
         "cad_compile_spec",
@@ -72,6 +72,8 @@ def test_mcp_lists_all_fifteen_2d_3d_and_driver_tools_with_strict_json_schemas(t
         "cad_compile_3d_spec",
         "cad_open_viewer",
         "cad_app_load_scene",
+        "cad_score_drawing",
+        "cad_run_cad1k_eval",
     ]
     for tool in tools:
         schema = tool["inputSchema"]
@@ -87,6 +89,7 @@ def test_mcp_resources_and_prompts_round_trip(tmp_path):
     assert uris == {
         "ui://cad-operations/viewer.html",
         "cad://standards/gb-mechanical",
+        "cad://standards/presets",
         "cad://schemas/drawing-spec",
         "cad://schemas/model-3d-spec",
         "cad://revision/operations",

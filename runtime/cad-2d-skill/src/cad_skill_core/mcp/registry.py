@@ -10,11 +10,13 @@ from typing import Any, Callable, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from cad_skill_core.benchmark.cad1k_harness import run_cad1k_benchmark
 from cad_skill_core.documents.spec_compiler import (
     PartFamily,
     compile_spec_from_files,
 )
 from cad_skill_core.environment import check_environment
+from cad_skill_core.inspection.rubric_scorer import score_dxf_drawing
 from cad_skill_core.modeling3d import (
     Model3DSpec,
     Part3DFamily,
@@ -33,6 +35,7 @@ from cad_skill_core.revision.preview import preview_file
 from cad_skill_core.revision.workflow import apply_revision, inventory_drawing
 from cad_skill_core.schema.io import load_spec, save_spec
 from cad_skill_core.schema.models import DrawingSpec
+from cad_skill_core.standards.profile import list_builtin_standards
 from cad_skill_core.standards.sample_learner import (
     learn_standard_from_dxf,
     save_standard_yaml,
@@ -95,6 +98,10 @@ class GenerateMechanical2DArgs(StrictInputModel):
     markdown_brief: str | None = Field(
         default=None,
         description="Optional inline engineering brief to auto-compile before generating.",
+    )
+    standard_profile: str | None = Field(
+        default=None,
+        description="Optional industry drawing standard preset ('gb-mechanical', 'gb-heavy-machinery', 'gb-civil-construction', 'iso-international').",
     )
     max_repair_iterations: int = Field(default=3, ge=0, le=3)
     include_image_base64: bool = Field(
@@ -228,6 +235,27 @@ class OpenViewerArgs(StrictInputModel):
 class AppLoadSceneArgs(StrictInputModel):
     task_id: str | None = Field(default=None, description="Task ID containing 2D DXF and/or 3D OBJ artifacts.")
     dxf_path: str | None = Field(default=None, description="Direct DXF path inside allowed roots.")
+
+
+class ScoreDrawingArgs(StrictInputModel):
+    dxf_path: str | None = Field(default=None, description="Path to a DXF file inside allowed roots.")
+    task_id: str | None = Field(default=None, description="Existing MCP task_id containing a DXF artifact.")
+    artifact_name: str = Field(default="drawing.dxf", description="DXF artifact filename inside task_id.")
+    custom_rubric: dict[str, Any] | list[dict[str, Any]] | None = Field(
+        default=None,
+        description="Optional cad-1000-hours compatible rubrics.json criteria dictionary or list.",
+    )
+
+
+class RunCAD1KEvalArgs(StrictInputModel):
+    bundle_dirs: list[str] | None = Field(
+        default=None,
+        description="Optional list of local cad-1000-hours task bundle directories (video files are automatically skipped).",
+    )
+    standard_profile: str = Field(
+        default="gb-mechanical",
+        description="Standard preset profile used during benchmark generation.",
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -409,6 +437,7 @@ def _handle_generate_mechanical_2d(
             PipelineOptions(
                 run_autocad=False,
                 max_repair_iterations=args.max_repair_iterations,
+                standard_profile=args.standard_profile,
             ),
         )
 
@@ -422,13 +451,21 @@ def _handle_generate_mechanical_2d(
         }
         for p in sorted(result.outputs, key=lambda item: item.name)
     ]
+    dxf_out = task_dir / "output" / "drawing.dxf"
+    rubric_dict = (
+        score_dxf_drawing(dxf_out, audit_json_path=result.audit_path).to_dict()
+        if dxf_out.is_file()
+        else None
+    )
     png_path = task_dir / "output" / "drawing.png"
     preview_png = png_path if png_path.is_file() and args.include_image_base64 else None
     payload = {
         "task_id": task_id,
         "domain": "mechanical_2d",
         "status": result.status,
+        "standard_profile": args.standard_profile or "gb-mechanical",
         "audit_summary": audit.get("summary", {}),
+        "rubric_score": rubric_dict,
         "issues": audit.get("issues", []),
         "artifacts": artifacts,
     }
@@ -450,9 +487,12 @@ def _handle_generate_electrical_sld(
         render_lock=sandbox.render_lock,
     )
     png_path = bundle.pop("preview_png_path")
+    sld_dxf = out_dir / f"{args.stem}.dxf"
+    rubric_dict = score_dxf_drawing(sld_dxf).to_dict() if sld_dxf.is_file() else None
     payload = {
         "task_id": task_id,
         "domain": "electrical_sld",
+        "rubric_score": rubric_dict,
         **bundle,
     }
     sandbox.write_task_metadata(task_id, payload)
@@ -474,9 +514,12 @@ def _handle_generate_pavement(
         render_lock=sandbox.render_lock,
     )
     png_path = bundle.pop("preview_png_path")
+    dxf_cands = sorted(out_dir.glob("*.dxf"))
+    rubric_dict = score_dxf_drawing(dxf_cands[0]).to_dict() if dxf_cands else None
     payload = {
         "task_id": task_id,
         "domain": "pavement",
+        "rubric_score": rubric_dict,
         **bundle,
     }
     sandbox.write_task_metadata(task_id, payload)
@@ -511,9 +554,11 @@ def _handle_revise_dxf(
         dry_run=args.dry_run,
     )
     preview_png: Path | None = None
+    rubric_dict: dict[str, Any] | None = None
     artifacts: list[dict[str, Any]] = []
     if not args.dry_run and rev_result.get("output_path"):
         out_dxf = Path(rev_result["output_path"])
+        rubric_dict = score_dxf_drawing(out_dxf).to_dict()
         font_map = build_auto_style_font_map(out_dxf)
         with sandbox.render_lock:
             prev = preview_file(out_dxf, task_dir / "preview", font_map=font_map)
@@ -539,6 +584,7 @@ def _handle_revise_dxf(
         "status": rev_result["status"],
         "dry_run": args.dry_run,
         "revision_result": rev_result,
+        "rubric_score": rubric_dict,
         "artifacts": artifacts,
     }
     sandbox.write_task_metadata(task_id, payload)
@@ -702,9 +748,20 @@ def _handle_generate_3d(
         render_lock=sandbox.render_lock,
     )
     iso_png: Path | None = bundle.pop("iso_png_path", None)
+    sheet_dxf = out_dir / "sheet2d.dxf"
+    sheet_audit = out_dir / "sheet2d-audit.json"
+    rubric_dict = (
+        score_dxf_drawing(
+            sheet_dxf,
+            audit_json_path=(sheet_audit if sheet_audit.is_file() else None),
+        ).to_dict()
+        if sheet_dxf.is_file()
+        else None
+    )
     payload = {
         "task_id": task_id,
         "domain": "model_3d",
+        "rubric_score": rubric_dict,
         **bundle,
     }
     sandbox.write_task_metadata(task_id, payload)
@@ -851,6 +908,64 @@ def _handle_app_load_scene(
     )
 
 
+def _handle_score_drawing(
+    sandbox: MCPWorkspaceSandbox, args: ScoreDrawingArgs
+) -> tuple[dict[str, Any], Path | None, bool]:
+    dxf_file = _resolve_dxf_source(sandbox, args.dxf_path, args.task_id, args.artifact_name)
+    audit_candidate = dxf_file.parent / "audit.json"
+    report = score_dxf_drawing(
+        dxf_file,
+        audit_json_path=(audit_candidate if audit_candidate.is_file() else None),
+        custom_rubric=args.custom_rubric,
+    )
+    payload = {
+        "status": "scored",
+        "dxf_path": str(dxf_file),
+        **report.to_dict(),
+    }
+    return payload, None, False
+
+
+def _handle_run_cad1k_eval(
+    sandbox: MCPWorkspaceSandbox, args: RunCAD1KEvalArgs
+) -> tuple[dict[str, Any], Path | None, bool]:
+    resolved_bundles: list[Path] | None = None
+    if args.bundle_dirs:
+        resolved_bundles = [
+            sandbox.resolve_readable_file(Path(raw_dir) / "task_desc.json").parent
+            for raw_dir in args.bundle_dirs
+        ]
+    task_id, task_dir = sandbox.allocate_task_dir("cad1k")
+    out_dir = task_dir / "output"
+    with sandbox.render_lock:
+        summary = run_cad1k_benchmark(
+            out_dir,
+            external_bundle_dirs=resolved_bundles,
+            standard_profile=args.standard_profile,
+        )
+    report_path = out_dir / "cad1k-benchmark-report.json"
+    payload = {
+        "task_id": task_id,
+        "domain": "cad1k_benchmark",
+        "status": "passed" if summary["passed_count"] == summary["task_count"] else "partial",
+        **summary,
+        "artifacts": (
+            [
+                {
+                    "name": report_path.name,
+                    "path": str(report_path.resolve()),
+                    "size": report_path.stat().st_size,
+                    "sha256": sha256_file(report_path),
+                }
+            ]
+            if report_path.is_file()
+            else []
+        ),
+    }
+    sandbox.write_task_metadata(task_id, payload)
+    return payload, None, False
+
+
 TOOLS: tuple[ToolDefinition, ...] = (
     ToolDefinition(
         "cad_doctor",
@@ -969,6 +1084,18 @@ TOOLS: tuple[ToolDefinition, ...] = (
         _handle_app_load_scene,
         meta={"ui": {"visibility": ["app"]}},
     ),
+    ToolDefinition(
+        "cad_score_drawing",
+        "Score a 2D CAD DXF drawing on the 100-point GB/T & ISO 5-dimension engineering rubric (supports cad-1000-hours rubrics.json criteria).",
+        ScoreDrawingArgs,
+        _handle_score_drawing,
+    ),
+    ToolDefinition(
+        "cad_run_cad1k_eval",
+        "Run the video-free cad-1000-hours offline engineering benchmark suite and return 100-point rubric scorecards.",
+        RunCAD1KEvalArgs,
+        _handle_run_cad1k_eval,
+    ),
 )
 
 TOOL_BY_NAME: dict[str, ToolDefinition] = {tool.name: tool for tool in TOOLS}
@@ -1047,6 +1174,12 @@ def list_mcp_resources() -> list[dict[str, Any]]:
             "mimeType": "application/x-yaml",
         },
         {
+            "uri": "cad://standards/presets",
+            "name": "Built-in Industry CAD Standard Presets",
+            "description": "Catalog of 4 switchable industry CAD standard profiles (GB/T Mechanical, Heavy Machinery, Civil/Municipal, ISO International).",
+            "mimeType": "application/json",
+        },
+        {
             "uri": "cad://schemas/drawing-spec",
             "name": "DrawingSpec JSON Schema",
             "description": "Strict JSON Schema for 2D mechanical DrawingSpec v1.0.",
@@ -1087,6 +1220,17 @@ def read_mcp_resource(sandbox: MCPWorkspaceSandbox, uri: str) -> dict[str, Any]:
                     "uri": uri,
                     "mimeType": "application/x-yaml",
                     "text": path.read_text(encoding="utf-8"),
+                }
+            ]
+        }
+    if uri == "cad://standards/presets":
+        text = json.dumps({"standards": list_builtin_standards()}, ensure_ascii=False, indent=2)
+        return {
+            "contents": [
+                {
+                    "uri": uri,
+                    "mimeType": "application/json",
+                    "text": text,
                 }
             ]
         }

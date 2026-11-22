@@ -1280,3 +1280,394 @@ def verify_orthographic_consistency(
                         f"orthographic depth mismatch (宽相等): {h_view} depth {depth_h:g} mm != {side_view} depth {depth_w:g} mm"
                     )
     return violations
+
+
+# ---------------------------------------------------------------------------
+# CAD-1K Inspired Classic Mechanical 3-View Part Builders
+# (Spur Gear GB/T 4459.2, Bearing Cap, Ribbed L-Bracket)
+# ---------------------------------------------------------------------------
+
+
+class SpurGearParameters(BaseModel):
+    """Standard involute cylindrical spur gear parameters (GB/T 4459.2)."""
+
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+
+    module_mm: float = 3.0
+    teeth: int = 28
+    face_width: float = 28.0
+    bore_diameter: float = 24.0
+    keyway_width: float | None = None
+    keyway_depth: float | None = None
+
+    @model_validator(mode="after")
+    def validate_gear(self) -> SpurGearParameters:
+        if not all(isfinite(v) for v in (self.module_mm, self.face_width, self.bore_diameter)):
+            raise ValueError("gear dimensions must be finite")
+        if self.module_mm <= 0 or self.teeth < 10 or self.face_width <= 0 or self.bore_diameter <= 0:
+            raise ValueError("spur gear requires module_mm > 0, teeth >= 10, face_width > 0, bore_diameter > 0")
+        root_dia = self.module_mm * (self.teeth - 2.5)
+        if self.bore_diameter >= root_dia - 8.0:
+            raise ValueError("bore_diameter leaves insufficient rim thickness below gear root diameter")
+        return self
+
+
+def build_spur_gear_geometry(
+    params: SpurGearParameters,
+    *,
+    source_id: str = "spur-gear",
+) -> ParametricPartResult:
+    """Build standard GB/T 4459.2 flat-laid three views for a cylindrical spur gear.
+
+    Per GB/T 4459.2:
+    - Front full-section view leaves the tooth zone [r_root, r_tip] unhatched,
+      draws tip & root lines as OUTLINE, and pitch lines as red CENTER dash-dot!
+    - Top plan view shows tip circle (OUTLINE), pitch circle (CENTER), hub circle,
+      shaft bore + standard flat keyway slot, and optional lightening holes.
+    """
+    m = params.module_mm
+    z = params.teeth
+    b = params.face_width
+    pitch_d = m * z
+    tip_d = m * (z + 2.0)
+    root_d = m * (z - 2.5)
+    r_p = pitch_d / 2.0
+    r_a = tip_d / 2.0
+    r_f = root_d / 2.0
+    r_bore = params.bore_diameter / 2.0
+    kw = params.keyway_width if params.keyway_width is not None else round(max(4.0, params.bore_diameter * 0.28), 1)
+    kd = params.keyway_depth if params.keyway_depth is not None else round(max(1.8, kw * 0.42), 1)
+    r_hub = min(r_f - 3.0, max(r_bore + kd + 5.0, r_bore * 1.6))
+    ext = r_a * 1.06
+
+    entities: list[DrawingEntity] = []
+    front_indices: list[int] = []
+    top_indices: list[int] = []
+    left_indices: list[int] = []
+
+    def add_f(ent: DrawingEntity) -> int:
+        idx = len(entities); entities.append(ent); front_indices.append(idx); return idx
+
+    def add_t(ent: DrawingEntity) -> int:
+        idx = len(entities); entities.append(ent); top_indices.append(idx); return idx
+
+    def add_l(ent: DrawingEntity) -> int:
+        idx = len(entities); entities.append(ent); left_indices.append(idx); return idx
+
+    # 1. Front View (主视图 全剖: width = tip_d, height = face_width, teeth unhatched per GB/T 4459.2!)
+    f_box = add_f(PolylineEntity(kind="polyline", layer="OUTLINE", vertices=[(-r_a, 0.0), (r_a, 0.0), (r_a, b), (-r_a, b)], closed=True, source_id=source_id))
+    add_f(LineEntity(kind="line", layer="CENTER", start=(0.0, -2.0), end=(0.0, b + 2.0), source_id=source_id))
+    for sign in (-1.0, 1.0):
+        add_f(LineEntity(kind="line", layer="CENTER", start=(sign * r_p, -1.8), end=(sign * r_p, b + 1.8), source_id=source_id))
+        add_f(LineEntity(kind="line", layer="OUTLINE", start=(sign * r_f, 0.0), end=(sign * r_f, b), source_id=source_id))
+        add_f(LineEntity(kind="line", layer="OUTLINE", start=(sign * r_bore, 0.0), end=(sign * r_bore, b), source_id=source_id))
+    # Keyway back wall in section (at +r_bore + kd)
+    r_key_wall = r_bore + kd
+    add_f(LineEntity(kind="line", layer="OUTLINE", start=(r_key_wall, 0.0), end=(r_key_wall, b), source_id=source_id))
+    pitch_span_idx = add_f(LineEntity(kind="line", layer="CENTER", start=(-r_p, 0.0), end=(r_p, 0.0), source_id=source_id))
+    # Hatch solid gear body between bore/keyway and root circle only (teeth stay unhatched!)
+    add_f(HatchEntity(kind="hatch", layer="HATCH", boundary=[(-r_f, 0.0), (-r_bore, 0.0), (-r_bore, b), (-r_f, b)], pattern="ANSI31", source_id=source_id))
+    add_f(HatchEntity(kind="hatch", layer="HATCH", boundary=[(r_key_wall, 0.0), (r_f, 0.0), (r_f, b), (r_key_wall, b)], pattern="ANSI31", source_id=source_id))
+
+    # 2. Top View (俯视图: tip circle, pitch circle, hub circle, bore + keyway notch, lightening holes)
+    tip_top_idx = add_t(CircularEntity(kind="circular", layer="OUTLINE", center=(0.0, 0.0), radius=r_a, source_id=source_id))
+    add_t(CircularEntity(kind="circular", layer="CENTER", center=(0.0, 0.0), radius=r_p, source_id=source_id))
+    add_t(CircularEntity(kind="circular", layer="THIN", center=(0.0, 0.0), radius=r_f, source_id=source_id))
+    add_t(CircularEntity(kind="circular", layer="OUTLINE", center=(0.0, 0.0), radius=r_hub, source_id=source_id))
+    bore_top_idx = add_t(CircularEntity(kind="circular", layer="OUTLINE", center=(0.0, 0.0), radius=r_bore, source_id=source_id))
+    # Keyway rectangular slot on right (+X) side of bore matching front section
+    ky_half = kw / 2.0
+    x_int = (max(r_bore * r_bore - ky_half * ky_half, 0.01)) ** 0.5
+    add_t(PolylineEntity(kind="polyline", layer="OUTLINE", vertices=[(x_int, ky_half), (r_key_wall, ky_half), (r_key_wall, -ky_half), (x_int, -ky_half)], closed=False, source_id=source_id))
+    add_t(LineEntity(kind="line", layer="CENTER", start=(-ext, 0.0), end=(ext, 0.0), source_id=source_id))
+    add_t(LineEntity(kind="line", layer="CENTER", start=(0.0, -ext), end=(0.0, ext), source_id=source_id))
+
+    first_light_hole: int | None = None
+    if r_f - r_hub >= 14.0:
+        r_web = (r_f + r_hub) / 2.0
+        r_lh = round(min(8.0, (r_f - r_hub) * 0.28), 1)
+        for k in range(4):
+            ang = pi / 4.0 + k * pi / 2.0
+            lh_i = add_t(CircularEntity(kind="circular", layer="OUTLINE", center=(round(r_web * cos(ang), 5), round(r_web * sin(ang), 5)), radius=r_lh, source_id=source_id))
+            if first_light_hole is None:
+                first_light_hole = lh_i
+
+    # 3. Left View (左视图: width = tip_d 宽相等, height = face_width 高平齐)
+    l_box = add_l(PolylineEntity(kind="polyline", layer="OUTLINE", vertices=[(-r_a, 0.0), (r_a, 0.0), (r_a, b), (-r_a, b)], closed=True, source_id=source_id))
+    add_l(LineEntity(kind="line", layer="CENTER", start=(0.0, -2.0), end=(0.0, b + 2.0), source_id=source_id))
+    for sign in (-1.0, 1.0):
+        add_l(LineEntity(kind="line", layer="CENTER", start=(sign * r_p, -1.5), end=(sign * r_p, b + 1.5), source_id=source_id))
+        add_l(LineEntity(kind="line", layer="HIDDEN", start=(sign * r_bore, 0.0), end=(sign * r_bore, b), source_id=source_id))
+
+    dims: list[dict[str, Any]] = [
+        {"kind": "diameter", "value": pitch_d, "source_id": source_id, "owner_view": "front", "target_entity_index": pitch_span_idx, "orientation": "horizontal", "prefix": "⌀"},
+        {"kind": "linear", "value": b, "source_id": source_id, "owner_view": "front", "target_entity_index": f_box, "orientation": "vertical"},
+        {"kind": "diameter", "value": tip_d, "source_id": source_id, "owner_view": "top", "target_entity_index": tip_top_idx, "orientation": "horizontal", "prefix": "⌀"},
+        {"kind": "diameter", "value": params.bore_diameter, "source_id": source_id, "owner_view": "top", "target_entity_index": bore_top_idx, "orientation": "diameter"},
+        {"kind": "diameter", "value": tip_d, "source_id": source_id, "owner_view": "left", "target_entity_index": l_box, "orientation": "horizontal", "prefix": "⌀"},
+    ]
+    return ParametricPartResult(
+        views=["front", "top", "left"],
+        entities=entities,
+        view_entity_indices={"front": front_indices, "top": top_indices, "left": left_indices},
+        dimensions=dims,
+        parameters={
+            "part_family": "spur-gear",
+            "module_mm": m,
+            "teeth": z,
+            "pitch_diameter_mm": pitch_d,
+            "tip_diameter_mm": tip_d,
+            "face_width_mm": b,
+        },
+    )
+
+
+class BearingCapParameters(BaseModel):
+    """Gearbox / housing bearing through-cap (轴承透盖) parameters."""
+
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+
+    flange_diameter: float = 130.0
+    spigot_diameter: float = 90.0
+    bore_diameter: float = 42.0
+    total_height: float = 32.0
+    flange_thickness: float = 12.0
+    bolt_circle_diameter: float = 110.0
+    hole_diameter: float = 9.0
+    hole_count: int = 6
+
+    @model_validator(mode="after")
+    def validate_cap(self) -> BearingCapParameters:
+        if not (0 < self.bore_diameter < self.spigot_diameter < self.flange_diameter):
+            raise ValueError("bearing cap requires 0 < bore_diameter < spigot_diameter < flange_diameter")
+        if not (0 < self.flange_thickness < self.total_height):
+            raise ValueError("bearing cap requires 0 < flange_thickness < total_height")
+        if self.hole_count > 0:
+            if not (self.spigot_diameter + self.hole_diameter + 2.0 <= self.bolt_circle_diameter <= self.flange_diameter - self.hole_diameter - 2.0):
+                raise ValueError("bearing cap bolt circle interferes with spigot or outer flange rim")
+        return self
+
+
+def build_bearing_cap_geometry(
+    params: BearingCapParameters,
+    *,
+    source_id: str = "bearing-cap",
+) -> ParametricPartResult:
+    """Build standard GB/T flat-laid three views for a stepped bearing cap."""
+    rf = params.flange_diameter / 2.0
+    rs = params.spigot_diameter / 2.0
+    rb = params.bore_diameter / 2.0
+    r_rec = round((rs + rb) / 2.0, 2)
+    tf = params.flange_thickness
+    th = params.total_height
+    z_floor = round(tf * 0.65, 2)
+    r_bcd = params.bolt_circle_diameter / 2.0
+    rh = params.hole_diameter / 2.0
+    ext = rf * 1.06
+
+    entities: list[DrawingEntity] = []
+    front_indices: list[int] = []
+    top_indices: list[int] = []
+    left_indices: list[int] = []
+
+    def add_f(ent: DrawingEntity) -> int:
+        idx = len(entities); entities.append(ent); front_indices.append(idx); return idx
+
+    def add_t(ent: DrawingEntity) -> int:
+        idx = len(entities); entities.append(ent); top_indices.append(idx); return idx
+
+    def add_l(ent: DrawingEntity) -> int:
+        idx = len(entities); entities.append(ent); left_indices.append(idx); return idx
+
+    outer_pts = [(-rf, 0.0), (rf, 0.0), (rf, tf), (rs, tf), (rs, th), (-rs, th), (-rs, tf), (-rf, tf)]
+    f_sec_idx = add_f(PolylineEntity(kind="polyline", layer="OUTLINE", vertices=outer_pts, closed=True, source_id=source_id))
+    add_f(LineEntity(kind="line", layer="CENTER", start=(0.0, -2.0), end=(0.0, th + 2.0), source_id=source_id))
+    # Stepped internal bearing recess + shaft bore
+    add_f(PolylineEntity(kind="polyline", layer="OUTLINE", vertices=[(-rb, 0.0), (-rb, z_floor), (-r_rec, z_floor), (-r_rec, th)], closed=False, source_id=source_id))
+    add_f(PolylineEntity(kind="polyline", layer="OUTLINE", vertices=[(rb, 0.0), (rb, z_floor), (r_rec, z_floor), (r_rec, th)], closed=False, source_id=source_id))
+
+    pitch_span_idx = f_sec_idx
+    if params.hole_count >= 2:
+        for sign in (-1.0, 1.0):
+            hc_x = sign * r_bcd
+            add_f(LineEntity(kind="line", layer="OUTLINE", start=(hc_x - rh, 0.0), end=(hc_x - rh, tf), source_id=source_id))
+            add_f(LineEntity(kind="line", layer="OUTLINE", start=(hc_x + rh, 0.0), end=(hc_x + rh, tf), source_id=source_id))
+            add_f(LineEntity(kind="line", layer="CENTER", start=(hc_x, -1.5), end=(hc_x, tf + 1.5), source_id=source_id))
+        pitch_span_idx = add_f(LineEntity(kind="line", layer="CENTER", start=(-r_bcd, 0.0), end=(r_bcd, 0.0), source_id=source_id))
+        add_f(HatchEntity(kind="hatch", layer="HATCH", boundary=[(-rf, 0.0), (-r_bcd - rh, 0.0), (-r_bcd - rh, tf), (-rf, tf)], pattern="ANSI31", source_id=source_id))
+        add_f(HatchEntity(kind="hatch", layer="HATCH", boundary=[(r_bcd + rh, 0.0), (rf, 0.0), (rf, tf), (r_bcd + rh, tf)], pattern="ANSI31", source_id=source_id))
+        add_f(HatchEntity(kind="hatch", layer="HATCH", boundary=[(-r_bcd + rh, 0.0), (-rb, 0.0), (-rb, z_floor), (-r_rec, z_floor), (-r_rec, th), (-rs, th), (-rs, tf), (-r_bcd + rh, tf)], pattern="ANSI31", source_id=source_id))
+        add_f(HatchEntity(kind="hatch", layer="HATCH", boundary=[(rb, 0.0), (r_bcd - rh, 0.0), (r_bcd - rh, tf), (rs, tf), (rs, th), (r_rec, th), (r_rec, z_floor), (rb, z_floor)], pattern="ANSI31", source_id=source_id))
+    else:
+        add_f(HatchEntity(kind="hatch", layer="HATCH", boundary=[(-rf, 0.0), (-rb, 0.0), (-rb, z_floor), (-r_rec, z_floor), (-r_rec, th), (-rs, th), (-rs, tf), (-rf, tf)], pattern="ANSI31", source_id=source_id))
+        add_f(HatchEntity(kind="hatch", layer="HATCH", boundary=[(rb, 0.0), (rf, 0.0), (rf, tf), (rs, tf), (rs, th), (r_rec, th), (r_rec, z_floor), (rb, z_floor)], pattern="ANSI31", source_id=source_id))
+
+    # Top View (俯视图: circular plan view)
+    t_out_idx = add_t(CircularEntity(kind="circular", layer="OUTLINE", center=(0.0, 0.0), radius=rf, source_id=source_id))
+    add_t(CircularEntity(kind="circular", layer="OUTLINE", center=(0.0, 0.0), radius=rs, source_id=source_id))
+    add_t(CircularEntity(kind="circular", layer="OUTLINE", center=(0.0, 0.0), radius=r_rec, source_id=source_id))
+    t_bore_idx = add_t(CircularEntity(kind="circular", layer="OUTLINE", center=(0.0, 0.0), radius=rb, source_id=source_id))
+    add_t(LineEntity(kind="line", layer="CENTER", start=(-ext, 0.0), end=(ext, 0.0), source_id=source_id))
+    add_t(LineEntity(kind="line", layer="CENTER", start=(0.0, -ext), end=(0.0, ext), source_id=source_id))
+    first_h: int | None = None
+    if params.hole_count > 0:
+        add_t(CircularEntity(kind="circular", layer="CENTER", center=(0.0, 0.0), radius=r_bcd, source_id=source_id))
+        for k in range(params.hole_count):
+            ang = 2.0 * pi * k / params.hole_count
+            hi = add_t(CircularEntity(kind="circular", layer="OUTLINE", center=(round(r_bcd * cos(ang), 6), round(r_bcd * sin(ang), 6)), radius=rh, source_id=source_id))
+            if first_h is None:
+                first_h = hi
+
+    # Left View (左视图: stepped external side elevation, 高平齐 & 宽相等)
+    l_out_idx = add_l(PolylineEntity(kind="polyline", layer="OUTLINE", vertices=outer_pts, closed=True, source_id=source_id))
+    add_l(LineEntity(kind="line", layer="OUTLINE", start=(-rs, tf), end=(rs, tf), source_id=source_id))
+    add_l(LineEntity(kind="line", layer="CENTER", start=(0.0, -2.0), end=(0.0, th + 2.0), source_id=source_id))
+    for x_hid, y_top in ((-rb, z_floor), (rb, z_floor), (-r_rec, th), (r_rec, th)):
+        add_l(LineEntity(kind="line", layer="HIDDEN", start=(x_hid, z_floor if abs(x_hid) == r_rec else 0.0), end=(x_hid, y_top), source_id=source_id))
+    spigot_line_idx = add_l(LineEntity(kind="line", layer="OUTLINE", start=(-rs, th), end=(rs, th), source_id=source_id))
+
+    dims: list[dict[str, Any]] = [
+        {"kind": "diameter", "value": params.bolt_circle_diameter if params.hole_count >= 2 else params.flange_diameter, "source_id": source_id, "owner_view": "front", "target_entity_index": pitch_span_idx, "orientation": "horizontal", "prefix": "⌀"},
+        {"kind": "linear", "value": th, "source_id": source_id, "owner_view": "front", "target_entity_index": f_sec_idx, "orientation": "vertical"},
+        {"kind": "diameter", "value": params.flange_diameter, "source_id": source_id, "owner_view": "top", "target_entity_index": t_out_idx, "orientation": "horizontal", "prefix": "⌀"},
+        {"kind": "diameter", "value": params.bore_diameter, "source_id": source_id, "owner_view": "top", "target_entity_index": t_bore_idx, "orientation": "diameter"},
+        {"kind": "diameter", "value": params.spigot_diameter, "source_id": source_id, "owner_view": "left", "target_entity_index": spigot_line_idx, "orientation": "horizontal", "prefix": "⌀"},
+    ]
+    if first_h is not None and params.hole_count > 0:
+        dims.append(
+            {"kind": "diameter", "value": params.hole_diameter, "source_id": source_id, "owner_view": "top", "target_entity_index": first_h, "orientation": "diameter", "prefix": f"{params.hole_count}×⌀" if params.hole_count > 1 else "⌀"}
+        )
+
+    return ParametricPartResult(
+        views=["front", "top", "left"],
+        entities=entities,
+        view_entity_indices={"front": front_indices, "top": top_indices, "left": left_indices},
+        dimensions=dims,
+        parameters={
+            "part_family": "bearing-cap",
+            "flange_diameter_mm": params.flange_diameter,
+            "spigot_diameter_mm": params.spigot_diameter,
+            "bore_diameter_mm": params.bore_diameter,
+            "total_height_mm": th,
+        },
+    )
+
+
+class RibbedBracketParameters(BaseModel):
+    """Right-angle L-bracket with central triangular stiffening web/rib."""
+
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+
+    base_length: float = 130.0
+    base_width: float = 84.0
+    total_height: float = 92.0
+    base_thickness: float = 14.0
+    wall_thickness: float = 14.0
+    rib_thickness: float = 10.0
+    boss_hole_diameter: float = 28.0
+    mount_hole_diameter: float = 12.0
+
+    @model_validator(mode="after")
+    def validate_ribbed_bracket(self) -> RibbedBracketParameters:
+        if self.base_length <= 36.0 or self.base_width <= 30.0 or self.total_height <= 36.0:
+            raise ValueError("ribbed bracket requires base_length > 36, base_width > 30, total_height > 36")
+        if self.base_thickness >= self.total_height * 0.5 or self.wall_thickness >= self.base_length * 0.5:
+            raise ValueError("ribbed bracket wall/base thickness exceeds envelope")
+        if not (0 < self.rib_thickness < self.base_width - 8.0):
+            raise ValueError("rib_thickness must satisfy 0 < rib_thickness < base_width - 8")
+        return self
+
+
+def build_ribbed_bracket_geometry(
+    params: RibbedBracketParameters,
+    *,
+    source_id: str = "ribbed-bracket",
+) -> ParametricPartResult:
+    """Build standard GB/T three views (front, top, left) for a ribbed L-bracket."""
+    L = params.base_length
+    W = params.base_width
+    H = params.total_height
+    t1 = params.base_thickness
+    t2 = params.wall_thickness
+    tr = params.rib_thickness
+    r_boss = params.boss_hole_diameter / 2.0
+    r_mnt = params.mount_hole_diameter / 2.0
+    z_hole = round(H - max(r_boss + 12.0, H * 0.30), 2)
+    x_rib_end = round(L - max(22.0, r_mnt * 3.0), 2)
+    z_rib_top = round(min(H - 8.0, z_hole - r_boss - 2.0) if z_hole - r_boss - 2.0 > t1 + 12.0 else H - 10.0, 2)
+    x_mnt = round(L - max(18.0, r_mnt * 2.2), 2)
+    y_mnt = round(W / 2.0 - max(15.0, r_mnt * 1.8), 2)
+
+    entities: list[DrawingEntity] = []
+    front_indices: list[int] = []
+    top_indices: list[int] = []
+    left_indices: list[int] = []
+
+    def add_f(ent: DrawingEntity) -> int:
+        idx = len(entities); entities.append(ent); front_indices.append(idx); return idx
+
+    def add_t(ent: DrawingEntity) -> int:
+        idx = len(entities); entities.append(ent); top_indices.append(idx); return idx
+
+    def add_l(ent: DrawingEntity) -> int:
+        idx = len(entities); entities.append(ent); left_indices.append(idx); return idx
+
+    # 1. Front View (主视图: L-profile + triangular stiffening rib + hidden holes, width = L, height = H)
+    f_l_idx = add_f(
+        PolylineEntity(
+            kind="polyline",
+            layer="OUTLINE",
+            vertices=[(0.0, 0.0), (L, 0.0), (L, t1), (t2, t1), (t2, H), (0.0, H)],
+            closed=True,
+            source_id=source_id,
+        )
+    )
+    add_f(LineEntity(kind="line", layer="OUTLINE", start=(t2, z_rib_top), end=(x_rib_end, t1), source_id=source_id))
+    add_f(LineEntity(kind="line", layer="CENTER", start=(-2.0, z_hole), end=(t2 + 2.0, z_hole), source_id=source_id))
+    for dy_b in (-r_boss, r_boss):
+        add_f(LineEntity(kind="line", layer="HIDDEN", start=(0.0, z_hole + dy_b), end=(t2, z_hole + dy_b), source_id=source_id))
+    add_f(LineEntity(kind="line", layer="CENTER", start=(x_mnt, -2.0), end=(x_mnt, t1 + 2.0), source_id=source_id))
+    for dx_m in (-r_mnt, r_mnt):
+        add_f(LineEntity(kind="line", layer="HIDDEN", start=(x_mnt + dx_m, 0.0), end=(x_mnt + dx_m, t1), source_id=source_id))
+
+    # 2. Top View (俯视图: width = L 长对正, height = W)
+    t_box_idx = add_t(PolylineEntity(kind="polyline", layer="OUTLINE", vertices=[(0.0, -W / 2.0), (L, -W / 2.0), (L, W / 2.0), (0.0, W / 2.0)], closed=True, source_id=source_id))
+    add_t(LineEntity(kind="line", layer="OUTLINE", start=(t2, -W / 2.0), end=(t2, W / 2.0), source_id=source_id))
+    add_t(PolylineEntity(kind="polyline", layer="OUTLINE", vertices=[(t2, -tr / 2.0), (x_rib_end, -tr / 2.0), (x_rib_end, tr / 2.0), (t2, tr / 2.0)], closed=False, source_id=source_id))
+    add_t(LineEntity(kind="line", layer="CENTER", start=(-2.0, 0.0), end=(L + 2.0, 0.0), source_id=source_id))
+    for sy_b in (-r_boss, r_boss):
+        add_t(LineEntity(kind="line", layer="HIDDEN", start=(0.0, sy_b), end=(t2, sy_b), source_id=source_id))
+    top_mnt_idx = add_t(CircularEntity(kind="circular", layer="OUTLINE", center=(x_mnt, y_mnt), radius=r_mnt, source_id=source_id))
+    add_t(CircularEntity(kind="circular", layer="OUTLINE", center=(x_mnt, -y_mnt), radius=r_mnt, source_id=source_id))
+
+    # 3. Left View (左视图: width = W 宽相等, height = H 高平齐)
+    l_box_idx = add_l(PolylineEntity(kind="polyline", layer="OUTLINE", vertices=[(-W / 2.0, 0.0), (W / 2.0, 0.0), (W / 2.0, H), (-W / 2.0, H)], closed=True, source_id=source_id))
+    add_l(LineEntity(kind="line", layer="OUTLINE", start=(-W / 2.0, t1), end=(W / 2.0, t1), source_id=source_id))
+    add_l(PolylineEntity(kind="polyline", layer="OUTLINE", vertices=[(-tr / 2.0, t1), (-tr / 2.0, z_rib_top), (tr / 2.0, z_rib_top), (tr / 2.0, t1)], closed=False, source_id=source_id))
+    add_l(LineEntity(kind="line", layer="CENTER", start=(0.0, -2.0), end=(0.0, H + 2.0), source_id=source_id))
+    add_l(LineEntity(kind="line", layer="CENTER", start=(-r_boss * 1.25, z_hole), end=(r_boss * 1.25, z_hole), source_id=source_id))
+    boss_circle_idx = add_l(CircularEntity(kind="circular", layer="OUTLINE", center=(0.0, z_hole), radius=r_boss, source_id=source_id))
+    for sy_m in (-y_mnt, y_mnt):
+        for dx_m in (-r_mnt, r_mnt):
+            add_l(LineEntity(kind="line", layer="HIDDEN", start=(sy_m + dx_m, 0.0), end=(sy_m + dx_m, t1), source_id=source_id))
+
+    dims: list[dict[str, Any]] = [
+        {"kind": "linear", "value": L, "source_id": source_id, "owner_view": "front", "target_entity_index": f_l_idx, "orientation": "horizontal"},
+        {"kind": "linear", "value": H, "source_id": source_id, "owner_view": "front", "target_entity_index": f_l_idx, "orientation": "vertical"},
+        {"kind": "linear", "value": W, "source_id": source_id, "owner_view": "top", "target_entity_index": t_box_idx, "orientation": "vertical"},
+        {"kind": "diameter", "value": params.mount_hole_diameter, "source_id": source_id, "owner_view": "top", "target_entity_index": top_mnt_idx, "orientation": "diameter", "prefix": "2×⌀"},
+        {"kind": "linear", "value": W, "source_id": source_id, "owner_view": "left", "target_entity_index": l_box_idx, "orientation": "horizontal"},
+        {"kind": "diameter", "value": params.boss_hole_diameter, "source_id": source_id, "owner_view": "left", "target_entity_index": boss_circle_idx, "orientation": "diameter"},
+    ]
+    return ParametricPartResult(
+        views=["front", "top", "left"],
+        entities=entities,
+        view_entity_indices={"front": front_indices, "top": top_indices, "left": left_indices},
+        dimensions=dims,
+        parameters={
+            "part_family": "ribbed-bracket",
+            "base_length_mm": L,
+            "base_width_mm": W,
+            "total_height_mm": H,
+        },
+    )

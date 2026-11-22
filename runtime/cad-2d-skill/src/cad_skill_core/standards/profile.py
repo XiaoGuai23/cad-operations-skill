@@ -125,3 +125,50 @@ def load_standard(path: Path) -> DrawingStandard:
     with path.open(encoding="utf-8") as source:
         raw = yaml.safe_load(source)
     return DrawingStandard.model_validate(raw)
+
+
+BUILTIN_STANDARD_PROFILES: dict[str, dict[str, str]] = {
+    "gb-mechanical": {
+        "filename": "gb-mechanical.yaml",
+        "label_zh": "GB/T 机械精加工标准 (0.70/0.35mm)",
+    },
+    "gb-heavy-machinery": {
+        "filename": "gb-heavy-machinery.yaml",
+        "label_zh": "GB/T 重工与夹具总装标准 (0.80mm高对比)",
+    },
+    "gb-civil-construction": {
+        "filename": "gb-civil-construction.yaml",
+        "label_zh": "GB/T 市政与结构施工图标准 (彩色分层)",
+    },
+    "iso-international": {
+        "filename": "iso-international.yaml",
+        "label_zh": "ISO 128 国际外贸蓝图标准 (英文/0.50mm)",
+    },
+}
+
+
+def resolve_standard_profile_path(profile_id: str | None = None, *, standards_dir: Path | None = None) -> Path:
+    """Resolve a built-in standard preset ID to its validated YAML file path."""
+    root = standards_dir or (Path(__file__).resolve().parents[3] / "knowledge" / "standards")
+    key = (profile_id or "gb-mechanical").strip()
+    if key not in BUILTIN_STANDARD_PROFILES:
+        raise ValueError(f"unknown standard_profile {key!r}; valid presets: {sorted(BUILTIN_STANDARD_PROFILES)}")
+    return root / BUILTIN_STANDARD_PROFILES[key]["filename"]
+
+
+def list_builtin_standards(*, standards_dir: Path | None = None) -> list[dict[str, str]]:
+    """Return metadata for all built-in engineering drawing standard presets."""
+    items: list[dict[str, str]] = []
+    for pid, meta in BUILTIN_STANDARD_PROFILES.items():
+        path = resolve_standard_profile_path(pid, standards_dir=standards_dir)
+        std = load_standard(path)
+        items.append(
+            {
+                "id": pid,
+                "label_zh": meta["label_zh"],
+                "name": std.name,
+                "description": std.description,
+                "outline_lineweight_mm": f"{std.layers['OUTLINE'].lineweight_mm:.2f}",
+            }
+        )
+    return items

@@ -549,27 +549,42 @@ def render_studio_html() -> str:
           <div class="dropzone" onclick="triggerUpload('doc')">📄 点击或拖拽上传项目需求文档 (.docx / .pdf / .csv / .md)</div>
           <div class="field full">
             <label>自然语言工程描述（支持口语直接解析，留空则使用下方参数表单）</label>
-            <textarea id="m2dBrief" placeholder="例如：画个304不锈钢连接法兰，外径150内孔48厚20，在112的节圆上均布6个14的孔"></textarea>
+            <textarea id="m2dBrief" placeholder="例如：画一个45钢直齿圆柱齿轮，模数3齿数28齿宽30轴孔24"></textarea>
           </div>
-          <div class="row">
-            <button class="ghost" onclick="fillM2DBrief('画个304不锈钢连接法兰，外径150内孔48厚20，在112的节圆上均布6个14的螺栓孔')">口语示例：连接法兰</button>
-            <button class="ghost" onclick="fillM2DBrief('设计一根45钢三段阶梯轴，第一段直径26长32，第二段40长50，第三段22长28')">口语示例：阶梯传动轴</button>
-            <button class="ghost" onclick="fillAssemblyBomDemo()">📋 示例：夹具总装图(4列国标明细表)</button>
+          <div class="row" style="flex-wrap:wrap;gap:5px;">
+            <button class="ghost" onclick="fillM2DBrief('设计一个45钢直齿圆柱齿轮，模数3齿数28齿宽30轴孔24')">⚙ 示例：直齿圆柱齿轮</button>
+            <button class="ghost" onclick="fillM2DBrief('画一个HT200减速器轴承透盖，外径130止口直径90内孔42高度32厚12，在110节圆上均布6个9的孔')">🔩 示例：轴承透盖</button>
+            <button class="ghost" onclick="fillM2DBrief('做一个Q235B带加强筋L型直角支座，底板长130底板宽84总高92厚14加强筋厚10轴承孔28安装孔径12')">📐 示例：带筋L型支座</button>
+            <button class="ghost" onclick="fillM2DBrief('画个304不锈钢连接法兰，外径150内孔48厚20，在112的节圆上均布6个14的螺栓孔')">连接法兰</button>
+            <button class="ghost" onclick="fillM2DBrief('设计一根45钢三段阶梯轴，第一段直径26长32，第二段40长50，第三段22长28')">阶梯传动轴</button>
+            <button class="ghost" onclick="fillAssemblyBomDemo()">📋 夹具总装图(4列明细表)</button>
           </div>
 
-          <div class="sec-title" style="margin-top:4px;">方式二：可视化标准零件参数表单</div>
+          <div class="sec-title" style="margin-top:4px;">方式二：可视化标准零件参数表单 & 行业制图标准</div>
           <div class="form-grid">
+            <div class="field full">
+              <label>制图标准风格预设 (GB/T · 重工 · 市政 · ISO)</label>
+              <select id="m2dStdProfile">
+                <option value="gb-mechanical">GB/T 机械精加工默认标准 (0.70/0.35mm)</option>
+                <option value="gb-heavy-machinery">GB/T 重工装备与夹具总装标准 (高对比粗轮廓)</option>
+                <option value="gb-civil-construction">GB/T 市政与土建结构图标准</option>
+                <option value="iso-international">ISO 国际英文工程蓝图标准 (English Title Block)</option>
+              </select>
+            </div>
             <div class="field">
-              <label>零件族</label>
+              <label>零件族 (共 6 类三视图标准件)</label>
               <select id="m2dFamily" onchange="syncM2DFormVisibility()">
+                <option value="spur-gear">⚙ 直齿圆柱齿轮 (Spur Gear)</option>
+                <option value="bearing-cap">🔩 减速器轴承透盖 (Bearing Cap)</option>
+                <option value="ribbed-bracket">📐 带加强筋L型支座 (Ribbed Bracket)</option>
                 <option value="flange">连接法兰盘 (Flange)</option>
                 <option value="stepped-shaft">多阶梯传动轴 (Shaft)</option>
                 <option value="slotted-bracket">圆角腰形槽支架板</option>
               </select>
             </div>
             <div class="field"><label>材料牌号</label><input id="m2dMat" value="45钢" /></div>
-            <div class="field"><label>图纸名称</label><input id="m2dName" value="连接法兰盘" /></div>
-            <div class="field"><label>图号</label><input id="m2dNo" value="FLG-2026-01" /></div>
+            <div class="field"><label>图纸名称</label><input id="m2dName" value="直齿圆柱齿轮" /></div>
+            <div class="field"><label>图号</label><input id="m2dNo" value="GEAR-2026-01" /></div>
           </div>
           <div id="m2dParamFields" class="form-grid"></div>
           <button class="secondary" onclick="checkCompile2D()">🔍 预检参数完整性 (缺失/冲突检查)</button>
@@ -673,7 +688,46 @@ def render_studio_html() -> str:
     function syncM2DFormVisibility() {
       const fam = document.getElementById("m2dFamily").value;
       const box = document.getElementById("m2dParamFields");
-      if (fam === "flange") {
+      if (fam === "spur-gear") {
+        document.getElementById("m2dName").value = "直齿圆柱齿轮";
+        document.getElementById("m2dNo").value = "GEAR-2026-01";
+        document.getElementById("m2dMat").value = "45钢";
+        box.innerHTML = `
+          <div class="field"><label>模数 m (mm)</label><input type="number" id="g_m" value="3" step="0.5" /></div>
+          <div class="field"><label>齿数 z</label><input type="number" id="g_z" value="28" /></div>
+          <div class="field"><label>齿宽 b (mm)</label><input type="number" id="g_b" value="30" /></div>
+          <div class="field"><label>轴孔径 d0 (mm)</label><input type="number" id="g_bore" value="24" /></div>
+        `;
+      } else if (fam === "bearing-cap") {
+        document.getElementById("m2dName").value = "减速器轴承透盖";
+        document.getElementById("m2dNo").value = "CAP-2026-02";
+        document.getElementById("m2dMat").value = "HT200";
+        box.innerHTML = `
+          <div class="field"><label>凸缘外径 (mm)</label><input type="number" id="bc_od" value="130" /></div>
+          <div class="field"><label>止口外径 (mm)</label><input type="number" id="bc_sp" value="90" /></div>
+          <div class="field"><label>轴通孔径 (mm)</label><input type="number" id="bc_id" value="42" /></div>
+          <div class="field"><label>总高度 (mm)</label><input type="number" id="bc_h" value="32" /></div>
+          <div class="field"><label>凸缘厚度 (mm)</label><input type="number" id="bc_ft" value="12" /></div>
+          <div class="field"><label>螺钉节圆 BCD</label><input type="number" id="bc_bcd" value="110" /></div>
+          <div class="field"><label>螺钉孔数</label><input type="number" id="bc_hc" value="6" /></div>
+          <div class="field"><label>螺钉孔径 (mm)</label><input type="number" id="bc_hd" value="9" /></div>
+        `;
+      } else if (fam === "ribbed-bracket") {
+        document.getElementById("m2dName").value = "带加强筋L型支座";
+        document.getElementById("m2dNo").value = "BRK-RIB-03";
+        document.getElementById("m2dMat").value = "Q235B";
+        box.innerHTML = `
+          <div class="field"><label>底板长 L (mm)</label><input type="number" id="rb_l" value="130" /></div>
+          <div class="field"><label>底板宽 W (mm)</label><input type="number" id="rb_w" value="84" /></div>
+          <div class="field"><label>支座总高 H (mm)</label><input type="number" id="rb_h" value="92" /></div>
+          <div class="field"><label>底板/立板厚 (mm)</label><input type="number" id="rb_t" value="14" /></div>
+          <div class="field"><label>加强筋厚 (mm)</label><input type="number" id="rb_rt" value="10" /></div>
+          <div class="field"><label>立板轴承孔 (mm)</label><input type="number" id="rb_bd" value="28" /></div>
+          <div class="field"><label>底板安装孔径 (mm)</label><input type="number" id="rb_hd" value="12" /></div>
+        `;
+      } else if (fam === "flange") {
+        document.getElementById("m2dName").value = "连接法兰盘";
+        document.getElementById("m2dNo").value = "FLG-2026-01";
         box.innerHTML = `
           <div class="field"><label>外径 OD (mm)</label><input type="number" id="f_od" value="140" /></div>
           <div class="field"><label>内孔 ID (mm)</label><input type="number" id="f_id" value="48" /></div>
@@ -770,14 +824,21 @@ def render_studio_html() -> str:
     // ===================== Build Request Payload from Visual Forms =====================
     function buildGeneratePayload() {
       if (activeTab === "mech2d") {
+        const stdProf = document.getElementById("m2dStdProfile")?.value || "gb-mechanical";
         const brief = document.getElementById("m2dBrief").value.trim();
-        if (brief) return { domain: "mechanical_2d", markdown_brief: brief };
+        if (brief) return { domain: "mechanical_2d", markdown_brief: brief, standard_profile: stdProf };
         const fam = document.getElementById("m2dFamily").value;
         const name = document.getElementById("m2dName").value.trim() || "机械零件";
         const dno = document.getElementById("m2dNo").value.trim() || "MECH-01";
         const mat = document.getElementById("m2dMat").value.trim() || "45钢";
         let md = `# ${name}\n图号：${dno}\n材料：${mat}\n`;
-        if (fam === "flange") {
+        if (fam === "spur-gear") {
+          md += `模数：${+document.getElementById("g_m").value} mm\n齿数：${+document.getElementById("g_z").value}\n齿宽：${+document.getElementById("g_b").value} mm\n轴孔：${+document.getElementById("g_bore").value} mm\n`;
+        } else if (fam === "bearing-cap") {
+          md += `轴承透盖\n外径：${+document.getElementById("bc_od").value} mm\n止口直径：${+document.getElementById("bc_sp").value} mm\n内孔：${+document.getElementById("bc_id").value} mm\n高度：${+document.getElementById("bc_h").value} mm\n厚度：${+document.getElementById("bc_ft").value} mm\n节圆直径：${+document.getElementById("bc_bcd").value} mm\n安装孔：${+document.getElementById("bc_hc").value}×Φ${+document.getElementById("bc_hd").value}\n`;
+        } else if (fam === "ribbed-bracket") {
+          md += `加强筋直角支座\n底板长：${+document.getElementById("rb_l").value} mm\n底板宽：${+document.getElementById("rb_w").value} mm\n总高：${+document.getElementById("rb_h").value} mm\n厚度：${+document.getElementById("rb_t").value} mm\n加强筋厚：${+document.getElementById("rb_rt").value} mm\n轴承孔：${+document.getElementById("rb_bd").value} mm\n安装孔径：${+document.getElementById("rb_hd").value} mm\n`;
+        } else if (fam === "flange") {
           md += `外径：${+document.getElementById("f_od").value} mm\n内孔：${+document.getElementById("f_id").value} mm\n厚度：${+document.getElementById("f_th").value} mm\n`;
           const hc = +document.getElementById("f_hc").value;
           if (hc > 0) md += `节圆直径：${+document.getElementById("f_bcd").value} mm\n安装孔：${hc}×Φ${+document.getElementById("f_hd").value}\n`;
@@ -789,7 +850,7 @@ def render_studio_html() -> str:
         } else {
           md += `宽度：${+document.getElementById("b_w").value} mm\n高度：${+document.getElementById("b_h").value} mm\n厚度：${+document.getElementById("b_t").value} mm\n圆角：R${+document.getElementById("b_r").value}\n腰形槽长：${+document.getElementById("b_sl").value} mm\n腰形槽宽：${+document.getElementById("b_sw").value} mm\n`;
         }
-        return { domain: "mechanical_2d", markdown_brief: md };
+        return { domain: "mechanical_2d", markdown_brief: md, standard_profile: stdProf };
       }
 
       if (activeTab === "model3d") {
@@ -1536,6 +1597,21 @@ def render_studio_html() -> str:
     }, { passive: false });
 
     // ===================== Display Generated Task Result =====================
+    function appendRubricBadge(rubric, container) {
+      if (!rubric || typeof rubric.total_score !== "number") return;
+      const bRub = document.createElement("span");
+      bRub.className = "badge " + (rubric.total_score >= 82 ? "ok" : "warn");
+      bRub.style.cursor = "pointer";
+      bRub.textContent = `🏆 图纸评分: ${rubric.total_score}/100 (${rubric.grade}级·${rubric.grade_label_zh || ""})`;
+      bRub.title = "点击查看五维 100 分制工程审图明细";
+      bRub.onclick = () => {
+        const dims = (rubric.dimensions || []).map(x => `• ${x.title_zh}: ${x.score}/${x.max_score}`).join("\n");
+        const recs = (rubric.recommendations || []).length ? `\n优化建议：${rubric.recommendations.join("；")}` : "\n结论：工程制图各项指标卓越！";
+        setAlert(`🏆 Rubric 百分制审图报告：总分 ${rubric.total_score}/100 (${rubric.grade}级)\n${dims}${recs}`, rubric.total_score >= 82 ? "ok" : "warn");
+      };
+      container.appendChild(bRub);
+    }
+
     async function displayTaskResult(data) {
       lastTaskData = data;
       highlightedHandle = null;
@@ -1551,6 +1627,10 @@ def render_studio_html() -> str:
       bMain.className = "badge " + (["passed","complete","partial"].includes(data.status) ? "ok" : "warn");
       bMain.textContent = `状态: ${data.status} · ${data.task_id || ""}`;
       badges.appendChild(bMain);
+
+      if (data.rubric_score) {
+        appendRubricBadge(data.rubric_score, badges);
+      }
 
       if (data.audit_3d) {
         const b3 = document.createElement("span");
@@ -1895,8 +1975,13 @@ def render_studio_html() -> str:
           resizeCanvases();
           fit2DCamera();
         }
+        if (d.rubric_score) {
+          const badges = document.getElementById("auditBadges");
+          badges.innerHTML = `<span class="badge ok">已加载本地 DXF: ${file.name}</span>`;
+          appendRubricBadge(d.rubric_score, badges);
+        }
         renderReviseSidebar();
-        setAlert(`✅ 已加载 DXF（共 ${revState.entities.length} 个可编辑图元），点击列表即可高亮定位！`, "ok");
+        setAlert(`✅ 已加载 DXF（共 ${revState.entities.length} 个可编辑图元），点击顶部徽章可查看 100 分制体检明细！`, "ok");
       } else {
         const compResp = await fetch("/api/v1/tasks/compile", {
           method: "POST", headers: authHeaders(),

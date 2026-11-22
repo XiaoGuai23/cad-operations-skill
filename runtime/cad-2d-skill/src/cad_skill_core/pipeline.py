@@ -42,7 +42,7 @@ from cad_skill_core.inspection import GenerationContext, run_repair_loop
 from cad_skill_core.layout.material_binding import resolve_material_handles
 from cad_skill_core.schema.io import load_spec
 from cad_skill_core.schema.models import DrawingSpec
-from cad_skill_core.standards.profile import load_standard
+from cad_skill_core.standards.profile import load_standard, resolve_standard_profile_path
 
 from .task import (
     PipelineInputError,
@@ -166,7 +166,14 @@ def run_task(task_dir: Path, options: PipelineOptions | None = None) -> Pipeline
             spec_canonical_sha256=hashlib.sha256(canonical_spec_bytes).hexdigest(),
         )
     try:
-        standard = load_standard(_STANDARD_PATH)
+        std_file = (
+            resolve_standard_profile_path(selected.standard_profile, standards_dir=_STANDARD_PATH.parent)
+            if selected.standard_profile
+            else _STANDARD_PATH
+        )
+        standard = load_standard(std_file)
+        if selected.standard_profile == "iso-international":
+            spec.sheet.title_block_language = "en"
         fonts = _resolve_fonts(spec, selected)
     except Exception as error:
         return _failed_result(

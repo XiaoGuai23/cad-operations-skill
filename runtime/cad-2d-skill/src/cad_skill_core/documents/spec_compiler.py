@@ -10,12 +10,18 @@ import re
 from typing import Any, Literal
 
 from cad_skill_core.geometry.parametric import (
+    BearingCapParameters,
     FlangeParameters,
+    RibbedBracketParameters,
     RoundedRectangleParameters,
     SlottedBracketParameters,
+    SpurGearParameters,
     SteppedShaftParameters,
+    build_bearing_cap_geometry,
     build_flange_geometry,
+    build_ribbed_bracket_geometry,
     build_slotted_bracket_geometry,
+    build_spur_gear_geometry,
     build_stepped_shaft_geometry,
     rounded_rectangle,
 )
@@ -25,7 +31,16 @@ from cad_skill_core.schema.models import DrawingSpec
 from .extract import OCRCallable, extract_sources
 from .models import SourceFragment
 
-PartFamily = Literal["auto", "flange", "stepped-shaft", "slotted-bracket", "rounded-rect"]
+PartFamily = Literal[
+    "auto",
+    "flange",
+    "stepped-shaft",
+    "slotted-bracket",
+    "rounded-rect",
+    "spur-gear",
+    "bearing-cap",
+    "ribbed-bracket",
+]
 
 _CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 _NUMBER_TOL_RE = re.compile(
@@ -59,21 +74,28 @@ _INLINE_MATERIAL_RE = re.compile(
 )
 
 _PARAM_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
-    ("outer_diameter", re.compile(r"(?:外径|outer\s*diameter|OD)\s*(?:为|是)?\s*[:：=]?\s*[⌀∅Φφ]?\s*", re.IGNORECASE)),
-    ("bore_diameter", re.compile(r"(?:内径|内孔(?:直径)?|中心(?:通)?孔|bore(?:\s*diameter)?|ID)\s*(?:为|是)?\s*[:：=]?\s*[⌀∅Φφ]?\s*", re.IGNORECASE)),
+    ("spigot_diameter", re.compile(r"(?:止口(?:外径|直径)?|嵌入式外径|spigot(?:\s*diameter)?)\s*(?:为|是)?\s*[:：=]?\s*[⌀∅Φφ]?\s*", re.IGNORECASE)),
+    ("boss_hole_diameter", re.compile(r"(?:轴承孔(?:径)?|立板孔(?:径)?|boss\s*hole)\s*(?:为|是)?\s*[:：=]?\s*[⌀∅Φφ]?\s*", re.IGNORECASE)),
+    ("outer_diameter", re.compile(r"(?<!止口)(?<!凸台)(?<!法兰颈)(?:外径|outer\s*diameter|OD)\s*(?:为|是)?\s*[:：=]?\s*[⌀∅Φφ]?\s*", re.IGNORECASE)),
+    ("bore_diameter", re.compile(r"(?:内径|内孔(?:直径)?|中心(?:通)?孔|轴孔(?:径)?|bore(?:\s*diameter)?|ID)\s*(?:为|是)?\s*[:：=]?\s*[⌀∅Φφ]?\s*", re.IGNORECASE)),
     ("bolt_circle_diameter", re.compile(r"(?:节圆(?:直径)?|孔距圆|分布圆(?:直径)?|bolt\s*circle(?:\s*diameter)?|BCD|PCD)\s*(?:为|是)?\s*[:：=]?\s*[⌀∅Φφ]?\s*", re.IGNORECASE)),
-    ("hole_diameter", re.compile(r"(?:安装孔径|螺栓孔径|孔径|hole\s*diameter)\s*(?:为|是)?\s*[:：=]?\s*[⌀∅Φφ]?\s*", re.IGNORECASE)),
+    ("hole_diameter", re.compile(r"(?:安装孔径|螺栓孔径|(?<!轴)(?<!内)(?<!中心)(?<!轴承)(?<!立板)孔径|hole\s*diameter)\s*(?:为|是)?\s*[:：=]?\s*[⌀∅Φφ]?\s*", re.IGNORECASE)),
     ("hole_count", re.compile(r"(?:孔数|螺栓孔数|安装孔数|hole\s*count)\s*(?:为|是)?\s*[:：=]?\s*", re.IGNORECASE)),
     ("hub_diameter", re.compile(r"(?:颈径|法兰颈(?:外)?径|凸台(?:外)?径|hub\s*diameter)\s*(?:为|是)?\s*[:：=]?\s*[⌀∅Φφ]?\s*", re.IGNORECASE)),
     ("hub_height", re.compile(r"(?:颈高|法兰颈高|凸台高(?:度)?|hub\s*height)\s*(?:为|是)?\s*[:：=]?\s*", re.IGNORECASE)),
-    ("thickness", re.compile(r"(?:底盘厚(?:度)?|法兰厚(?:度)?|板厚|厚度|厚|thickness)\s*(?:为|是)?\s*[:：=]?\s*", re.IGNORECASE)),
-    ("width", re.compile(r"(?:总宽|板宽|宽度|宽|长|width)\s*(?:为|是)?\s*[:：=]?\s*", re.IGNORECASE)),
-    ("height", re.compile(r"(?:总高|板高|高度|高|height)\s*(?:为|是)?\s*[:：=]?\s*", re.IGNORECASE)),
-    ("depth", re.compile(r"(?:进深|深度|深|depth)\s*(?:为|是)?\s*[:：=]?\s*", re.IGNORECASE)),
-    ("corner_radius", re.compile(r"(?:(?:四角)?倒圆|圆角(?:半径)?|corner\s*radius|fillet\s*radius)\s*(?:为|是)?\s*[:：=]?\s*[Rr]?\s*", re.IGNORECASE)),
+    ("module_mm", re.compile(r"(?:法向模数|模数|module)\s*(?:[mM]\s*)?(?:为|是)?\s*[:：=]?\s*", re.IGNORECASE)),
+    ("teeth", re.compile(r"(?:齿数|teeth)\s*(?:[zZ]\s*)?(?:为|是)?\s*[:：=]?\s*", re.IGNORECASE)),
+    ("face_width", re.compile(r"(?:齿宽|齿轮宽(?:度)?|face\s*width)\s*(?:[bB]\s*)?(?:为|是)?\s*[:：=]?\s*", re.IGNORECASE)),
+    ("rib_thickness", re.compile(r"(?:肋板厚(?:度)?|加强筋厚(?:度)?|筋厚|rib\s*thickness)\s*(?:为|是)?\s*[:：=]?\s*", re.IGNORECASE)),
+    ("wall_thickness", re.compile(r"(?:立板厚(?:度)?|竖板厚|壁厚|wall\s*thickness)\s*(?:为|是)?\s*[:：=]?\s*", re.IGNORECASE)),
     ("slot_length", re.compile(r"(?:腰形槽长|槽长|长槽长度|slot\s*length)\s*(?:为|是)?\s*[:：=]?\s*", re.IGNORECASE)),
     ("slot_width", re.compile(r"(?:腰形槽宽|槽宽|slot\s*width)\s*(?:为|是)?\s*[:：=]?\s*", re.IGNORECASE)),
     ("hole_inset", re.compile(r"(?:安装孔边距|孔边距|距边|边距|hole\s*inset)\s*(?:为|是)?\s*[:：=]?\s*", re.IGNORECASE)),
+    ("depth", re.compile(r"(?:底板宽(?:度)?|进深|深度|深|depth)\s*(?:为|是)?\s*[:：=]?\s*", re.IGNORECASE)),
+    ("corner_radius", re.compile(r"(?:(?:四角)?倒圆|圆角(?:半径)?|corner\s*radius|fillet\s*radius)\s*(?:为|是)?\s*[:：=]?\s*[Rr]?\s*", re.IGNORECASE)),
+    ("thickness", re.compile(r"(?<!筋)(?<!肋板)(?<!立板)(?<!竖板)(?<!壁)(?:底盘厚(?:度)?|法兰厚(?:度)?|底板厚(?:度)?|板厚|厚度|厚|thickness)\s*(?:为|是)?\s*[:：=]?\s*", re.IGNORECASE)),
+    ("width", re.compile(r"(?<!底)(?<!齿)(?<!齿轮)(?<!槽)(?:底板长(?:度)?|总长|总宽|(?<!底)板宽|(?<!底板)(?<!齿轮)宽度|(?<!底板)(?<!齿)(?<!槽)宽|(?<!槽)长|width)\s*(?:为|是)?\s*[:：=]?\s*", re.IGNORECASE)),
+    ("height", re.compile(r"(?<!颈)(?<!凸台)(?:总高|板高|高度|高|height)\s*(?:为|是)?\s*[:：=]?\s*", re.IGNORECASE)),
 )
 
 
@@ -291,6 +313,7 @@ def compile_spec_from_fragments(
                 shaft_steps.append((float(m_cstep.group("len")), float(m_cstep.group("dia")), sid))
                 step_matched_spans.append(sp)
 
+        claimed_num_spans: list[tuple[int, int]] = []
         for pname, pattern in _PARAM_PATTERNS:
             for match in pattern.finditer(line):
                 if step_matched_spans and pname in {"width", "height"}:
@@ -298,6 +321,10 @@ def compile_spec_from_fragments(
                 tail = line[match.end() :]
                 num_m = _NUMBER_TOL_RE.match(tail)
                 if num_m:
+                    abs_span = (match.end() + num_m.start(), match.end() + num_m.end())
+                    if any(not (abs_span[1] <= c0 or abs_span[0] >= c1) for c0, c1 in claimed_num_spans):
+                        continue
+                    claimed_num_spans.append(abs_span)
                     val = float(num_m.group("val"))
                     tol_u, tol_l = _parse_tolerances(num_m)
                     _record_param(params, pname, val, tol_u, tol_l, sid, frag.locator)
@@ -437,6 +464,111 @@ def compile_spec_from_fragments(
                 geo_params.update(built.parameters)
             except ValueError as exc:
                 conflicts.append(f"slotted-bracket geometric constraint violation: {exc}")
+
+    elif inferred_family == "spur-gear":
+        m_p = resolved_params.get("module_mm")
+        z_p = resolved_params.get("teeth")
+        if m_p is None:
+            missing.append("missing required parameter for spur-gear: module_mm")
+        if z_p is None:
+            missing.append("missing required parameter for spur-gear: teeth")
+        if m_p is not None and z_p is not None:
+            fw = resolved_params["face_width"].value if "face_width" in resolved_params else (resolved_params["thickness"].value if "thickness" in resolved_params else round(m_p.value * 9.0, 1))
+            bd = resolved_params["bore_diameter"].value if "bore_diameter" in resolved_params else round(max(16.0, m_p.value * z_p.value * 0.26), 1)
+            try:
+                built = build_spur_gear_geometry(
+                    SpurGearParameters(
+                        module_mm=m_p.value,
+                        teeth=int(round(z_p.value)),
+                        face_width=fw,
+                        bore_diameter=bd,
+                    ),
+                    source_id=m_p.source_id,
+                )
+                requested_views = built.views
+                entities_dump = [e.model_dump(mode="json") for e in built.entities]
+                view_indices = built.view_entity_indices
+                dimensions_dump = _attach_tolerances(built.dimensions, resolved_params)
+                geo_params.update(built.parameters)
+                if project_name is None:
+                    project_name = "直齿圆柱齿轮" if resolved_lang == "zh" else "Spur Gear"
+            except ValueError as exc:
+                conflicts.append(f"spur-gear geometric constraint violation: {exc}")
+
+    elif inferred_family == "bearing-cap":
+        od_p = resolved_params.get("outer_diameter")
+        if od_p is None:
+            missing.append("missing required parameter for bearing-cap: outer_diameter")
+        else:
+            fd = od_p.value
+            spigot = resolved_params["spigot_diameter"].value if "spigot_diameter" in resolved_params else round(fd * 0.68, 1)
+            bore = resolved_params["bore_diameter"].value if "bore_diameter" in resolved_params else round(spigot * 0.46, 1)
+            th_tot = resolved_params["height"].value if "height" in resolved_params else round(fd * 0.25, 1)
+            tf = resolved_params["thickness"].value if "thickness" in resolved_params else round(th_tot * 0.36, 1)
+            hc = int(round(resolved_params["hole_count"].value)) if "hole_count" in resolved_params else 6
+            hd = resolved_params["hole_diameter"].value if "hole_diameter" in resolved_params else 9.0
+            bcd = resolved_params["bolt_circle_diameter"].value if "bolt_circle_diameter" in resolved_params else round((fd + spigot) / 2.0, 1)
+            try:
+                built = build_bearing_cap_geometry(
+                    BearingCapParameters(
+                        flange_diameter=fd,
+                        spigot_diameter=spigot,
+                        bore_diameter=bore,
+                        total_height=th_tot,
+                        flange_thickness=tf,
+                        bolt_circle_diameter=bcd,
+                        hole_diameter=hd,
+                        hole_count=hc,
+                    ),
+                    source_id=od_p.source_id,
+                )
+                requested_views = built.views
+                entities_dump = [e.model_dump(mode="json") for e in built.entities]
+                view_indices = built.view_entity_indices
+                dimensions_dump = _attach_tolerances(built.dimensions, resolved_params)
+                geo_params.update(built.parameters)
+                if project_name is None:
+                    project_name = "轴承透盖" if resolved_lang == "zh" else "Bearing Cap"
+            except ValueError as exc:
+                conflicts.append(f"bearing-cap geometric constraint violation: {exc}")
+
+    elif inferred_family == "ribbed-bracket":
+        w_p = resolved_params.get("width")
+        h_p = resolved_params.get("height")
+        if w_p is None:
+            missing.append("missing required parameter for ribbed-bracket: width (base_length)")
+        if h_p is None:
+            missing.append("missing required parameter for ribbed-bracket: height (total_height)")
+        if w_p is not None and h_p is not None:
+            bw = resolved_params["depth"].value if "depth" in resolved_params else round(w_p.value * 0.65, 1)
+            t_base = resolved_params["thickness"].value if "thickness" in resolved_params else 14.0
+            t_wall = resolved_params["wall_thickness"].value if "wall_thickness" in resolved_params else t_base
+            t_rib = resolved_params["rib_thickness"].value if "rib_thickness" in resolved_params else 10.0
+            boss_d = resolved_params["boss_hole_diameter"].value if "boss_hole_diameter" in resolved_params else (resolved_params["bore_diameter"].value if "bore_diameter" in resolved_params else 26.0)
+            mnt_d = resolved_params["hole_diameter"].value if "hole_diameter" in resolved_params else 12.0
+            try:
+                built = build_ribbed_bracket_geometry(
+                    RibbedBracketParameters(
+                        base_length=w_p.value,
+                        base_width=bw,
+                        total_height=h_p.value,
+                        base_thickness=t_base,
+                        wall_thickness=t_wall,
+                        rib_thickness=t_rib,
+                        boss_hole_diameter=boss_d,
+                        mount_hole_diameter=mnt_d,
+                    ),
+                    source_id=w_p.source_id,
+                )
+                requested_views = built.views
+                entities_dump = [e.model_dump(mode="json") for e in built.entities]
+                view_indices = built.view_entity_indices
+                dimensions_dump = _attach_tolerances(built.dimensions, resolved_params)
+                geo_params.update(built.parameters)
+                if project_name is None:
+                    project_name = "带筋直角支座" if resolved_lang == "zh" else "Ribbed L-Bracket"
+            except ValueError as exc:
+                conflicts.append(f"ribbed-bracket geometric constraint violation: {exc}")
 
     elif inferred_family == "rounded-rect":
         req_keys = ("width", "height", "corner_radius")
@@ -609,6 +741,12 @@ def _infer_family(
 ) -> str:
     if requested != "auto":
         return requested
+    if "module_mm" in params or "teeth" in params or re.search(r"齿轮|spur\s*gear|圆柱齿轮", all_text, re.IGNORECASE):
+        return "spur-gear"
+    if "spigot_diameter" in params or re.search(r"轴承(?:透|闷|端)?盖|端盖|bearing\s*cap", all_text, re.IGNORECASE):
+        return "bearing-cap"
+    if "rib_thickness" in params or re.search(r"加强筋|肋板|直角支座|L型支座|ribbed\s*bracket", all_text, re.IGNORECASE):
+        return "ribbed-bracket"
     if shaft_steps or re.search(r"阶梯轴|传动轴|stepped\s*shaft", all_text, re.IGNORECASE):
         return "stepped-shaft"
     if "slot_length" in params or "slot_width" in params or re.search(r"腰形槽|长槽支架|slotted\s*bracket", all_text, re.IGNORECASE):
