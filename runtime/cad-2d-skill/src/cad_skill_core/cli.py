@@ -174,6 +174,10 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     """Execute one CLI command and return its documented process exit code."""
 
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure") and getattr(stream, "encoding", "").lower().startswith("cp125"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+
     arguments = _parser().parse_args(list(argv) if argv is not None else None)
     if arguments.command == "validate-spec":
         return _validate_spec(arguments.path, arguments.as_json)
