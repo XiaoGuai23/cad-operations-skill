@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -14,7 +15,8 @@ OUT = ROOT / "output" / "smoke"
 
 def run(cmd: list[str]) -> None:
     print("$", " ".join(str(c) for c in cmd))
-    subprocess.run(cmd, cwd=ROOT, check=True)
+    env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
+    subprocess.run(cmd, cwd=ROOT, env=env, check=True)
 
 
 def assert_nonempty(path: Path) -> None:
@@ -34,6 +36,9 @@ def assert_audited_dxf(path: Path) -> ezdxf.document.Drawing:
 
 
 def main() -> int:
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
     if OUT.exists():
         shutil.rmtree(OUT)
     (OUT / "sld").mkdir(parents=True)

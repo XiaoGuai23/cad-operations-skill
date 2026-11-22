@@ -10,6 +10,9 @@ permissions:
 jobs:
   smoke-test:
     runs-on: windows-latest
+    env:
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: "utf-8"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -21,9 +24,6 @@ jobs:
 
       - name: Install dependencies
         run: python -m pip install -r requirements.txt -e "./runtime/cad-2d-skill[dev]"
-
-      - name: Validate generated CAD outputs
-        run: python tests/smoke_test.py
 
       - name: Prepare reproducible CI font
         shell: pwsh
@@ -39,6 +39,9 @@ jobs:
           @{ fonts = @{ cjk = @('Unifont'); latin = @('Unifont'); engineering = @('Unifont') } } |
             ConvertTo-Json -Depth 4 |
             Set-Content -LiteralPath 'runtime/cad-2d-skill/knowledge/drawing-rules/font-policy.yaml' -Encoding utf8
+
+      - name: Validate generated CAD outputs
+        run: python tests/smoke_test.py
 
       - name: Validate mechanical revision runtime
         working-directory: runtime/cad-2d-skill
