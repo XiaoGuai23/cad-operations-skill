@@ -45,16 +45,21 @@ def _candidate_files(configured):
 
 
 def _probe_native(configured):
+    from .cad_drivers.registry import probe_all_cad_drivers
+
+    drivers_matrix = probe_all_cad_drivers(autocad_path=configured)
     try:
         from .autocad.discovery import discover_autocad
         install = discover_autocad(configured)
         return {'status': 'available', 'reason': 'Exact-version signature-checked installation found; export/license/session not exercised.',
-                'acad_path': str(install.acad_exe), 'core_console_path': str(install.core_console_exe), 'version': install.version}
+                'acad_path': str(install.acad_exe), 'core_console_path': str(install.core_console_exe), 'version': install.version,
+                'cad_drivers': drivers_matrix}
     except Exception as error:
         detail = getattr(error, 'detail', None)
         return {'status': 'blocked', 'code': getattr(detail, 'code', type(error).__name__),
                 'reason': str(getattr(detail, 'message', error)),
-                'path': str(detail.path) if detail is not None and detail.path is not None else None}
+                'path': str(detail.path) if detail is not None and detail.path is not None else None,
+                'cad_drivers': drivers_matrix}
 
 
 def check_environment(*, cache=None, autocad_path=None, package_root=None, refresh=False, skip_native=False):
@@ -117,7 +122,9 @@ def check_environment(*, cache=None, autocad_path=None, package_root=None, refre
                                'dwg_pdf': export,
                                'native_grips': {'status': 'unverified', 'reason': 'Representative interaction in a separate CAD copy is still required.'}},
               'dependencies': dependencies, 'resources': {'files': resources, 'missing': missing},
-              'native_discovery': native, 'native_export_tested': False,
+              'native_discovery': native,
+              'cad_drivers': native.get('cad_drivers', {'status': native['status']}),
+              'native_export_tested': False,
               'retry': 'Use --refresh after repairing configuration/certificates; changed executable/resource fingerprints retry automatically. Failure cache expires after 24 hours.'}
     if cache is not None and not skip_native and not reused:
         payload = {'schema': SCHEMA, 'checked_at': now, 'fingerprint': fingerprint, 'native': native}

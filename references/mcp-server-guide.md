@@ -56,9 +56,9 @@ D:\Python312\python.exe -B -m cad_skill_core.cli mcp-http --host 127.0.0.1 --por
 
 ---
 
-## 3. 已暴露的 12 个 MCP Tools（二维 + 三维全闭环生产集）
+## 3. 已暴露的 14 个 MCP Tools（二维 + 三维 + 多版本/国产 CAD 驱动全闭环）
 
-1. `cad_doctor`：诊断 Python 渲染栈、本机中文字体覆盖率、三维内核能力与本地 AutoCAD 状态。
+1. `cad_doctor`：诊断 Python 渲染栈、本机中文字体覆盖率、三维内核能力与多厂商 CAD 驱动状态。
 2. `cad_compile_spec`：解析项目书/手册/CSV/DOCX/PDF，编译 `DrawingSpec` 并拦截缺失尺寸与冲突参数。
 3. `cad_validate_spec`：严格校验 `DrawingSpec` 结构、尺寸锚点与溯源完整性。
 4. `cad_learn_standard`：从参考样图 DXF 自动提取图层、线宽、字高、`DIMSTYLE` 与图幅标准。
@@ -68,8 +68,10 @@ D:\Python312\python.exe -B -m cad_skill_core.cli mcp-http --host 127.0.0.1 --por
 8. `cad_inventory_dxf`：列出 DXF 可编辑图元句柄（Handle）、坐标与当前 SHA-256。
 9. `cad_revise_dxf`：执行带 `DocumentCheckpoint` 回滚保护的局部原子改图（支持 `dry_run`）。
 10. `cad_preview_and_diff`：渲染局部放大 PNG 区域图或改图前后对比图。
-11. `cad_generate_3d`：生成并独立回测水密流形三维模型（`.stl` / `.obj` / `.glb` / `model3d.dxf` / `iso.png` / `audit-3d.json`），支持 `with_2d_sheet=true` 一键联动生成国标多视图二维工程图。
+11. `cad_generate_3d`：生成并独立回测水密流形三维模型（`.stl` / `.obj` / `.glb` / `model3d.dxf` / `iso.png` / `audit-3d.json`），支持 `with_2d_sheet=true` 联动生成二维工程图，以及 `run_native_cad=true` 调用本地 AutoCAD/中望/浩辰生成原生 `3DSOLID` `.dwg`。
 12. `cad_project_3d_to_2d`：将三维规约 `Model3DSpec` 正交/剖视投影为多视图二维 `DrawingSpec`。
+13. `cad_list_drivers`：只读探测本机安装的 AutoCAD（2021–2026）、中望 CAD（ZWCAD）、浩辰 CAD（GstarCAD）、CAXA 电子图板及 ODA 转换器矩阵。
+14. `cad_verify_roundtrip`：核验 DWG ↔ DXF 双向往返前后的图层、块、布局、样式、图元数与总包围盒结构无损性。
 
 ## 4. MCP Resources 与 Prompts
 

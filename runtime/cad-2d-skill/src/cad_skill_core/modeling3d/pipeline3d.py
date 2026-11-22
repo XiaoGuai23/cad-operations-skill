@@ -36,6 +36,8 @@ def run_3d_task(
     *,
     with_2d_sheet: bool = False,
     circle_segments: int = 64,
+    run_native_cad: bool = False,
+    driver_preference: str = "auto",
     render_lock=None,
 ) -> dict[str, Any]:
     """Generate 3D artifacts (.stl, .obj, .glb, model3d.dxf, iso.png, audit-3d.json) and optional 2D sheet."""
@@ -106,7 +108,35 @@ def run_3d_task(
     ]
 
     sheet_2d_summary: dict[str, Any] | None = None
+    native_cad_summary: dict[str, Any] = {"status": "disabled"}
     overall_status = audit_report.status
+
+    if run_native_cad and audit_report.status == "passed":
+        from cad_skill_core.cad_drivers import NativeJobRequest, execute_native_cad_job
+
+        native_res = execute_native_cad_job(
+            NativeJobRequest(
+                job_kind="build-3dsolid",
+                output_dir=out,
+                task_work_dir=out / "work_native",
+                script_text=scr_path.read_text(encoding="utf-8"),
+                output_stem="model3d",
+                driver_preference=driver_preference,  # type: ignore[arg-type]
+            )
+        )
+        native_cad_summary = native_res.to_dict()
+        for out_file in native_res.outputs:
+            if out_file.is_file():
+                artifacts.append(
+                    {
+                        "name": out_file.name,
+                        "path": str(out_file.resolve()),
+                        "size": out_file.stat().st_size,
+                        "sha256": sha256_file(out_file),
+                    }
+                )
+        if native_res.status == "failed":
+            overall_status = "failed"
 
     if with_2d_sheet and audit_report.status == "passed":
         sheet_task_dir = out / "sheet_2d"
@@ -167,6 +197,7 @@ def run_3d_task(
             "issues": [asdict(i) for i in audit_report.issues],
         },
         "sheet_2d": sheet_2d_summary,
+        "native_cad": native_cad_summary,
         "capabilities": probe_3d_capabilities(),
         "artifacts": artifacts,
         "iso_png_path": iso_png_path,

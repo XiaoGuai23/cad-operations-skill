@@ -155,6 +155,14 @@ class Generate3DArgs(StrictInputModel):
         default=False,
         description="Also project and render an audited multi-view GB/T 2D engineering drawing alongside 3D outputs.",
     )
+    run_native_cad: bool = Field(
+        default=False,
+        description="Also invoke an installed local CAD console (AutoCAD/ZWCAD/GstarCAD) to build a native 3DSOLID .dwg.",
+    )
+    driver_preference: Literal["auto", "autocad", "zwcad", "gstarcad"] = Field(
+        default="auto",
+        description="Preferred local CAD driver when run_native_cad=true.",
+    )
     circle_segments: int = Field(default=64, ge=24, le=256)
     include_image_base64: bool = Field(
         default=False,
@@ -167,6 +175,19 @@ class Project3DTo2DArgs(StrictInputModel):
     spec_path: str | None = Field(default=None, description="Path to a Model3DSpec JSON file.")
     sheet_size: Literal["A0", "A1", "A2", "A3", "A4"] = Field(default="A3")
     scale: str = Field(default="auto")
+
+
+class ListDriversArgs(StrictInputModel):
+    allowed_autocad_versions: list[str] | None = Field(
+        default=None,
+        description="Optional subset of AutoCAD versions to accept, e.g. ['2023', '2024'].",
+    )
+
+
+class VerifyRoundTripArgs(StrictInputModel):
+    before_dxf_path: str = Field(description="Baseline DXF path inside allowed sandbox roots.")
+    after_dxf_path: str = Field(description="Round-tripped DXF path inside allowed sandbox roots.")
+    bbox_tolerance_mm: float = Field(default=0.5, gt=0.0, le=50.0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -579,6 +600,8 @@ def _handle_generate_3d(
         out_dir,
         with_2d_sheet=args.with_2d_sheet,
         circle_segments=args.circle_segments,
+        run_native_cad=args.run_native_cad,
+        driver_preference=args.driver_preference,
         render_lock=sandbox.render_lock,
     )
     iso_png: Path | None = bundle.pop("iso_png_path", None)
@@ -627,6 +650,51 @@ def _handle_project_3d_to_2d(
     }
     sandbox.write_task_metadata(task_id, payload)
     return payload, None, False
+
+
+def _handle_list_drivers(
+    sandbox: MCPWorkspaceSandbox, args: ListDriversArgs
+) -> tuple[dict[str, Any], Path | None, bool]:
+    del sandbox
+    from cad_skill_core.cad_drivers import probe_all_cad_drivers
+
+    versions = tuple(args.allowed_autocad_versions) if args.allowed_autocad_versions else None
+    matrix = probe_all_cad_drivers(allowed_autocad_versions=versions)
+    return matrix, None, False
+
+
+def _handle_verify_roundtrip(
+    sandbox: MCPWorkspaceSandbox, args: VerifyRoundTripArgs
+) -> tuple[dict[str, Any], Path | None, bool]:
+    from cad_skill_core.cad_drivers import verify_dxf_structural_equivalence
+
+    before_path = sandbox.resolve_readable_file(args.before_dxf_path)
+    after_path = sandbox.resolve_readable_file(args.after_dxf_path)
+    task_id, task_dir = sandbox.allocate_task_dir("roundtrip")
+    out_dir = task_dir / "output"
+    out_dir.mkdir()
+    report_path = out_dir / "dwg-roundtrip-audit.json"
+    report = verify_dxf_structural_equivalence(
+        before_path,
+        after_path,
+        bbox_tolerance_mm=args.bbox_tolerance_mm,
+        output_report_path=report_path,
+    )
+    payload = {
+        "task_id": task_id,
+        "domain": "verify_roundtrip",
+        **report.to_dict(),
+        "artifacts": [
+            {
+                "name": report_path.name,
+                "path": str(report_path.resolve()),
+                "size": report_path.stat().st_size,
+                "sha256": sha256_file(report_path),
+            }
+        ],
+    }
+    sandbox.write_task_metadata(task_id, payload)
+    return payload, None, report.status == "failed"
 
 
 TOOLS: tuple[ToolDefinition, ...] = (
@@ -701,6 +769,18 @@ TOOLS: tuple[ToolDefinition, ...] = (
         "Project a Model3DSpec into an orthographic/sectional multi-view 2D DrawingSpec ready for 2D drafting.",
         Project3DTo2DArgs,
         _handle_project_3d_to_2d,
+    ),
+    ToolDefinition(
+        "cad_list_drivers",
+        "Probe local CAD software matrix: AutoCAD 2021-2026 (R24.0-R25.1), ZWCAD (中望), GstarCAD (浩辰), CAXA, and ODA File Converter.",
+        ListDriversArgs,
+        _handle_list_drivers,
+    ),
+    ToolDefinition(
+        "cad_verify_roundtrip",
+        "Verify lossless DWG <-> DXF structural equivalence (layers, user blocks, layouts, styles, entity counts, and extents).",
+        VerifyRoundTripArgs,
+        _handle_verify_roundtrip,
     ),
 )
 

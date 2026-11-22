@@ -111,8 +111,25 @@ def _parser() -> argparse.ArgumentParser:
     gen3d.add_argument('spec_path', type=Path)
     gen3d.add_argument('--out', type=Path, required=True, dest='output_dir')
     gen3d.add_argument('--with-2d-sheet', action='store_true', dest='with_2d_sheet')
+    gen3d.add_argument('--run-native-cad', action='store_true', dest='run_native_cad')
+    gen3d.add_argument('--driver', choices=('auto', 'autocad', 'zwcad', 'gstarcad'), default='auto', dest='driver_preference')
     gen3d.add_argument('--segments', type=int, default=64)
     gen3d.add_argument('--json', action='store_true', dest='as_json')
+
+    drivers_cmd = commands.add_parser('drivers', help='probe multi-version AutoCAD (2021-2026) and domestic CAD (ZWCAD/GstarCAD/CAXA/ODA) drivers')
+    drivers_cmd.add_argument('--autocad-path', type=Path, default=None)
+    drivers_cmd.add_argument('--zwcad-path', type=Path, default=None)
+    drivers_cmd.add_argument('--gstarcad-path', type=Path, default=None)
+    drivers_cmd.add_argument('--caxa-path', type=Path, default=None)
+    drivers_cmd.add_argument('--oda-path', type=Path, default=None)
+    drivers_cmd.add_argument('--json', action='store_true', dest='as_json')
+
+    rt_cmd = commands.add_parser('verify-roundtrip', help='verify lossless DWG <-> DXF structural equivalence across layers, blocks, layouts, styles, and entities')
+    rt_cmd.add_argument('before', type=Path)
+    rt_cmd.add_argument('after', type=Path)
+    rt_cmd.add_argument('--out', type=Path, default=None, dest='output_report')
+    rt_cmd.add_argument('--tolerance', type=float, default=0.5, dest='bbox_tolerance')
+    rt_cmd.add_argument('--json', action='store_true', dest='as_json')
 
     for name, help_text in (
         ("generate", "generate and audit core DXF and previews"),
@@ -150,6 +167,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _mcp_command(arguments)
     if arguments.command in {'validate-3d-spec', 'generate-3d'}:
         return _phase3_command(arguments)
+    if arguments.command in {'drivers', 'verify-roundtrip'}:
+        return _phase4_command(arguments)
 
     from .pipeline import PipelineInputError, PipelineOptions, run_task
     try:
@@ -341,6 +360,8 @@ def _phase3_command(arguments: argparse.Namespace) -> int:
             arguments.output_dir,
             with_2d_sheet=arguments.with_2d_sheet,
             circle_segments=arguments.segments,
+            run_native_cad=arguments.run_native_cad,
+            driver_preference=arguments.driver_preference,
         )
         result.pop("iso_png_path", None)
         payload = {"command": "generate-3d", **result}
@@ -351,6 +372,41 @@ def _phase3_command(arguments: argparse.Namespace) -> int:
         return 2
     except Exception as error:
         _write_error(f"3D generation/audit failure: {type(error).__name__}: {error}", arguments.as_json)
+        return 1
+
+
+def _phase4_command(arguments: argparse.Namespace) -> int:
+    try:
+        if arguments.command == "drivers":
+            from .cad_drivers.registry import probe_all_cad_drivers
+
+            matrix = probe_all_cad_drivers(
+                autocad_path=arguments.autocad_path,
+                zwcad_path=arguments.zwcad_path,
+                gstarcad_path=arguments.gstarcad_path,
+                caxa_path=arguments.caxa_path,
+                oda_path=arguments.oda_path,
+            )
+            payload = {"command": "drivers", **matrix}
+            print(_stable_json(payload) if arguments.as_json else json.dumps(payload, ensure_ascii=False, indent=2))
+            return 0
+
+        from .cad_drivers.roundtrip import verify_dxf_structural_equivalence
+
+        report = verify_dxf_structural_equivalence(
+            arguments.before,
+            arguments.after,
+            bbox_tolerance_mm=arguments.bbox_tolerance,
+            output_report_path=arguments.output_report,
+        )
+        payload = {"command": "verify-roundtrip", **report.to_dict()}
+        print(_stable_json(payload) if arguments.as_json else json.dumps(payload, ensure_ascii=False, indent=2))
+        return 0 if report.status == "passed" else 1
+    except (ValueError, TypeError, OSError) as error:
+        _write_error(f"user/validation error: {error}", arguments.as_json)
+        return 2
+    except Exception as error:
+        _write_error(f"CAD driver/roundtrip failure: {type(error).__name__}: {error}", arguments.as_json)
         return 1
 
 
