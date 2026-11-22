@@ -371,7 +371,8 @@ def compile_spec_from_fragments(
                             hole_count=hc,
                         ),
                         source_id=od.source_id,
-                        include_right_section=("right" in requested_views or not requested_views),
+                        include_right_section=(not requested_views or any(v in requested_views for v in ("left", "right", "top", "section-A"))),
+                        three_views=(not requested_views or "top" in requested_views or "left" in requested_views),
                     )
                     requested_views = built.views
                     entities_dump = [e.model_dump(mode="json") for e in built.entities]
@@ -389,7 +390,8 @@ def compile_spec_from_fragments(
                 built = build_stepped_shaft_geometry(
                     SteppedShaftParameters(steps=[(l, d) for l, d, _ in shaft_steps]),
                     source_id=shaft_steps[0][2],
-                    include_right_view=("right" in requested_views or not requested_views),
+                    include_right_view=(not requested_views or any(v in requested_views for v in ("left", "right", "top"))),
+                    three_views=(not requested_views or "top" in requested_views or "left" in requested_views),
                 )
                 requested_views = built.views
                 entities_dump = [e.model_dump(mode="json") for e in built.entities]
@@ -424,7 +426,8 @@ def compile_spec_from_fragments(
                         hole_inset=hi,
                     ),
                     source_id=w_p.source_id,
-                    include_top_view=("top" in requested_views or not requested_views),
+                    include_top_view=(not requested_views or any(v in requested_views for v in ("top", "left", "right"))),
+                    three_views=(not requested_views or "left" in requested_views or ("top" not in requested_views)),
                 )
                 requested_views = built.views
                 entities_dump = [e.model_dump(mode="json") for e in built.entities]

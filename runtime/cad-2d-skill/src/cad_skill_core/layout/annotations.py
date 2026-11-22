@@ -657,6 +657,10 @@ def _emit(modelspace: ezdxf.layouts.Modelspace, annotation: AnnotationLayout, pl
                 dimstyle="DIM",
                 dxfattribs={"layer": annotation.layer},
             )
+            min_v_span = 2.2 * plan.dimension_arrow_size_mm + len(annotation.text) * plan.dimension_text_height_mm * 0.75 + 3.0
+            if abs(y1 - y0) < min_v_span:
+                v_off = plan.dimension_arrow_size_mm * 1.8 + max(5.0, len(annotation.text) * plan.dimension_text_height_mm * 0.55)
+                dimension.set_location((x_line, max(y0, y1) + v_off), leader=False)
             dimension.render()
         elif annotation.dim_kind == "true_aligned":
             p1, p2 = annotation.points[0], annotation.points[1]
@@ -697,14 +701,22 @@ def _emit(modelspace: ezdxf.layouts.Modelspace, annotation: AnnotationLayout, pl
             )
             dimension.render()
         else:
+            p1_x = annotation.points[0][0]
+            p2_x = annotation.points[1][0]
+            y_ref = annotation.points[0][1]
+            y_dim = annotation.points[1][1]
             dimension = modelspace.add_aligned_dim(
-                annotation.points[0],
-                (annotation.points[1][0], annotation.points[0][1]),
-                annotation.points[1][1] - annotation.points[0][1],
+                (p1_x, y_ref),
+                (p2_x, y_ref),
+                y_dim - y_ref,
                 text=annotation.text,
                 dimstyle="DIM",
                 dxfattribs={"layer": annotation.layer},
             )
+            min_h_span = 2.2 * plan.dimension_arrow_size_mm + len(annotation.text) * plan.dimension_text_height_mm * 0.75 + 3.0
+            if abs(p2_x - p1_x) < min_h_span:
+                h_off = plan.dimension_arrow_size_mm * 1.8 + max(5.0, len(annotation.text) * plan.dimension_text_height_mm * 0.55)
+                dimension.set_location((max(p1_x, p2_x) + h_off, y_dim), leader=False)
             dimension.render()
     elif annotation.kind == "leader":
         modelspace.add_leader(annotation.points, dxfattribs={"layer": annotation.layer})

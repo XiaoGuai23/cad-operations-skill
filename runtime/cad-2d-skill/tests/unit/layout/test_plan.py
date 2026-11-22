@@ -1062,3 +1062,55 @@ def test_gbt_gridded_title_block_omits_empty_bom_on_part_and_grows_bom_bottom_up
     y3 = by_id["parts-3-item"].bounds.center[1]
     y_hdr = by_id["parts-column-item"].bounds.center[1]
     assert y1 < y2 < y3 < y_hdr
+
+
+def test_balanced_three_view_layout_places_front_upper_left_top_lower_left_and_left_upper_right():
+    from cad_skill_core.geometry.parametric import FlangeParameters, build_flange_geometry
+
+    standard = gb_profile()
+    part = build_flange_geometry(
+        FlangeParameters(
+            outer_diameter=140.0,
+            bore_diameter=48.0,
+            thickness=20.0,
+            bolt_circle_diameter=102.0,
+            hole_diameter=14.0,
+            hole_count=4,
+        ),
+        source_id="src",
+    )
+    assert part.views == ["front", "top", "left"]
+    assert len(part.dimensions) == 5
+
+    spec = DrawingSpec.model_validate(
+        {
+            "schema_version": "1.0",
+            "project": {"name": "连接法兰盘", "drawing_number": "FLG-2026-01", "drawing_type": "part"},
+            "standard": {"family": "GB/T", "units": "mm", "projection": "first-angle"},
+            "sheet": {"size": "A3", "orientation": "landscape", "scale": "1:2", "title_block_language": "zh"},
+            "requirements": {
+                "material": {"text": "45钢", "source_id": "src"},
+                "views": part.views,
+                "technical_notes": [{"text": "材料：45钢", "source_id": "src"}],
+            },
+            "geometry": {
+                "parameters": part.parameters,
+                "entities": [e.model_dump(mode="json") for e in part.entities],
+                "view_entity_indices": part.view_entity_indices,
+            },
+            "dimensions": part.dimensions,
+            "provenance": [{"id": "src", "file": "brief.md", "locator": "line 1", "confidence": 1.0}],
+        }
+    )
+
+    plan = plan_layout(spec, standard)
+    views = {v.name: v for v in plan.views}
+    # 1. Front view is lifted into upper-left, NOT slammed into bottom-left corner
+    assert views["front"].bounds.center[1] > plan.printable_bounds.center[1]
+    # 2. Top view is directly below front (长对正)
+    assert views["top"].bounds.min_x == pytest.approx(views["front"].bounds.min_x)
+    assert views["top"].bounds.max_y <= views["front"].bounds.min_y - standard.spacing.view_gap_mm
+    # 3. Left view sits in upper-right quadrant above title block & technical notes (高平齐)
+    assert views["left"].bounds.min_y == pytest.approx(views["front"].bounds.min_y)
+    assert views["left"].bounds.min_x >= plan.title_block_bounds.min_x
+    assert views["left"].bounds.min_y > plan.technical_note_bounds.max_y

@@ -205,13 +205,35 @@ def _place_views(spec: DrawingSpec, scale: Decimal, gap: float, printable: Bound
     sources = {name: _group_bounds(spec, group) for name, group in groups.items()}
     sizes = {name: _view_size(spec, name, sources[name], scale) for name in names}
     placed: dict[str, Bounds] = {}
+    front_right_pad = 14.0 * sum(
+        1 for d in spec.dimensions if (d.owner_view in {None, "front"}) and d.orientation == "vertical"
+    )
     if "front" in sizes:
         right_width = sizes.get("right", (0.0, 0.0))[0]
         right_left_pad = 10.0 if ("right" in sizes and any(d.owner_view == "right" for d in spec.dimensions)) else 0.0
         top_height = sizes.get("top", (0.0, 0.0))[1]
         balloon_margin = 8.0 * len(spec.parts_list) + 12.0 if spec.project.drawing_type == "assembly" and spec.parts_list and "right" not in sizes else (12.0 if any(d.orientation == "aligned" for d in spec.dimensions) else 0.0)
-        dimension_margin = 12.0 * len(spec.dimensions)
-        front = _bounds(printable.min_x + (right_left_pad + right_width + gap if "right" in sizes else balloon_margin), printable.min_y + (top_height + gap if "top" in sizes else 0.0) + dimension_margin, sizes["front"])
+        front_horiz_dims = sum(
+            1
+            for d in spec.dimensions
+            if (d.owner_view in {None, "front"}) and d.orientation in {None, "horizontal"}
+        )
+        top_horiz_dims = sum(
+            1
+            for d in spec.dimensions
+            if d.owner_view == "top" and d.orientation in {None, "horizontal"}
+        )
+        top_y_base = printable.min_y + 12.0 * top_horiz_dims
+        front_y_base = (
+            (top_y_base + top_height + gap + 12.0 * front_horiz_dims)
+            if "top" in sizes
+            else (printable.min_y + 12.0 * max(front_horiz_dims, len(spec.dimensions) if not any(d.owner_view for d in spec.dimensions) else 0))
+        )
+        front = _bounds(
+            printable.min_x + (right_left_pad + right_width + gap if "right" in sizes else balloon_margin),
+            front_y_base,
+            sizes["front"],
+        )
         if not _valid(front, protected, printable, gap):
             return None
         placed["front"] = front
@@ -221,23 +243,122 @@ def _place_views(spec: DrawingSpec, scale: Decimal, gap: float, printable: Bound
                 return None
             placed["right"] = right
         if "top" in sizes:
-            top_y = printable.min_y + (
-                12.0 * sum(1 for d in spec.dimensions if d.owner_view == "top" and d.orientation in {None, "horizontal"})
-                if any(d.owner_view == "top" for d in spec.dimensions)
-                else 0.0
-            )
-            top = _bounds(front.min_x, top_y, sizes["top"])
+            top = _bounds(front.min_x, top_y_base, sizes["top"])
             if not _valid(top, (*protected, *placed.values()), printable, gap):
                 return None
             placed["top"] = top
     for name in names:
         if name in placed:
             continue
-        candidate = next((item for item in (*_preferred(name, placed, sizes[name], gap), *_grid(printable, sizes[name], gap)) if _valid(item, (*protected, *placed.values()), printable, gap)), None)
+        candidate = next(
+            (
+                item
+                for item in (*_preferred(name, placed, sizes[name], gap, front_right_pad=front_right_pad), *_grid(printable, sizes[name], gap))
+                if _valid(item, (*protected, *placed.values()), printable, gap)
+            ),
+            None,
+        )
         if candidate is None:
             return None
         placed[name] = candidate
+
+    placed = _balance_placed_views(placed, spec, printable, protected, gap, front_right_pad)
     return tuple(_view_layout(name, placed[name], sources[name], exact_sources[name], groups[name], scale, language=spec.sheet.title_block_language) for name in names)
+
+
+def _balance_placed_views(
+    placed: dict[str, Bounds],
+    spec: DrawingSpec,
+    printable: Bounds,
+    protected: tuple[Bounds, ...],
+    gap: float,
+    front_right_pad: float,
+) -> dict[str, Bounds]:
+    """Lift and center the orthographic view group across the available sheet space."""
+    if not placed:
+        return placed
+
+    top_label_pad = 7.5
+    max_view_y = max(b.max_y for b in placed.values())
+    min_view_y = min(b.min_y for b in placed.values())
+    bottom_extra = 12.0 * max(
+        [
+            sum(1 for d in spec.dimensions if (d.owner_view == vname or (d.owner_view is None and vname == "front")) and d.orientation in {None, "horizontal"})
+            for vname in placed
+        ]
+        or [0]
+    )
+    visual_min_y = min_view_y - bottom_extra
+    visual_max_y = max_view_y + top_label_pad
+    dy_room = (printable.max_y - top_label_pad) - max_view_y
+    if dy_room > 2.0:
+        # Target slightly upper-centered sheet balance (like GB/T engineering blueprints)
+        sheet_target_cy = printable.min_y + printable.height * (0.56 if "top" not in placed else 0.52)
+        desired_dy = min(dy_room, max(0.0, sheet_target_cy - (visual_min_y + visual_max_y) / 2.0))
+        # Also test lifting high enough to clear the right-hand title/BOM stack so 'left' can sit in upper-right
+        stack_clear_dy = max(0.0, min(dy_room, max(z.max_y for z in protected) + gap - placed["front"].min_y)) if "front" in placed else 0.0
+        candidates_dy = sorted(
+            {
+                round(desired_dy * 2.0) / 2.0,
+                round(max(desired_dy, stack_clear_dy) * 2.0) / 2.0,
+                round(dy_room * 0.65 * 2.0) / 2.0,
+                round(dy_room * 0.4 * 2.0) / 2.0,
+            },
+            reverse=True,
+        )
+        for cand_dy in candidates_dy:
+            if cand_dy <= 1.0 or cand_dy > dy_room + 1e-9:
+                continue
+            shifted = {
+                k: Bounds(b.min_x, b.min_y + cand_dy, b.max_x, b.max_y + cand_dy)
+                for k, b in placed.items()
+            }
+            if _cluster_valid(shifted, protected, printable, gap):
+                placed = shifted
+                break
+
+    # Horizontal balancing: move left column away from raw left border & place 'left' cleanly in upper-right quadrant
+    if "front" in placed and "right" not in placed:
+        right_zone_min_x = min(z.min_x for z in protected)
+        left_col_avail_max_x = right_zone_min_x - gap - front_right_pad
+        cur_front = placed["front"]
+        if left_col_avail_max_x > cur_front.max_x + 8.0:
+            balloon_pad = (8.0 * len(spec.parts_list) + 12.0) if (spec.project.drawing_type == "assembly" and spec.parts_list) else 0.0
+            ideal_front_cx = (printable.min_x + balloon_pad + left_col_avail_max_x) / 2.0
+            want_dx = round(max(0.0, min(left_col_avail_max_x - cur_front.max_x, ideal_front_cx - cur_front.center[0])) * 2.0) / 2.0
+            if want_dx > 2.0:
+                shifted_x: dict[str, Bounds] = {}
+                for k, b in placed.items():
+                    shifted_x[k] = Bounds(b.min_x + want_dx, b.min_y, b.max_x + want_dx, b.max_y)
+                if _cluster_valid(shifted_x, protected, printable, gap):
+                    placed = shifted_x
+
+    # Spread 'left' (side view) into upper-right quadrant above title/BOM block when 高平齐 aligned with front
+    for side_key in ("left",):
+        if side_key in placed and "front" in placed and abs(placed[side_key].min_y - placed["front"].min_y) < 1e-6:
+            side_b = placed[side_key]
+            side_right_margin = 24.0  # room for narrow horizontal dimension text or vertical dim on left view
+            ur_min_x = max(placed["front"].max_x + gap + front_right_pad, min(z.min_x for z in protected))
+            ur_max_x = printable.max_x - side_right_margin
+            if ur_max_x - ur_min_x >= side_b.width:
+                target_sx = round(((ur_min_x + ur_max_x - side_b.width) / 2.0) * 2.0) / 2.0
+                if target_sx > side_b.min_x + 2.0:
+                    cand_side = Bounds(target_sx, side_b.min_y, target_sx + side_b.width, side_b.max_y)
+                    trial = dict(placed)
+                    trial[side_key] = cand_side
+                    if _cluster_valid(trial, protected, printable, gap):
+                        placed = trial
+
+    return placed
+
+
+def _cluster_valid(placed: dict[str, Bounds], protected: tuple[Bounds, ...], printable: Bounds, gap: float) -> bool:
+    items = list(placed.values())
+    for idx, b in enumerate(items):
+        others = (*protected, *items[:idx], *items[idx + 1 :])
+        if not _valid(b, others, printable, gap):
+            return False
+    return True
 
 
 def _entity_groups(spec: DrawingSpec, names: tuple[str, ...]) -> dict[str, tuple[int, ...]]:
@@ -421,10 +542,10 @@ def _bounds(x: float, y: float, size: tuple[float, float]) -> Bounds:
     if max_x <= x or max_y <= y:
         raise _ScaleRepresentationError("scaled view size is below sheet-coordinate precision")
     return Bounds(x, y, max_x, max_y)
-def _preferred(name: str, placed: dict[str, Bounds], size: tuple[float, float], gap: float) -> tuple[Bounds, ...]:
+def _preferred(name: str, placed: dict[str, Bounds], size: tuple[float, float], gap: float, *, front_right_pad: float = 0.0) -> tuple[Bounds, ...]:
     front = placed.get("front")
     if front is None: return ()
-    if name.startswith("section") or name == "left": return (_bounds(front.max_x + gap, front.min_y, size),)
+    if name.startswith("section") or name == "left": return (_bounds(front.max_x + gap + front_right_pad, front.min_y, size),)
     if name == "bottom": return (_bounds(front.min_x, front.max_y + gap, size),)
     return ()
 def _grid(printable: Bounds, size: tuple[float, float], gap: float) -> Iterable[Bounds]:
@@ -821,11 +942,18 @@ def _dimension_layout(
         cx = target_entity.center[0] * view.scale + view.translation[0]
         cy = target_entity.center[1] * view.scale + view.translation[1]
         r_sheet = target_entity.radius * view.scale
-        lane_key = (view.name, "radial")
-        radial_idx = lane_counts.get(lane_key, 0)
-        lane_counts[lane_key] = radial_idx + 1
-        angles = (35.0, 145.0, -35.0, -145.0, 65.0, 115.0)
-        angle_deg = angles[radial_idx % len(angles)]
+        dx_vc = cx - view.bounds.center[0]
+        dy_vc = cy - view.bounds.center[1]
+        if hypot(dx_vc, dy_vc) > 2.0:
+            # Off-center hole/boss: point leader tail strictly outward away from view center!
+            out_deg = degrees(atan2(dy_vc if abs(dy_vc) >= 1.0 else 0.45 * abs(dx_vc), dx_vc))
+            angle_deg = (out_deg + 180.0) % 360.0
+        else:
+            lane_key = (view.name, "radial")
+            radial_idx = lane_counts.get(lane_key, 0)
+            lane_counts[lane_key] = radial_idx + 1
+            angles = (25.0, 145.0, -35.0, -145.0, 65.0, 115.0)
+            angle_deg = angles[radial_idx % len(angles)]
         pad = max(r_sheet, standard.dimension.text_height_mm * 2.0)
         return AnnotationLayout(
             "dimension",
@@ -907,6 +1035,10 @@ def _dimension_layout(
     lane_counts[lane_key] = lane
     y = view.bounds.min_y - band * lane
     bx0, bx1 = (min(x0, x1), max(x0, x1)) if abs(x1 - x0) > 1e-6 else (x0 - 0.5, x0 + 0.5)
+    min_inside_span = 2.2 * standard.dimension.arrow_size_mm + len(label) * standard.dimension.text_height_mm * 0.75 + 3.0
+    if (bx1 - bx0) < min_inside_span:
+        extra_right = standard.dimension.arrow_size_mm * 1.8 + max(6.0, len(label) * standard.dimension.text_height_mm * 0.85)
+        bx1 = min(view.bounds.max_x + extra_right, bx1 + extra_right)
     return AnnotationLayout(
         "dimension",
         label,
