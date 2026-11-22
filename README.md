@@ -1,25 +1,27 @@
 # CAD Operations Skill
 
-面向 Codex 的 CAD 工作技能，包含机械图纸局部修订、可移动原生标注、交点分段、几何约束核验，以及电气主接线图、路面结构图和本地 CAD 操作指引。
+面向 AI Agent（Codex / Claude Code / Cursor / Antigravity）与工程自动化的 **二维 + 三维全闭环 CAD 智能制图、局部修订、质量核验与自动出图 Web 平台引擎**。
 
-## 能做什么
+---
 
-| 工作 | 工具与行为 |
+## 核心能力全景
+
+| 能力域 | 核心模块与工程行为 |
 | --- | --- |
-| 按批注修改现有图纸 | 绑定基线文件哈希，只修改指定对象；保留原件与修订证据 |
-| 平齐、接触、固定边延伸 | 用可检查的几何条件表达要求并核验保存结果 |
-| 可移动标注 | 保留原生 DIMENSION / MULTILEADER，支持移动、文字模式调整和尺寸重算 |
-| 圆弧与复合轮廓、显式尺寸同步 | `circular` 写 CIRCLE/ARC；`contour` 写含真实圆弧的闭合 LWPOLYLINE；支持独立几何的尺寸驱动和重测，以及有范围限制的圆角矩形参数函数；AutoCAD 实时约束尚未集成 |
-| 交点分段 | 对支持的几何对象按指定范围分段，保留剖面线和标注语义 |
-| 多轮批注 | 台账记录有效要求，后续修订自动重新核验 |
-| 关联图纸与样图 | 检查明确的跨图参数；等比例对照，区分画法参考与获授权的尺寸变更 |
-| 局部修改复核 | 比较前后图纸，检查邻域缝隙、重叠、剖面边界和文字碰撞候选 |
-| 预览 | 复用一次绘制生成局部 PNG 和矢量审阅 PDF；核验字体、字形和遮罩 |
-| 其他 CAD 工作 | 电气主接线图与路面结构图生成；AutoCAD、FreeCAD、SolidWorks 操作指引 |
+| **工程文档智能语义编译** | 自动读取 `.md` / `.txt` / `.csv` / `.tsv` / `.docx`（含合并单元格去重）/ `.pdf` 项目书与参数表，编译 `DrawingSpec`，自动拦截缺失尺寸（`missing`）与冲突参数（`conflicts`） |
+| **参考样图标准学习** | 自动扫描参考样图 DXF 的图层、颜色、线宽、字高、`DIMSTYLE` 与图幅，导出可复用的 `DrawingStandard` YAML |
+| **国标二维自动制图与防乱码/防重叠** | 真实几何特征绑定标注（水平/竖直/对齐/直径 `⌀`/半径 `R`/公差）、多视图“长对正/高平齐/宽相等”投影核验、基于 `fontTools` 真实字形宽度的二维避让修复与中文国标标题栏 |
+| **基线哈希锁定的局部原子改图** | 绑定原图 SHA-256，支持线段/圆弧/复合轮廓编辑、交点分段、原生可移动 `DIMENSION`/`MULTILEADER` 同步、`DocumentCheckpoint` 异常回滚与修改前后对比审阅 |
+| **三维参数化建模与 3D→2D 联动** | 零额外商业软件依赖构建水密流形（Watertight Manifold）三维实体（法兰盘、阶梯轴、腰形槽支架、拉伸多边形等），导出 `.stl` / `.obj` / `.glb` / `model3d.dxf` / `iso.png`，一键正交/剖视投影生成二维国标工程图，并独立重开回测输出 `audit-3d.json` |
+| **跨版本 AutoCAD 与国产 CAD 驱动层** | 支持 **AutoCAD 2021 (`R24.0`) – 2026 (`R25.1`)**、**中望 CAD（ZWCAD / `ZWCoConsole`）**、**浩辰 CAD（GstarCAD）**、**CAXA 电子图板** 与 **ODA File Converter** 的 Authenticode 签名校验发现、国标字体融合、受控脚本执行与 **DWG ↔ DXF 双向结构无损核验** |
+| **电气与道路行业专项出图** | 单母/分段/双母线变电站电气主接线图（`DXF`/`SVG`/`PDF`/`PNG` + 交叉审计）与道路沥青/水稳路面结构图（原生 `HATCH` + `DIMENSION`） |
+| **标准 MCP Server 与自动出图 Web 工作台** | 原生支持 MCP `stdio` 与 Streamable HTTP（暴露 14 个强校验 Tools + 4 个 Resources），内置子进程并发隔离异步队列（`/api/v1/jobs`）、API Key 鉴权、防 DXF 炸弹护栏，以及开箱即用的中文 **Web 智能自动出图工作台（`/studio`）** |
+
+---
 
 ## 安装
 
-机械修订运行工具要求 **Python 3.12**。下列命令以 Windows PowerShell 为例；安装位置已有同名 skill 时，先备份或在另一目录比较更新。
+运行工具要求 **Python 3.12**。下列命令以 Windows PowerShell 为例：
 
 ```powershell
 $skillPath = Join-Path $env:USERPROFILE '.codex/skills/cad-operations'
@@ -29,32 +31,51 @@ py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt -e './runtime/cad-2d-skill[dev]'
 ```
 
-在 Codex 中刷新技能或重启会话。命令行示例中的 `python` 应使用上述虚拟环境的解释器；可以先运行 `.\.venv\Scripts\Activate.ps1`，或直接使用解释器完整路径。保留 `runtime/cad-2d-skill` 的完整目录，其中的 `knowledge/` 和 `templates/` 也参与运行。
+保留 `runtime/cad-2d-skill` 的完整目录，其中的 `knowledge/` 和 `templates/` 参与运行。根目录是主 skill；`companion-skills/cad-2d-geometry/` 是可选的机械几何专用入口。
 
-根目录是主 skill；`companion-skills/cad-2d-geometry/` 是可选的机械几何专用入口，依赖本仓库主 skill 和同一运行环境。需要时将其复制为技能目录下的独立 `cad-2d-geometry` 文件夹。
+---
 
-## 快速试用
+## 快速启动：内置自动出图网站工作台（Web Studio）与 MCP Server
 
-以下示例生成合成测试图，不使用任何真实工程图纸：
+### 1. 启动可视化自动出图网站（支持二维预览 + 三维鼠标拖拽旋转检视）
 
 ```powershell
+$env:PYTHONPATH="runtime\cad-2d-skill\src"
+python -B -m cad_skill_core.cli mcp-http --host 127.0.0.1 --port 8765 --workspace output/mcp_workspace
+```
+
+启动后保持终端运行，用浏览器打开 **http://127.0.0.1:8765/studio** 即可在线解析项目书、一键生成国标二维机械图 / 三维模型（`.glb`/`.stl`/`.dxf`）+ 二维工程图 / 电气主接线图 / 路面结构图并下载产物。详细接口说明见 [MCP Server 与自动出图 Web 网关指南](references/mcp-server-guide.md)。
+
+### 2. 命令行核心工作流示例
+
+```powershell
+# 1) 从项目书编译二维规约 & 从样图学习图层/标注标准
+python -m cad_skill_core compile-spec examples/project_brief.md --out output/drawing-spec.json --json
+python -m cad_skill_core learn-standard sample.dxf --out output/custom-standard.yaml --json
+
+# 2) 三维水密建模 (.stl/.obj/.glb/model3d.dxf/iso.png) + 3D->2D 国标多视图工程图一键联动
+python -m cad_skill_core generate-3d model3d-spec.json --out output/part3d --with-2d-sheet --json
+
+# 3) 探测本机 AutoCAD (2021-2026) 与国产 CAD (中望/浩辰/CAXA/ODA) 驱动 & DWG<->DXF 往返无损校验
+python -m cad_skill_core drivers --json
+python -m cad_skill_core verify-roundtrip before.dxf after.dxf --json
+
+# 4) 现有 DXF 增量原子修订（先 dry-run 预演，再正式落盘）
 python -m cad_skill_core operations --json
 python examples/revision-tools/make_example.py output/revision-demo
 python -m cad_skill_core inventory output/revision-demo/baseline.dxf --json
 python -m cad_skill_core revise output/revision-demo/baseline.dxf output/revision-demo/plan.json --out output/revision-demo/revised --dry-run --json
 python -m cad_skill_core revise output/revision-demo/baseline.dxf output/revision-demo/plan.json --out output/revision-demo/revised --json
-```
 
-执行修订前阅读[修订工具说明](references/revision-tools.md)和[字段/API 合约](references/revision-tools-api.md)。`--out` 使用尚不存在的新目录。
-
-其他入口：
-
-```powershell
+# 5) 行业专项图纸与环境诊断
 python -m cad_skill_core doctor --cache output/cad-environment.json --json
-python -m cad_skill_core preview drawing.dxf --out output/review --pdf --json
 python scripts/make_main_sld.py examples/electrical_sld_spec.json --outdir output/sld --stem demo_sld
 python scripts/generate_pavement_cad_ezdxf.py examples/pavement_structure_spec.json --out output/pavement
 ```
+
+执行修订前可参阅[修订工具说明](references/revision-tools.md)和[字段/API 合约](references/revision-tools-api.md)。
+
+---
 
 ## 验证
 
@@ -65,24 +86,27 @@ python -m pytest tests -q -m 'not autocad'
 Pop-Location
 ```
 
-运行工具测试使用合成输入；原生 AutoCAD 探测测试默认在上述命令中排除。GitHub Actions 执行相同的公开包检查。测试通过不等于工程设计验收，也不代表原生软件中的夹点行为已验证。
+运行工具测试使用合成输入（970+ 自动化单测与端到端集成测试）。中文整图测试需要字体覆盖中文及 `⌀` 等工程符号；字体策略位于 `runtime/cad-2d-skill/knowledge/drawing-rules/font-policy.yaml`。GitHub Actions 在临时运行环境中下载并校验 [GNU Unifont 16.0.04](https://unifoundry.com/pub/unifont/unifont-16.0.04/font-builds/)，不会修改仓库默认策略或本机字体。
 
-中文整图测试需要字体覆盖中文及 `⌀` 等工程符号。字体策略位于 `runtime/cad-2d-skill/knowledge/drawing-rules/font-policy.yaml`。GitHub Actions 在临时运行环境中下载并校验 [GNU Unifont 16.0.04](https://unifoundry.com/pub/unifont/unifont-16.0.04/font-builds/)，使用专用测试字体策略；它不会修改仓库默认策略或你电脑上的字体。Unifont 使用其自身的[字体许可证](https://www.unifoundry.com/unifont/)，不包含在本仓库文件中。
+---
 
-## 目录
+## 目录结构
 
-- `SKILL.md`：按任务读取所需说明的入口。
-- `references/`：修订设计方法、标注、分段、批注台账、关联图、预览和本地 CAD 指引。
-- `runtime/cad-2d-skill/`：完整 Python 运行工具、模板、规则、合成示例和测试。
-- `scripts/`、`examples/`、`tests/`：电气/路面生成器及快速验证。
-- `companion-skills/cad-2d-geometry/`：可选机械几何技能。
+- `SKILL.md`：按任务路由所需说明的顶层入口。
+- `references/`：MCP 与 Web 网关指南、修订设计方法、标注、分段、批注台账、预览和本地 CAD 指引。
+- `runtime/cad-2d-skill/src/cad_skill_core/`：
+  - `documents/` & `standards/`：多格式工程文档编译器与样图标准学习器
+  - `geometry/`、`layout/`、`fonts/`、`rendering/`、`inspection/`：二维参数化几何、真实字宽防碰撞布局、确定性渲染与自动避让修复
+  - `revision/`：哈希绑定局部原子修订与前后对比审阅引擎
+  - `modeling3d/`：三维参数化水密网格内核、多格式导出器（STL/OBJ/GLB/3D-DXF）、3D→2D 投影器与三维质量验证器
+  - `cad_drivers/` & `autocad/`：AutoCAD 2021–2026 及国产 CAD（中望/浩辰/CAXA/ODA）安全驱动层与 DWG↔DXF 往返核验器
+  - `mcp/`：标准 MCP（`stdio` + HTTP）服务端、子进程隔离异步任务队列、安全鉴权与内置 Web Studio 工作台
+- `scripts/`、`examples/`、`tests/`：电气主接线图/路面结构图生成器及全链路烟雾测试。
 
-## 支持范围
+---
 
-修订工具直接编辑 DXF modelspace。DWG 读写、原生出图和交互验证需要可用的 CAD 软件；仓库不包含商业 CAD 软件或字体。共享预览生成的是审阅 PDF。需要原生 DWG、打印精度或联动夹点行为时，仍须在目标 CAD 中单独核验。
+## 支持范围与许可证
 
-运行工具内的受信任 AutoCAD 执行器目前针对 **AutoCAD 2023 / R24.2**；通过 `AUTOCAD_EXE` 和 `ACCORECONSOLE_EXE` 指定相应可执行文件。其他版本可参考[本地 CAD 指引](references/local-cad-environment.md)，不作为该执行器已验证的支持范围。
+修订与生成内核直接产出审计级 DXF/SVG/PNG/PDF/STL/OBJ/GLB；原生 DWG 转换、打印出图和原生实体建模需要本机安装受信任签名的 AutoCAD（2021–2026）、中望 CAD、浩辰 CAD 或 ODA 转换器，仓库本身不包含商业 CAD 软件或商业字体文件。
 
-## 来源与许可证
-
-原始 CAD Operations 技能来自 [2836048681/cad-operations-skill](https://github.com/2836048681/cad-operations-skill)，本仓库保留原有 [MIT 许可证](LICENSE)，并加入机械图纸修订与核验工具。运行工具中改编自 ezdxf 的代码及版权说明见 [THIRD_PARTY_NOTICES.md](runtime/cad-2d-skill/THIRD_PARTY_NOTICES.md)。
+原始 CAD Operations 技能来自 [2836048681/cad-operations-skill](https://github.com/2836048681/cad-operations-skill)，本仓库保留原有 [MIT 许可证](LICENSE)。运行工具中改编自 ezdxf 的代码及版权说明见 [THIRD_PARTY_NOTICES.md](runtime/cad-2d-skill/THIRD_PARTY_NOTICES.md)。
