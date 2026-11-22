@@ -515,10 +515,15 @@ def _write_extraction(paths: TaskPaths, fragments: list[object]) -> Path:
 
 
 def _resolve_fonts(spec: DrawingSpec, options: PipelineOptions) -> Mapping[str, ResolvedFont]:
+    from .cad_drivers.registry import discover_installed_cad_font_roots
+
     autocad_roots: list[Path] = []
     if options.autocad_path is not None:
         root = options.autocad_path.parent if options.autocad_path.suffix else options.autocad_path
         autocad_roots.append(root / "Fonts")
+    for extra_fonts in discover_installed_cad_font_roots():
+        if extra_fonts not in autocad_roots:
+            autocad_roots.append(extra_fonts)
     windows_root = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts"
     inventory = discover_fonts(
         build_font_search_roots(autocad_roots=autocad_roots, windows_roots=[windows_root])
