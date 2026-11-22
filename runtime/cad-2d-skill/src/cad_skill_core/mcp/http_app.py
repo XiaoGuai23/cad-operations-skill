@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
@@ -74,7 +75,7 @@ def _attach_download_urls(payload: dict[str, Any]) -> dict[str, Any]:
     enriched["artifacts"] = [
         {
             **art,
-            "download_url": f"/api/v1/tasks/{task_id}/artifacts/{art['name']}",
+            "download_url": f"/api/v1/tasks/{task_id}/artifacts/{quote(str(art['name']), safe='')}",
         }
         for art in payload.get("artifacts", [])
     ]

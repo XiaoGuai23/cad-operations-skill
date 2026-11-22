@@ -107,3 +107,70 @@ def test_studio_ui_drivers_and_concurrent_subprocess_async_jobs(tmp_path):
         assert cancel_done.json()["status"] == "completed"
     finally:
         app.state.job_manager.shutdown()
+
+
+def test_chinese_artifact_filename_and_studio_sld_pavement_presets_download_png(tmp_path):
+    app = create_mcp_http_app(tmp_path / "cn_art_ws")
+    client = TestClient(app)
+    try:
+        # 1. Pavement with Chinese title (produces 主干路沥青混凝土路面结构图.png)
+        pav_resp = client.post(
+            "/api/v1/tasks/generate",
+            json={
+                "domain": "pavement",
+                "spec": {
+                    "title": "主干路沥青混凝土路面结构图",
+                    "project": "市政主干道工程",
+                    "drawing_no": "LM-2026-01",
+                    "width": 10000,
+                    "vertical_exaggeration": 5,
+                    "layers": [
+                        {"name": "细粒式沥青混凝土", "material": "AC-13C", "thickness": 40, "note": "上面层"},
+                        {"name": "中粒式沥青混凝土", "material": "AC-20C", "thickness": 60, "note": "中面层"},
+                        {"name": "水泥稳定碎石基层", "material": "5% 水泥稳定碎石", "thickness": 200},
+                    ],
+                },
+            },
+        )
+        assert pav_resp.status_code == 200
+        pav_data = pav_resp.json()
+        png_art = next(a for a in pav_data["artifacts"] if a["name"].endswith(".png"))
+        assert "主干路沥青混凝土路面结构图" in png_art["name"]
+        dl_png = client.get(png_art["download_url"])
+        assert dl_png.status_code == 200
+        assert dl_png.content[:8] == b"\x89PNG\r\n\x1a\n"
+
+        # 2. Electrical SLD double-busbar preset
+        sld_resp = client.post(
+            "/api/v1/tasks/generate",
+            json={
+                "domain": "electrical_sld",
+                "spec": {
+                    "title": "110kV/35kV 变电站电气主接线图",
+                    "sheet": {"width_mm": 440, "height_mm": 317},
+                    "voltage_levels": [
+                        {
+                            "name": "110kV",
+                            "bus": "双母线",
+                            "feeders": ["110kV进线1", "110kV进线2"],
+                            "transformers": ["1#主变", "2#主变"],
+                            "pt": 2,
+                        },
+                        {
+                            "name": "35kV",
+                            "bus": "单母分段",
+                            "feeders": ["35kV出线1", "35kV出线2"],
+                            "pt": 2,
+                        },
+                    ],
+                },
+            },
+        )
+        assert sld_resp.status_code == 200
+        sld_png = next(a for a in sld_resp.json()["artifacts"] if a["name"].endswith(".png"))
+        dl_sld = client.get(sld_png["download_url"])
+        assert dl_sld.status_code == 200
+        assert dl_sld.content[:8] == b"\x89PNG\r\n\x1a\n"
+    finally:
+        app.state.job_manager.shutdown()
+
