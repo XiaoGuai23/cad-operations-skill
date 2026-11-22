@@ -46,13 +46,23 @@ D:\Python312\python.exe -B -m cad_skill_core.cli mcp-http --host 127.0.0.1 --por
 
 | 端点 | 方法 | 用途 |
 | :--- | :--- | :--- |
+| `/` 或 `/studio` | `GET` | 内置中文 **CAD 智能自动出图工作台（Web Studio）**（支持二维预览 + 三维拖拽交互检视） |
 | `/mcp` | `POST` | 标准 MCP Streamable HTTP JSON-RPC 2.0 接口 |
-| `/api/v1/health` | `GET` | 服务状态、协议版本、已注册工具数与沙箱路径 |
+| `/api/v1/health` | `GET` | 服务状态、协议版本、已注册工具数、鉴权开启状态与沙箱路径 |
+| `/api/v1/drivers` | `GET` | 本机 AutoCAD（2021–2026）与国产 CAD（中望/浩辰/CAXA/ODA）实时探测矩阵 |
 | `/api/v1/tasks/compile` | `POST` | 从项目书 Markdown / 参数表编译 `DrawingSpec` 并返回缺失与冲突项 |
-| `/api/v1/tasks/generate` | `POST` | 生成二维/三维图纸（`mechanical_2d` / `electrical_sld` / `pavement` / `model_3d`） |
+| `/api/v1/tasks/generate` | `POST` | 同步生成二维/三维图纸（`mechanical_2d` / `electrical_sld` / `pavement` / `model_3d`） |
 | `/api/v1/tasks/revise` | `POST` | 基于图元 Handle 与 SHA-256 指纹执行原子局部改图 |
 | `/api/v1/tasks/{task_id}` | `GET` | 查询任务状态、审计摘要与产物清单 |
 | `/api/v1/tasks/{task_id}/artifacts/{filename}` | `GET` | 安全下载 `.dxf` / `.svg` / `.png` / `.pdf` / `.stl` / `.obj` / `.glb` / `audit.json` |
+| `/api/v1/jobs` | `POST` / `GET` | 提交或列出 **独立子进程隔离的异步出图任务**（`queued` → `running` → `completed`） |
+| `/api/v1/jobs/{job_id}` | `GET` | 查询异步任务实时状态、耗时与结果 |
+| `/api/v1/jobs/{job_id}/cancel` | `POST` | 安全取消排队中或运行中的异步任务 |
+
+### 生产部署安全环境变量（可选）
+
+- `CAD_API_KEY`：设置后自动对 `/mcp` 与 `/api/v1/*` 启用常量时间 `Bearer <token>` / `X-API-Key` 鉴权（未设置时保持本地开发免密模式）。
+- `CAD_CORS_ORIGINS`：逗号分隔的允许跨域前端源列表（如 `http://localhost:3000`）。
 
 ---
 

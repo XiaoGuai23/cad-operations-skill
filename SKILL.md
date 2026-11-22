@@ -22,6 +22,7 @@ edit the current authoritative drawing; for new drawings use a validated spec.
 | Pavement / road layer sections | [Pavement workflow](references/pavement-structure-cad.md) |
 | SolidWorks parts, assemblies or drawings | [SolidWorks workflow](references/solidworks-mcp.md) |
 | Machine paths, MCP availability or setup | [Local environment](references/local-cad-environment.md) |
+| MCP Server (`stdio` / HTTP), Web Auto-Drafting Studio (`/studio`), 3D modeling & domestic CAD drivers | [MCP & Web Studio guide](references/mcp-server-guide.md) and [command examples](references/command-examples.md) |
 
 Read only the branch needed for the task. Existing command examples are in
 [command examples](references/command-examples.md); task-specific scripts remain
