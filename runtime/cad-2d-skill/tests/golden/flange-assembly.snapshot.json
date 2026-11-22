@@ -20,18 +20,19 @@
       "DIMENSION": 1,
       "HATCH": 1,
       "LEADER": 3,
-      "LINE": 6,
-      "LWPOLYLINE": 6,
-      "TEXT": 29
+      "LINE": 15,
+      "LWPOLYLINE": 5,
+      "TEXT": 31
     },
     "layer_entity_counts": {
       "CENTER": 5,
       "DIM": 7,
-      "FRAME": 4,
+      "FRAME": 3,
       "HATCH": 1,
       "HIDDEN": 2,
       "OUTLINE": 8,
-      "TEXT": 29
+      "TEXT": 31,
+      "THIN": 9
     },
     "version": "AC1032"
   },
@@ -112,9 +113,9 @@
         "label": "FRONT",
         "normalized_source_bounds_mm": [
           48.0,
-          24.0,
+          57.0,
           81.333333,
-          60.333333
+          93.333333
         ],
         "source_membership": [
           { "entity_index": 0, "source_id": "outer-diameter" },
@@ -139,9 +140,9 @@
         "label": "PART-DETAIL",
         "normalized_source_bounds_mm": [
           12.0,
-          92.0,
+          125.0,
           42.0,
-          98.0
+          131.0
         ],
         "source_membership": [
           { "entity_index": 10, "source_id": "thickness" },
@@ -159,9 +160,9 @@
         "label": "SECTION A-A",
         "normalized_source_bounds_mm": [
           12.0,
-          132.0,
+          165.0,
           38.666667,
-          144.666667
+          177.666667
         ],
         "source_membership": [
           { "entity_index": 14, "source_id": "section-profile" },
@@ -179,9 +180,9 @@
   "text": {
     "required_tokens": {
       "90°": true,
+      "DESCRIPTION": true,
       "FRONT": true,
       "PART-DETAIL": true,
-      "PARTS LIST": true,
       "SECTION A-A": true,
       "±0.10": true,
       "⌀100": true,
@@ -189,7 +190,8 @@
     },
     "style_entity_counts": {
       "DIM": 1,
-      "normal": 29
+      "normal": 30,
+      "title": 1
     }
   }
 }
