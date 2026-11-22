@@ -71,7 +71,7 @@ def test_spec_compiler_synthesizes_complete_flange_and_passes_full_pipeline(tmp_
     assert spec.requirements.material.text == "45钢"
     assert spec.validation.conflicts == []
     assert spec.validation.missing == []
-    assert set(spec.requirements.views) == {"front", "right"}
+    assert set(spec.requirements.views) == {"front", "top", "left"}
     assert any(d.tolerance_upper == pytest.approx(0.1) for d in spec.dimensions)
 
     result = run_task(task_dir, PipelineOptions(run_autocad=False))
@@ -83,7 +83,8 @@ def test_spec_compiler_synthesizes_complete_flange_and_passes_full_pipeline(tmp_
     all_texts = [e.dxf.text for e in reopened.modelspace().query("TEXT")]
     assert "图名" in all_texts
     assert "主视图" in all_texts
-    assert "右视图" in all_texts
+    assert "俯视图" in all_texts
+    assert "左视图" in all_texts
 
 
 def test_spec_compiler_detects_parameter_and_material_conflicts(tmp_path):
