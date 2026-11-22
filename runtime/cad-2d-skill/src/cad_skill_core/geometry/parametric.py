@@ -205,27 +205,251 @@ def build_flange_geometry(
     include_right_section: bool = True,
     three_views: bool = True,
 ) -> ParametricPartResult:
-    """Build standard GB/T three views (front, top, left-section) for a flange."""
+    """Build standard GB/T flat-laid three views for a flange:
+    - front (主视图, upper-left): horizontal full-section elevation (width=OD, height=thickness)
+    - top   (俯视图, lower-left): circular plan view with pitch circle & bolt holes (长对正)
+    - left  (左视图, upper-right): horizontal side elevation (高平齐 & 宽相等)
+    """
 
     r_out = params.outer_diameter / 2.0
     r_bore = params.bore_diameter / 2.0
     th = params.thickness
+    ext = r_out * 1.06
     entities: list[DrawingEntity] = []
-    front_indices: list[int] = []
     dims: list[dict[str, Any]] = []
 
-    def add_front(ent: DrawingEntity) -> int:
+    if include_right_section and three_views:
+        front_indices: list[int] = []
+        top_indices: list[int] = []
+        left_indices: list[int] = []
+
+        def add_front(ent: DrawingEntity) -> int:
+            idx = len(entities)
+            entities.append(ent)
+            front_indices.append(idx)
+            return idx
+
+        def add_top(ent: DrawingEntity) -> int:
+            idx = len(entities)
+            entities.append(ent)
+            top_indices.append(idx)
+            return idx
+
+        def add_left(ent: DrawingEntity) -> int:
+            idx = len(entities)
+            entities.append(ent)
+            left_indices.append(idx)
+            return idx
+
+        # 1. Front View (主视图 全剖: width = 2*r_out, height = th)
+        sec_front_idx = add_front(
+            PolylineEntity(
+                kind="polyline",
+                layer="OUTLINE",
+                vertices=[(-r_out, 0.0), (r_out, 0.0), (r_out, th), (-r_out, th)],
+                closed=True,
+                source_id=source_id,
+            )
+        )
+        add_front(LineEntity(kind="line", layer="CENTER", start=(0.0, -2.0), end=(0.0, th + 2.0), source_id=source_id))
+
+        has_sec_holes = bool(params.hole_count >= 2 and params.bolt_circle_diameter and params.hole_diameter)
+        r_bcd = (params.bolt_circle_diameter or 0.0) / 2.0
+        r_hole = (params.hole_diameter or 0.0) / 2.0
+
+        if r_bore > 0:
+            add_front(LineEntity(kind="line", layer="OUTLINE", start=(-r_bore, 0.0), end=(-r_bore, th), source_id=source_id))
+            add_front(LineEntity(kind="line", layer="OUTLINE", start=(r_bore, 0.0), end=(r_bore, th), source_id=source_id))
+
+        if has_sec_holes:
+            for sign in (-1.0, 1.0):
+                hc_x = sign * r_bcd
+                add_front(LineEntity(kind="line", layer="OUTLINE", start=(hc_x - r_hole, 0.0), end=(hc_x - r_hole, th), source_id=source_id))
+                add_front(LineEntity(kind="line", layer="OUTLINE", start=(hc_x + r_hole, 0.0), end=(hc_x + r_hole, th), source_id=source_id))
+                add_front(LineEntity(kind="line", layer="CENTER", start=(hc_x, -1.8), end=(hc_x, th + 1.8), source_id=source_id))
+            pitch_span_idx = add_front(
+                LineEntity(kind="line", layer="CENTER", start=(-r_bcd, 0.0), end=(r_bcd, 0.0), source_id=source_id)
+            )
+            # Hatch the 4 solid metal segments (or 3 if r_bore == 0)
+            add_front(HatchEntity(kind="hatch", layer="HATCH", boundary=[(-r_out, 0.0), (-r_bcd - r_hole, 0.0), (-r_bcd - r_hole, th), (-r_out, th)], pattern="ANSI31", source_id=source_id))
+            add_front(HatchEntity(kind="hatch", layer="HATCH", boundary=[(r_bcd + r_hole, 0.0), (r_out, 0.0), (r_out, th), (r_bcd + r_hole, th)], pattern="ANSI31", source_id=source_id))
+            if r_bore > 0:
+                add_front(HatchEntity(kind="hatch", layer="HATCH", boundary=[(-r_bcd + r_hole, 0.0), (-r_bore, 0.0), (-r_bore, th), (-r_bcd + r_hole, th)], pattern="ANSI31", source_id=source_id))
+                add_front(HatchEntity(kind="hatch", layer="HATCH", boundary=[(r_bore, 0.0), (r_bcd - r_hole, 0.0), (r_bcd - r_hole, th), (r_bore, th)], pattern="ANSI31", source_id=source_id))
+            else:
+                add_front(HatchEntity(kind="hatch", layer="HATCH", boundary=[(-r_bcd + r_hole, 0.0), (r_bcd - r_hole, 0.0), (r_bcd - r_hole, th), (-r_bcd + r_hole, th)], pattern="ANSI31", source_id=source_id))
+            dims.append(
+                {
+                    "kind": "diameter",
+                    "value": params.bolt_circle_diameter,
+                    "source_id": source_id,
+                    "owner_view": "front",
+                    "target_entity_index": pitch_span_idx,
+                    "orientation": "horizontal",
+                    "prefix": "⌀",
+                }
+            )
+        else:
+            if r_bore > 0:
+                add_front(HatchEntity(kind="hatch", layer="HATCH", boundary=[(-r_out, 0.0), (-r_bore, 0.0), (-r_bore, th), (-r_out, th)], pattern="ANSI31", source_id=source_id))
+                add_front(HatchEntity(kind="hatch", layer="HATCH", boundary=[(r_bore, 0.0), (r_out, 0.0), (r_out, th), (r_bore, th)], pattern="ANSI31", source_id=source_id))
+            else:
+                add_front(HatchEntity(kind="hatch", layer="HATCH", boundary=[(-r_out, 0.0), (r_out, 0.0), (r_out, th), (-r_out, th)], pattern="ANSI31", source_id=source_id))
+
+        dims.append(
+            {
+                "kind": "linear",
+                "value": th,
+                "source_id": source_id,
+                "owner_view": "front",
+                "target_entity_index": sec_front_idx,
+                "orientation": "vertical",
+            }
+        )
+
+        # 2. Top View (俯视图: circular plan view below front, width = 2*r_out 长对正!)
+        outer_top_idx = add_top(
+            CircularEntity(kind="circular", layer="OUTLINE", center=(0.0, 0.0), radius=r_out, source_id=source_id)
+        )
+        if r_bore > 0:
+            bore_top_idx = add_top(
+                CircularEntity(kind="circular", layer="OUTLINE", center=(0.0, 0.0), radius=r_bore, source_id=source_id)
+            )
+            dims.append(
+                {
+                    "kind": "diameter",
+                    "value": params.bore_diameter,
+                    "source_id": source_id,
+                    "owner_view": "top",
+                    "target_entity_index": bore_top_idx,
+                    "orientation": "diameter",
+                }
+            )
+        add_top(LineEntity(kind="line", layer="CENTER", start=(-ext, 0.0), end=(ext, 0.0), source_id=source_id))
+        add_top(LineEntity(kind="line", layer="CENTER", start=(0.0, -ext), end=(0.0, ext), source_id=source_id))
+
+        hole_ys: list[float] = []
+        first_hole_idx: int | None = None
+        if params.hole_count > 0 and params.bolt_circle_diameter and params.hole_diameter:
+            add_top(
+                CircularEntity(kind="circular", layer="CENTER", center=(0.0, 0.0), radius=r_bcd, source_id=source_id)
+            )
+            for k in range(params.hole_count):
+                ang = 2.0 * pi * k / params.hole_count
+                hx = round(r_bcd * cos(ang), 6)
+                hy = round(r_bcd * sin(ang), 6)
+                hole_ys.append(hy)
+                h_idx = add_top(
+                    CircularEntity(kind="circular", layer="OUTLINE", center=(hx, hy), radius=r_hole, source_id=source_id)
+                )
+                if first_hole_idx is None:
+                    first_hole_idx = h_idx
+            if first_hole_idx is not None:
+                hole_prefix = f"{params.hole_count}×⌀" if params.hole_count > 1 else "⌀"
+                dims.append(
+                    {
+                        "kind": "diameter",
+                        "value": params.hole_diameter,
+                        "source_id": source_id,
+                        "owner_view": "top",
+                        "target_entity_index": first_hole_idx,
+                        "orientation": "diameter",
+                        "prefix": hole_prefix,
+                    }
+                )
+                if params.hole_count == 1:
+                    dims.append(
+                        {
+                            "kind": "diameter",
+                            "value": params.bolt_circle_diameter,
+                            "source_id": source_id,
+                            "owner_view": "front",
+                            "target_entity_index": sec_front_idx,
+                            "orientation": "horizontal",
+                        }
+                    )
+
+        dims.append(
+            {
+                "kind": "diameter",
+                "value": params.outer_diameter,
+                "source_id": source_id,
+                "owner_view": "top",
+                "target_entity_index": outer_top_idx,
+                "orientation": "horizontal",
+                "prefix": "⌀",
+            }
+        )
+
+        # 3. Left View (左视图: side elevation upper-right, width = 2*r_out 宽相等, height = th 高平齐!)
+        left_box_idx = add_left(
+            PolylineEntity(
+                kind="polyline",
+                layer="OUTLINE",
+                vertices=[(-r_out, 0.0), (r_out, 0.0), (r_out, th), (-r_out, th)],
+                closed=True,
+                source_id=source_id,
+            )
+        )
+        add_left(LineEntity(kind="line", layer="CENTER", start=(0.0, -2.0), end=(0.0, th + 2.0), source_id=source_id))
+        if r_bore > 0:
+            add_left(LineEntity(kind="line", layer="HIDDEN", start=(-r_bore, 0.0), end=(-r_bore, th), source_id=source_id))
+            add_left(LineEntity(kind="line", layer="HIDDEN", start=(r_bore, 0.0), end=(r_bore, th), source_id=source_id))
+        if params.hole_count > 0 and params.hole_diameter:
+            for hy_u in sorted({round(v, 4) for v in hole_ys if abs(v) > 1e-3}):
+                add_left(LineEntity(kind="line", layer="HIDDEN", start=(hy_u - r_hole, 0.0), end=(hy_u - r_hole, th), source_id=source_id))
+                add_left(LineEntity(kind="line", layer="HIDDEN", start=(hy_u + r_hole, 0.0), end=(hy_u + r_hole, th), source_id=source_id))
+        dims.append(
+            {
+                "kind": "diameter",
+                "value": params.outer_diameter,
+                "source_id": source_id,
+                "owner_view": "left",
+                "target_entity_index": left_box_idx,
+                "orientation": "horizontal",
+                "prefix": "⌀",
+            }
+        )
+
+        return ParametricPartResult(
+            views=["front", "top", "left"],
+            entities=entities,
+            view_entity_indices={"front": front_indices, "top": top_indices, "left": left_indices},
+            dimensions=dims,
+            parameters={
+                "part_family": "flange",
+                "outer_diameter_mm": params.outer_diameter,
+                "bore_diameter_mm": params.bore_diameter,
+                "thickness_mm": params.thickness,
+                "hole_count": params.hole_count,
+            },
+        )
+
+    # Legacy 1-view or 2-view fallback when include_right_section=False or three_views=False
+    front_indices = []
+
+    def add_front_legacy(ent: DrawingEntity) -> int:
         idx = len(entities)
         entities.append(ent)
         front_indices.append(idx)
         return idx
 
-    outer_idx = add_front(
+    outer_idx = add_front_legacy(
         CircularEntity(kind="circular", layer="OUTLINE", center=(0.0, 0.0), radius=r_out, source_id=source_id)
     )
-
+    dims.append(
+        {
+            "kind": "diameter",
+            "value": params.outer_diameter,
+            "source_id": source_id,
+            "owner_view": "front",
+            "target_entity_index": outer_idx,
+            "orientation": "horizontal",
+            "prefix": "⌀",
+        }
+    )
     if r_bore > 0:
-        bore_idx = add_front(
+        bore_idx = add_front_legacy(
             CircularEntity(kind="circular", layer="OUTLINE", center=(0.0, 0.0), radius=r_bore, source_id=source_id)
         )
         dims.append(
@@ -238,190 +462,44 @@ def build_flange_geometry(
                 "orientation": "diameter",
             }
         )
-
-    # Orthogonal centerlines
-    ext = r_out * 1.08
-    add_front(LineEntity(kind="line", layer="CENTER", start=(-ext, 0.0), end=(ext, 0.0), source_id=source_id))
-    add_front(LineEntity(kind="line", layer="CENTER", start=(0.0, -ext), end=(0.0, ext), source_id=source_id))
-
-    first_hole_idx: int | None = None
-    bcd_idx: int | None = None
-    hole_xs: list[float] = []
+    add_front_legacy(LineEntity(kind="line", layer="CENTER", start=(-ext, 0.0), end=(ext, 0.0), source_id=source_id))
+    add_front_legacy(LineEntity(kind="line", layer="CENTER", start=(0.0, -ext), end=(0.0, ext), source_id=source_id))
     if params.hole_count > 0 and params.bolt_circle_diameter and params.hole_diameter:
         r_bcd = params.bolt_circle_diameter / 2.0
         r_hole = params.hole_diameter / 2.0
-        bcd_idx = add_front(
+        add_front_legacy(
             CircularEntity(kind="circular", layer="CENTER", center=(0.0, 0.0), radius=r_bcd, source_id=source_id)
         )
+        first_h: int | None = None
         for k in range(params.hole_count):
             ang = 2.0 * pi * k / params.hole_count
-            hx = round(r_bcd * cos(ang), 6)
-            hy = round(r_bcd * sin(ang), 6)
-            hole_xs.append(hx)
-            h_idx = add_front(
+            h_i = add_front_legacy(
                 CircularEntity(
                     kind="circular",
                     layer="OUTLINE",
-                    center=(hx, hy),
+                    center=(round(r_bcd * cos(ang), 6), round(r_bcd * sin(ang), 6)),
                     radius=r_hole,
                     source_id=source_id,
                 )
             )
-            if first_hole_idx is None:
-                first_hole_idx = h_idx
-
-        dims.append(
-            {
-                "kind": "diameter",
-                "value": params.bolt_circle_diameter,
-                "source_id": source_id,
-                "owner_view": "front",
-                "target_entity_index": bcd_idx,
-                "orientation": "horizontal",
-                "prefix": "⌀",
-            }
-        )
-        if first_hole_idx is not None:
-            hole_prefix = f"{params.hole_count}×⌀" if params.hole_count > 1 else "⌀"
+            if first_h is None:
+                first_h = h_i
+        if first_h is not None:
             dims.append(
                 {
                     "kind": "diameter",
                     "value": params.hole_diameter,
                     "source_id": source_id,
                     "owner_view": "front",
-                    "target_entity_index": first_hole_idx,
+                    "target_entity_index": first_h,
                     "orientation": "diameter",
-                    "prefix": hole_prefix,
+                    "prefix": f"{params.hole_count}×⌀" if params.hole_count > 1 else "⌀",
                 }
             )
 
     views = ["front"]
     view_map: dict[str, list[int]] = {"front": front_indices}
-
-    if not include_right_section:
-        dims.insert(
-            0,
-            {
-                "kind": "diameter",
-                "value": params.outer_diameter,
-                "source_id": source_id,
-                "owner_view": "front",
-                "target_entity_index": outer_idx,
-                "orientation": "horizontal",
-                "prefix": "⌀",
-            },
-        )
-    elif three_views:
-        # Top view (俯视图: width == 2*r_out 长对正 with front, height == thickness 宽相等 with left)
-        top_indices: list[int] = []
-
-        def add_top(ent: DrawingEntity) -> int:
-            idx = len(entities)
-            entities.append(ent)
-            top_indices.append(idx)
-            return idx
-
-        top_box_idx = add_top(
-            PolylineEntity(
-                kind="polyline",
-                layer="OUTLINE",
-                vertices=[(-r_out, 0.0), (r_out, 0.0), (r_out, th), (-r_out, th)],
-                closed=True,
-                source_id=source_id,
-            )
-        )
-        add_top(LineEntity(kind="line", layer="CENTER", start=(0.0, -2.0), end=(0.0, th + 2.0), source_id=source_id))
-        if r_bore > 0:
-            add_top(LineEntity(kind="line", layer="HIDDEN", start=(-r_bore, 0.0), end=(-r_bore, th), source_id=source_id))
-            add_top(LineEntity(kind="line", layer="HIDDEN", start=(r_bore, 0.0), end=(r_bore, th), source_id=source_id))
-        if params.hole_count > 0 and params.hole_diameter:
-            r_hole = params.hole_diameter / 2.0
-            for hx_u in sorted({round(v, 4) for v in hole_xs if abs(v) > 1e-3}):
-                add_top(LineEntity(kind="line", layer="HIDDEN", start=(hx_u - r_hole, 0.0), end=(hx_u - r_hole, th), source_id=source_id))
-                add_top(LineEntity(kind="line", layer="HIDDEN", start=(hx_u + r_hole, 0.0), end=(hx_u + r_hole, th), source_id=source_id))
-
-        views.append("top")
-        view_map["top"] = top_indices
-        dims.append(
-            {
-                "kind": "diameter",
-                "value": params.outer_diameter,
-                "source_id": source_id,
-                "owner_view": "top",
-                "target_entity_index": top_box_idx,
-                "orientation": "horizontal",
-                "prefix": "⌀",
-            }
-        )
-
-        # Left full-section view (左视图 全剖: placed upper-right, height == 2*r_out 高平齐 with front!)
-        left_indices: list[int] = []
-
-        def add_left(ent: DrawingEntity) -> int:
-            idx = len(entities)
-            entities.append(ent)
-            left_indices.append(idx)
-            return idx
-
-        sec_idx = add_left(
-            PolylineEntity(
-                kind="polyline",
-                layer="OUTLINE",
-                vertices=[(0.0, -r_out), (th, -r_out), (th, r_out), (0.0, r_out)],
-                closed=True,
-                source_id=source_id,
-            )
-        )
-        if r_bore > 0:
-            add_left(LineEntity(kind="line", layer="OUTLINE", start=(0.0, r_bore), end=(th, r_bore), source_id=source_id))
-            add_left(LineEntity(kind="line", layer="OUTLINE", start=(0.0, -r_bore), end=(th, -r_bore), source_id=source_id))
-            add_left(
-                HatchEntity(
-                    kind="hatch",
-                    layer="HATCH",
-                    boundary=[(0.0, r_bore), (th, r_bore), (th, r_out), (0.0, r_out)],
-                    pattern="ANSI31",
-                    source_id=source_id,
-                )
-            )
-            add_left(
-                HatchEntity(
-                    kind="hatch",
-                    layer="HATCH",
-                    boundary=[(0.0, -r_out), (th, -r_out), (th, -r_bore), (0.0, -r_bore)],
-                    pattern="ANSI31",
-                    source_id=source_id,
-                )
-            )
-        else:
-            add_left(
-                HatchEntity(
-                    kind="hatch",
-                    layer="HATCH",
-                    boundary=[(0.0, -r_out), (th, -r_out), (th, r_out), (0.0, r_out)],
-                    pattern="ANSI31",
-                    source_id=source_id,
-                )
-            )
-        add_left(LineEntity(kind="line", layer="CENTER", start=(-2.0, 0.0), end=(th + 2.0, 0.0), source_id=source_id))
-        if params.hole_count >= 2 and params.bolt_circle_diameter:
-            r_bcd = params.bolt_circle_diameter / 2.0
-            add_left(LineEntity(kind="line", layer="CENTER", start=(-1.5, r_bcd), end=(th + 1.5, r_bcd), source_id=source_id))
-            add_left(LineEntity(kind="line", layer="CENTER", start=(-1.5, -r_bcd), end=(th + 1.5, -r_bcd), source_id=source_id))
-
-        views.append("left")
-        view_map["left"] = left_indices
-        dims.append(
-            {
-                "kind": "linear",
-                "value": th,
-                "source_id": source_id,
-                "owner_view": "left",
-                "target_entity_index": sec_idx,
-                "orientation": "horizontal",
-            }
-        )
-    else:
+    if include_right_section:
         sec_indices: list[int] = []
 
         def add_sec(ent: DrawingEntity) -> int:
@@ -442,49 +520,13 @@ def build_flange_geometry(
         if r_bore > 0:
             add_sec(LineEntity(kind="line", layer="OUTLINE", start=(0.0, r_bore), end=(th, r_bore), source_id=source_id))
             add_sec(LineEntity(kind="line", layer="OUTLINE", start=(0.0, -r_bore), end=(th, -r_bore), source_id=source_id))
-            add_sec(
-                HatchEntity(
-                    kind="hatch",
-                    layer="HATCH",
-                    boundary=[(0.0, r_bore), (th, r_bore), (th, r_out), (0.0, r_out)],
-                    pattern="ANSI31",
-                    source_id=source_id,
-                )
-            )
-            add_sec(
-                HatchEntity(
-                    kind="hatch",
-                    layer="HATCH",
-                    boundary=[(0.0, -r_out), (th, -r_out), (th, -r_bore), (0.0, -r_bore)],
-                    pattern="ANSI31",
-                    source_id=source_id,
-                )
-            )
+            add_sec(HatchEntity(kind="hatch", layer="HATCH", boundary=[(0.0, r_bore), (th, r_bore), (th, r_out), (0.0, r_out)], pattern="ANSI31", source_id=source_id))
+            add_sec(HatchEntity(kind="hatch", layer="HATCH", boundary=[(0.0, -r_out), (th, -r_out), (th, -r_bore), (0.0, -r_bore)], pattern="ANSI31", source_id=source_id))
         else:
-            add_sec(
-                HatchEntity(
-                    kind="hatch",
-                    layer="HATCH",
-                    boundary=[(0.0, -r_out), (th, -r_out), (th, r_out), (0.0, r_out)],
-                    pattern="ANSI31",
-                    source_id=source_id,
-                )
-            )
+            add_sec(HatchEntity(kind="hatch", layer="HATCH", boundary=[(0.0, -r_out), (th, -r_out), (th, r_out), (0.0, r_out)], pattern="ANSI31", source_id=source_id))
         add_sec(LineEntity(kind="line", layer="CENTER", start=(-2.0, 0.0), end=(th + 2.0, 0.0), source_id=source_id))
         views.append("right")
         view_map["right"] = sec_indices
-        dims.insert(
-            0,
-            {
-                "kind": "diameter",
-                "value": params.outer_diameter,
-                "source_id": source_id,
-                "owner_view": "front",
-                "target_entity_index": outer_idx,
-                "orientation": "horizontal",
-                "prefix": "⌀",
-            },
-        )
         dims.append(
             {
                 "kind": "linear",
@@ -763,12 +805,156 @@ def build_slotted_bracket_geometry(
     source_id: str = "bracket",
     include_top_view: bool = True,
     three_views: bool = True,
+    flat_orientation: bool = False,
 ) -> ParametricPartResult:
     """Build standard GB/T three views (front, top, left) for a slotted bracket plate."""
 
     entities: list[DrawingEntity] = []
-    front_indices: list[int] = []
     dims: list[dict[str, Any]] = []
+    sr = params.slot_width / 2.0
+    half_straight = (params.slot_length - params.slot_width) / 2.0
+
+    if flat_orientation and include_top_view and three_views:
+        # Z-up flat-laid bracket:
+        # - front (主视图): width x thickness front elevation with hidden slot & hole walls
+        # - top   (俯视图): width x height rounded plate plan with central slot & 4 holes (长对正)
+        # - left  (左视图): height x thickness side elevation (高平齐 & 宽相等)
+        front_indices: list[int] = []
+        top_indices: list[int] = []
+        left_indices: list[int] = []
+
+        f_box = len(entities)
+        front_indices.append(f_box)
+        entities.append(
+            PolylineEntity(
+                kind="polyline",
+                layer="OUTLINE",
+                vertices=[(-params.width / 2.0, 0.0), (params.width / 2.0, 0.0), (params.width / 2.0, params.thickness), (-params.width / 2.0, params.thickness)],
+                closed=True,
+                source_id=source_id,
+            )
+        )
+        front_indices.append(len(entities))
+        entities.append(LineEntity(kind="line", layer="CENTER", start=(0.0, -1.8), end=(0.0, params.thickness + 1.8), source_id=source_id))
+        for sx in (-params.slot_length / 2.0, params.slot_length / 2.0):
+            front_indices.append(len(entities))
+            entities.append(LineEntity(kind="line", layer="HIDDEN", start=(sx, 0.0), end=(sx, params.thickness), source_id=source_id))
+        if params.hole_diameter is not None:
+            hx = params.width / 2.0 - params.hole_inset
+            hr = params.hole_diameter / 2.0
+            for sx in (-hx, hx):
+                for dx_h in (-hr, hr):
+                    front_indices.append(len(entities))
+                    entities.append(LineEntity(kind="line", layer="HIDDEN", start=(sx + dx_h, 0.0), end=(sx + dx_h, params.thickness), source_id=source_id))
+
+        # Top view (俯视图): rounded plate contour + obround slot + 4 corner holes
+        plate_top_idx = len(entities)
+        top_indices.append(plate_top_idx)
+        entities.append(
+            rounded_rectangle(
+                RoundedRectangleParameters(
+                    width=params.width,
+                    height=params.height,
+                    radius=params.corner_radius,
+                    origin=(-params.width / 2.0, -params.height / 2.0),
+                ),
+                layer="OUTLINE",
+                source_id=source_id,
+            )
+        )
+        slot_contour_f = ContourEntity(
+            kind="contour",
+            layer="OUTLINE",
+            require_tangent=True,
+            segments=[
+                ContourLineSegment(kind="line", start=(-half_straight, -sr), end=(half_straight, -sr)),
+                ContourArcSegment(kind="arc", center=(half_straight, 0.0), radius=sr, start_angle=-90.0, sweep=180.0),
+                ContourLineSegment(kind="line", start=(half_straight, sr), end=(-half_straight, sr)),
+                ContourArcSegment(kind="arc", center=(-half_straight, 0.0), radius=sr, start_angle=90.0, sweep=180.0),
+            ],
+            source_id=source_id,
+        )
+        compile_contour(slot_contour_f)
+        slot_top_idx = len(entities)
+        top_indices.append(slot_top_idx)
+        entities.append(slot_contour_f)
+        top_indices.append(len(entities))
+        entities.append(LineEntity(kind="line", layer="CENTER", start=(-params.width * 0.54, 0.0), end=(params.width * 0.54, 0.0), source_id=source_id))
+        top_indices.append(len(entities))
+        entities.append(LineEntity(kind="line", layer="CENTER", start=(0.0, -params.height * 0.54), end=(0.0, params.height * 0.54), source_id=source_id))
+
+        tr_hole_idx: int | None = None
+        if params.hole_diameter is not None:
+            hx = params.width / 2.0 - params.hole_inset
+            hy = params.height / 2.0 - params.hole_inset
+            hr = params.hole_diameter / 2.0
+            for sx in (-1.0, 1.0):
+                for sy in (-1.0, 1.0):
+                    h_idx = len(entities)
+                    top_indices.append(h_idx)
+                    entities.append(
+                        CircularEntity(kind="circular", layer="OUTLINE", center=(sx * hx, sy * hy), radius=hr, source_id=source_id)
+                    )
+                    if sx > 0 and sy > 0:
+                        tr_hole_idx = h_idx
+
+        # Left view (左视图): height x thickness side elevation
+        l_box = len(entities)
+        left_indices.append(l_box)
+        entities.append(
+            PolylineEntity(
+                kind="polyline",
+                layer="OUTLINE",
+                vertices=[(-params.height / 2.0, 0.0), (params.height / 2.0, 0.0), (params.height / 2.0, params.thickness), (-params.height / 2.0, params.thickness)],
+                closed=True,
+                source_id=source_id,
+            )
+        )
+        left_indices.append(len(entities))
+        entities.append(LineEntity(kind="line", layer="CENTER", start=(0.0, -1.8), end=(0.0, params.thickness + 1.8), source_id=source_id))
+        for sy in (-sr, sr):
+            left_indices.append(len(entities))
+            entities.append(LineEntity(kind="line", layer="HIDDEN", start=(sy, 0.0), end=(sy, params.thickness), source_id=source_id))
+
+        dims = [
+            {"kind": "linear", "value": params.slot_length, "source_id": source_id, "owner_view": "front", "target_entity_index": f_box, "orientation": "horizontal"}
+            if False
+            else {"kind": "linear", "value": params.thickness, "source_id": source_id, "owner_view": "front", "target_entity_index": f_box, "orientation": "vertical"},
+            {"kind": "linear", "value": params.slot_length, "source_id": source_id, "owner_view": "front", "target_entity_index": f_box - 2 if False else slot_top_idx, "orientation": "horizontal"},
+        ]
+        # Cleanly assign non-overlapping dimensions across front, top, and left:
+        dims = [
+            {"kind": "linear", "value": params.thickness, "source_id": source_id, "owner_view": "front", "target_entity_index": f_box, "orientation": "vertical"},
+            {"kind": "linear", "value": params.width, "source_id": source_id, "owner_view": "top", "target_entity_index": plate_top_idx, "orientation": "horizontal"},
+            {"kind": "linear", "value": params.height, "source_id": source_id, "owner_view": "top", "target_entity_index": plate_top_idx, "orientation": "vertical"},
+            {"kind": "linear", "value": params.height, "source_id": source_id, "owner_view": "left", "target_entity_index": l_box, "orientation": "horizontal"},
+        ]
+        if tr_hole_idx is not None and params.hole_diameter is not None:
+            dims.append(
+                {
+                    "kind": "diameter",
+                    "value": params.hole_diameter,
+                    "source_id": source_id,
+                    "owner_view": "top",
+                    "target_entity_index": tr_hole_idx,
+                    "orientation": "diameter",
+                    "prefix": "4×⌀",
+                }
+            )
+        return ParametricPartResult(
+            views=["front", "top", "left"],
+            entities=entities,
+            view_entity_indices={"front": front_indices, "top": top_indices, "left": left_indices},
+            dimensions=dims,
+            parameters={
+                "part_family": "slotted-bracket",
+                "width_mm": params.width,
+                "height_mm": params.height,
+                "thickness_mm": params.thickness,
+            },
+        )
+
+    front_indices: list[int] = []
 
     def add_front(ent: DrawingEntity) -> int:
         idx = len(entities)

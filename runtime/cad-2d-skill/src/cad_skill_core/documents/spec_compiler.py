@@ -428,6 +428,7 @@ def compile_spec_from_fragments(
                     source_id=w_p.source_id,
                     include_top_view=(not requested_views or any(v in requested_views for v in ("top", "left", "right"))),
                     three_views=(not requested_views or "left" in requested_views or ("top" not in requested_views)),
+                    flat_orientation=True,
                 )
                 requested_views = built.views
                 entities_dump = [e.model_dump(mode="json") for e in built.entities]
