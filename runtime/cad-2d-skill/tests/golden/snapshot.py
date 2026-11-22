@@ -19,7 +19,7 @@ REQUIRED_TEXT_TOKENS = (
     "FRONT",
     "PART-DETAIL",
     "SECTION A-A",
-    "PARTS LIST",
+    "DESCRIPTION",
 )
 _SINGLETON_SEMANTIC_KINDS = {
     "view_label",
