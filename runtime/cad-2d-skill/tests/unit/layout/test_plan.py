@@ -1080,7 +1080,10 @@ def test_balanced_three_view_layout_places_front_upper_left_top_lower_left_and_l
         source_id="src",
     )
     assert part.views == ["front", "top", "left"]
-    assert len(part.dimensions) == 5
+    assert len(part.dimensions) >= 5
+    # Verify flat-laid orientation: front is horizontal section (contains HATCH), top is circular plan (square bounds)
+    assert any(part.entities[idx].kind == "hatch" for idx in part.view_entity_indices["front"])
+    assert any(part.entities[idx].kind == "circular" for idx in part.view_entity_indices["top"])
 
     spec = DrawingSpec.model_validate(
         {

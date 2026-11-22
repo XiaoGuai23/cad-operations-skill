@@ -250,10 +250,29 @@ def _place_views(spec: DrawingSpec, scale: Decimal, gap: float, printable: Bound
     for name in names:
         if name in placed:
             continue
+        pref = tuple(
+            item
+            for item in _preferred(name, placed, sizes[name], gap, front_right_pad=front_right_pad)
+            if _valid(item, (*protected, *placed.values()), printable, gap)
+        )
+        if not pref and (name == "left" or name.startswith("section")) and "front" in placed:
+            # Try lifting placed orthographic group above right-hand title/BOM stack so 'left' keeps 高平齐!
+            lift_dy = round(max(0.0, max(z.max_y for z in protected) + gap - placed["front"].min_y) * 2.0) / 2.0
+            if lift_dy > 0.0:
+                lifted = {k: Bounds(b.min_x, b.min_y + lift_dy, b.max_x, b.max_y + lift_dy) for k, b in placed.items()}
+                if _cluster_valid(lifted, protected, printable, gap):
+                    lifted_pref = tuple(
+                        item
+                        for item in _preferred(name, lifted, sizes[name], gap, front_right_pad=front_right_pad)
+                        if _valid(item, (*protected, *lifted.values()), printable, gap)
+                    )
+                    if lifted_pref:
+                        placed = lifted
+                        pref = lifted_pref
         candidate = next(
             (
                 item
-                for item in (*_preferred(name, placed, sizes[name], gap, front_right_pad=front_right_pad), *_grid(printable, sizes[name], gap))
+                for item in (*pref, *_grid(printable, sizes[name], gap))
                 if _valid(item, (*protected, *placed.values()), printable, gap)
             ),
             None,
@@ -278,7 +297,7 @@ def _balance_placed_views(
     if not placed:
         return placed
 
-    top_label_pad = 7.5
+    top_label_pad = 9.5
     max_view_y = max(b.max_y for b in placed.values())
     min_view_y = min(b.min_y for b in placed.values())
     bottom_extra = 12.0 * max(
@@ -580,7 +599,7 @@ def _view_label(name: str, *, language: str = "en") -> str:
 
 
 def _label_bounds(view: Bounds) -> Bounds:
-    return Bounds(view.min_x, view.max_y + 2.0, view.max_x, view.max_y + 7.0)
+    return Bounds(view.min_x, view.max_y + 4.0, view.max_x, view.max_y + 9.0)
 
 
 def _use_part_material_cell(
@@ -869,7 +888,7 @@ def _annotation_layouts(spec: DrawingSpec, views: tuple[ViewLayout, ...], printa
         ]
 
     # 5. Orthographic View Labels, Dimensions, Free Annotations & Assembly Balloons
-    result += [_text("view-label", view.label, view.bounds.center[0], view.bounds.max_y + 2, height, width_factor=width_factor, annotation_id=f"view-label-{view.name}", owner_view=view.name) for view in views]
+    result += [_text("view-label", view.label, view.bounds.center[0], view.bounds.max_y + 4.0, height, width_factor=width_factor, annotation_id=f"view-label-{view.name}", owner_view=view.name) for view in views]
     if views:
         front = views[0]
         views_by_name = {v.name: v for v in views}
