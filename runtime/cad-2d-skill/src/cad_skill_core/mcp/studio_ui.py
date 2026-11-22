@@ -311,6 +311,69 @@ def render_studio_html() -> str:
     }
     .dl-chip:hover { border-color: var(--accent); background: rgba(56,189,248,.12); }
     details.adv-json summary { font-size: 11.5px; color: var(--muted); cursor: pointer; padding: 4px 0; }
+    .cad-canvas.marquee-mode { cursor: crosshair; }
+    .prompt-pill {
+      position: absolute;
+      display: none;
+      align-items: center;
+      gap: 8px;
+      min-width: 320px;
+      max-width: min(480px, calc(100% - 28px));
+      height: 50px;
+      padding: 0 8px 0 18px;
+      background: #ffffff;
+      border-radius: 999px;
+      box-shadow: 0 10px 30px rgba(15, 23, 42, 0.22), 0 2px 6px rgba(15, 23, 42, 0.08);
+      border: 1px solid rgba(15, 23, 42, 0.09);
+      z-index: 20;
+    }
+    .prompt-pill input {
+      flex: 1;
+      border: none !important;
+      outline: none !important;
+      background: transparent !important;
+      font-size: 14px;
+      color: #1e293b !important;
+      padding: 0 !important;
+      min-width: 140px;
+    }
+    .prompt-pill input::placeholder { color: #64748b; }
+    .prompt-pill .hit-tag {
+      font-size: 11px;
+      color: #1d4ed8;
+      background: rgba(37, 99, 235, 0.1);
+      padding: 2px 8px;
+      border-radius: 999px;
+      white-space: nowrap;
+    }
+    .pill-submit {
+      width: 34px;
+      height: 34px;
+      padding: 0;
+      border-radius: 50%;
+      border: none;
+      background: #18181b;
+      color: #ffffff;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    .pill-submit:hover { background: #1668dc; transform: scale(1.05); }
+    .pill-cancel {
+      width: 24px;
+      height: 24px;
+      padding: 0;
+      border-radius: 50%;
+      border: none;
+      background: transparent;
+      color: #94a3b8;
+      font-size: 13px;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    .pill-cancel:hover { color: #ef4444; }
   </style>
 </head>
 <body>
@@ -357,9 +420,10 @@ def render_studio_html() -> str:
         </div>
         <div class="row">
           <button class="ghost" id="btnSendToRevise" style="display:none;">✏️ 送入局部改图台</button>
+          <button class="ghost active" id="btnMarquee2D" title="像图一一样在图纸上拉出蓝色虚线框，直接针对局部提问或筛选框内图元改图">🟦 框选提问/改图</button>
           <button class="ghost" id="btnFit2D">⛶ 适应窗口</button>
-          <button class="ghost" id="btnTheme2D">🌙 黑底彩线</button>
-          <button class="ghost active" id="btnGrid2D"># 坐标网格</button>
+          <button class="ghost" id="btnTheme2D">☀️ 白纸蓝图</button>
+          <button class="ghost" id="btnGrid2D"># 坐标网格</button>
           <button class="ghost" id="btnToggleLayers">图层面板</button>
         </div>
       </div>
@@ -367,8 +431,19 @@ def render_studio_html() -> str:
       <div class="stage" id="stage">
         <!-- 2D Vector CAD Canvas -->
         <div class="viewport" id="vp2d">
-          <canvas id="canvas2d" class="cad-canvas"></canvas>
+          <canvas id="canvas2d" class="cad-canvas marquee-mode"></canvas>
           <div class="floating-layers" id="layerPanel" style="display:none;"></div>
+          <!-- Image 1 Style Floating White Rounded Prompt Pill -->
+          <div class="prompt-pill" id="promptPill2D">
+            <input id="pillInput2D" type="text" placeholder="问题一" autocomplete="off" />
+            <span class="hit-tag" id="pillHits2D">0 图元</span>
+            <button class="pill-cancel" id="pillCancel2D" title="取消选框">✕</button>
+            <button class="pill-submit" id="pillSubmit2D" title="确认标注并锁定框内图元">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="20 6 9 17 4 12"></polyline>
+              </svg>
+            </button>
+          </div>
         </div>
 
         <!-- 3D Industrial Crease-Edge Viewport -->
@@ -408,9 +483,16 @@ def render_studio_html() -> str:
     let lastTaskData = null;
     let cadScene = null;
     let hiddenLayers = new Set();
-    let darkCadTheme = true;
-    let showCadGrid = true;
+    let darkCadTheme = false; // Default: crisp white GB/T blueprint paper mode!
+    let showCadGrid = false;
+    let marqueeMode2D = true;
+    let spaceHeld2D = false;
+    let isSelectingBox2D = false;
+    let selStartScreen2D = null;
+    let activeMarquee2D = null; // { wx0, wy0, wx1, wy1, handles: [] }
+    let savedRegionPins2D = []; // [{ idx, wx0, wy0, wx1, wy1, text, handles }]
     let highlightedHandle = null;
+    let highlightedHandleSet = null;
 
     // 2D Camera (world mm -> screen px: sx = camPanX + wx * camScale, sy = camPanY - wy * camScale)
     let camScale = 1.8, camPanX = 60, camPanY = 420;
@@ -472,6 +554,7 @@ def render_studio_html() -> str:
           <div class="row">
             <button class="ghost" onclick="fillM2DBrief('画个304不锈钢连接法兰，外径150内孔48厚20，在112的节圆上均布6个14的螺栓孔')">口语示例：连接法兰</button>
             <button class="ghost" onclick="fillM2DBrief('设计一根45钢三段阶梯轴，第一段直径26长32，第二段40长50，第三段22长28')">口语示例：阶梯传动轴</button>
+            <button class="ghost" onclick="fillAssemblyBomDemo()">📋 示例：夹具总装图(4列国标明细表)</button>
           </div>
 
           <div class="sec-title" style="margin-top:4px;">方式二：可视化标准零件参数表单</div>
@@ -562,6 +645,30 @@ def render_studio_html() -> str:
     }
 
     function fillM2DBrief(txt) { document.getElementById("m2dBrief").value = txt; }
+
+    function fillAssemblyBomDemo() {
+      document.getElementById("m2dBrief").value = [
+        "# 导向支架钻孔夹具总装",
+        "图号：JZ-03-00",
+        "图幅：A2",
+        "类型：装配图",
+        "外径：160 mm",
+        "内孔：52 mm",
+        "节圆直径：116 mm",
+        "安装孔：6×Φ14",
+        "厚度：24 mm",
+        "技术要求：1. 装配前所有配合面去毛刺并清洗干净。",
+        "技术要求：2. 紧固螺钉按对角顺序均匀拧紧。",
+        "",
+        "序号 | 零件名称 | 数量 | 材料",
+        "1 | 夹具体 | 1 | 45钢",
+        "2 | 定位套 | 1 | 40Cr",
+        "3 | 导向支架 | 1 | HT150",
+        "4 | 法兰压紧螺栓 | 1 | 45钢",
+        "5 | 定向挡销 | 1 | GCr15",
+        "6 | 可换钻模板 | 2 | 45钢"
+      ].join("\n");
+    }
 
     function syncM2DFormVisibility() {
       const fam = document.getElementById("m2dFamily").value;
@@ -839,6 +946,32 @@ def render_studio_html() -> str:
       draw2DScene();
     }
 
+    function drawBlueSpeechBadge2D(ctx, x, y, labelText) {
+      const r = 13;
+      ctx.save();
+      ctx.fillStyle = "#0d6efd";
+      ctx.shadowColor = "rgba(13, 110, 253, 0.34)";
+      ctx.shadowBlur = 8;
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(x - r, y);
+      ctx.lineTo(x - r, y + r);
+      ctx.lineTo(x, y + r);
+      ctx.closePath();
+      ctx.fill();
+      ctx.shadowBlur = 0;
+      if (labelText) {
+        ctx.fillStyle = "#ffffff";
+        ctx.font = "bold 11px sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(String(labelText), x, y + 0.5);
+      }
+      ctx.restore();
+    }
+
     function draw2DScene() {
       const cv = document.getElementById("canvas2d");
       if (!cv) return;
@@ -847,14 +980,28 @@ def render_studio_html() -> str:
       const W = cv.width / dpr, H = cv.height / dpr;
       ctx.save();
       ctx.scale(dpr, dpr);
-      ctx.fillStyle = darkCadTheme ? "#070c16" : "#f8fafc";
+      ctx.fillStyle = darkCadTheme ? "#070c16" : "#e8eef5";
       ctx.fillRect(0, 0, W, H);
+
+      if (cadScene && !darkCadTheme) {
+        const [bx0, by0, bx1, by1] = cadScene.bounds_mm;
+        const sx0 = camPanX + (bx0 - 6) * camScale;
+        const sy0 = camPanY - (by1 + 6) * camScale;
+        const sx1 = camPanX + (bx1 + 6) * camScale;
+        const sy1 = camPanY - (by0 - 6) * camScale;
+        ctx.save();
+        ctx.fillStyle = "#ffffff";
+        ctx.shadowColor = "rgba(15, 23, 42, 0.10)";
+        ctx.shadowBlur = 18;
+        ctx.fillRect(sx0, sy0, sx1 - sx0, sy1 - sy0);
+        ctx.restore();
+      }
 
       if (showCadGrid) {
         let stepMm = 10;
         while (stepMm * camScale < 28) stepMm *= 2;
         while (stepMm * camScale > 90 && stepMm > 1) stepMm /= 2;
-        ctx.strokeStyle = darkCadTheme ? "rgba(51,65,85,0.32)" : "rgba(203,213,225,0.65)";
+        ctx.strokeStyle = darkCadTheme ? "rgba(51,65,85,0.32)" : "rgba(203,213,225,0.55)";
         ctx.lineWidth = 0.6;
         const x0 = Math.floor((-camPanX / camScale) / stepMm) * stepMm;
         const x1 = Math.ceil(((W - camPanX) / camScale) / stepMm) * stepMm;
@@ -875,7 +1022,7 @@ def render_studio_html() -> str:
       if (!cadScene) {
         ctx.fillStyle = "#64748b";
         ctx.font = "13px 'Microsoft YaHei', sans-serif";
-        ctx.fillText("交互式矢量 CAD 审图画布 — 生成或上传 DXF 后支持滚轮无级缩放与图层控制", Math.max(24, W / 2 - 225), H / 2);
+        ctx.fillText("交互式矢量 CAD 审图画布 — 生成图纸后可直接拉出蓝色虚线框针对局部提问或改图", Math.max(24, W / 2 - 245), H / 2);
         ctx.restore();
         return;
       }
@@ -886,11 +1033,17 @@ def render_studio_html() -> str:
       for (const p of cadScene.primitives) {
         if (hiddenLayers.has(p.l)) continue;
         const lInfo = lyrMap[p.l];
-        const isHi = highlightedHandle && p.h === highlightedHandle;
-        const stroke = isHi ? "#22d3ee" : (darkCadTheme ? (lInfo?.hex_dark || "#f8fafc") : (lInfo?.hex_light || "#0f172a"));
+        const isHi = (highlightedHandle && p.h === highlightedHandle) || (highlightedHandleSet && highlightedHandleSet.has(p.h));
+        let baseStroke;
+        if (darkCadTheme) {
+          baseStroke = lInfo?.hex_dark || "#f8fafc";
+        } else {
+          baseStroke = p.l === "CENTER" ? "#b91c1c" : "#111827";
+        }
+        const stroke = isHi ? "#1668dc" : baseStroke;
         ctx.strokeStyle = stroke;
         ctx.fillStyle = stroke;
-        ctx.lineWidth = isHi ? 2.8 : (p.l === "OUTLINE" || p.l === "BUS" ? 1.5 : 0.95);
+        ctx.lineWidth = isHi ? 2.4 : ((p.l === "OUTLINE" || p.l === "FRAME" || p.l === "BUS") ? 1.45 : 0.9);
 
         const lt = lInfo?.linetype || "CONTINUOUS";
         if (!isHi && lt.includes("CENTER")) ctx.setLineDash([10, 4, 2, 4]);
@@ -910,7 +1063,6 @@ def render_studio_html() -> str:
           ctx.stroke();
         } else if (p.k === "arc") {
           const [cx, cy, r, sa, ea] = p.d;
-          // CAD CCW [sa -> ea] in Y-up maps to screen Y-down [-sa -> -ea] anticlockwise=true!
           ctx.beginPath();
           ctx.arc(
             camPanX + cx * camScale,
@@ -931,19 +1083,165 @@ def render_studio_html() -> str:
           if (p.k === "solid") ctx.fill(); else ctx.stroke();
         } else if (p.k === "text") {
           const pxSize = Math.max(p.s * camScale, 1.0);
-          if (pxSize >= 4.0) {
+          if (pxSize >= 3.5) {
             ctx.save();
             ctx.translate(camPanX + p.x * camScale, camPanY - p.y * camScale);
             if (p.r) ctx.rotate((-p.r * Math.PI) / 180);
             ctx.font = `${Math.min(pxSize, 48)}px 'Microsoft YaHei', Arial, sans-serif`;
+            if (p.a === "mc") {
+              ctx.textAlign = "center";
+              ctx.textBaseline = "middle";
+            } else if (p.a === "c") {
+              ctx.textAlign = "center";
+              ctx.textBaseline = "alphabetic";
+            }
             ctx.fillText(p.t, 0, 0);
             ctx.restore();
           }
         }
       }
+
+      // Saved numbered region comment boxes & pins
+      for (const pin of savedRegionPins2D) {
+        const sx0 = camPanX + pin.wx0 * camScale, sy1 = camPanY - pin.wy0 * camScale;
+        const sx1 = camPanX + pin.wx1 * camScale, sy0 = camPanY - pin.wy1 * camScale;
+        ctx.save();
+        ctx.fillStyle = "rgba(22, 104, 220, 0.05)";
+        ctx.strokeStyle = "rgba(22, 104, 220, 0.55)";
+        ctx.lineWidth = 1.4;
+        ctx.setLineDash([5, 4]);
+        ctx.fillRect(sx0, sy0, sx1 - sx0, sy1 - sy0);
+        ctx.strokeRect(sx0, sy0, sx1 - sx0, sy1 - sy0);
+        ctx.restore();
+        drawBlueSpeechBadge2D(ctx, sx1, sy0, pin.idx);
+      }
+
+      // Active Blue Dashed Marquee Box + Top-Right Blue Droplet Speech Badge (Reference Image 1)
+      if (activeMarquee2D) {
+        const sx0 = camPanX + activeMarquee2D.wx0 * camScale, sy1 = camPanY - activeMarquee2D.wy0 * camScale;
+        const sx1 = camPanX + activeMarquee2D.wx1 * camScale, sy0 = camPanY - activeMarquee2D.wy1 * camScale;
+        const rw = sx1 - sx0, rh = sy1 - sy0;
+        ctx.save();
+        ctx.fillStyle = "rgba(22, 104, 220, 0.09)";
+        ctx.fillRect(sx0, sy0, rw, rh);
+        ctx.strokeStyle = "#1668dc";
+        ctx.lineWidth = 2.0;
+        ctx.setLineDash([6, 4]);
+        ctx.strokeRect(sx0, sy0, rw, rh);
+        ctx.restore();
+        if (!isSelectingBox2D && Math.abs(rw) > 8 && Math.abs(rh) > 8) {
+          drawBlueSpeechBadge2D(ctx, sx1, sy0, "");
+        }
+      }
+
       ctx.restore();
-      document.getElementById("sceneStats").textContent = `图元: ${cadScene.primitive_count} · 图层: ${cadScene.layers.length} · 缩放: ${Math.round(camScale * 50)}%`;
+      syncPromptPill2DPos();
+      document.getElementById("sceneStats").textContent = `图元: ${cadScene.primitive_count} · 批注: ${savedRegionPins2D.length} · 缩放: ${Math.round(camScale * 50)}%`;
     }
+
+    function hitTestMarquee2D(wx0, wy0, wx1, wy1) {
+      if (!cadScene) return [];
+      const handles = new Set();
+      const inBox = (x, y) => x >= wx0 && x <= wx1 && y >= wy0 && y <= wy1;
+      const boxOverlap = (ax0, ay0, ax1, ay1) => !(ax1 < wx0 || ax0 > wx1 || ay1 < wy0 || ay0 > wy1);
+      for (const p of cadScene.primitives) {
+        if (!p.h || p.l === "FRAME") continue;
+        let hit = false;
+        if (p.k === "seg") {
+          const [x1, y1, x2, y2] = p.d;
+          hit = boxOverlap(Math.min(x1, x2), Math.min(y1, y2), Math.max(x1, x2), Math.max(y1, y2));
+        } else if (p.k === "circle" || p.k === "arc") {
+          const [cx, cy, r] = p.d;
+          hit = boxOverlap(cx - r, cy - r, cx + r, cy + r);
+        } else if (p.k === "poly" || p.k === "solid") {
+          hit = p.pts.some(([x, y]) => inBox(x, y));
+        } else if (p.k === "text") {
+          hit = inBox(p.x, p.y);
+        }
+        if (hit) handles.add(p.h);
+      }
+      return Array.from(handles);
+    }
+
+    function openPromptPill2D() {
+      if (!activeMarquee2D) return;
+      const pill = document.getElementById("promptPill2D");
+      const inp = document.getElementById("pillInput2D");
+      const cn = ["一", "二", "三", "四", "五", "六", "七", "八", "九", "十"];
+      const idx = savedRegionPins2D.length;
+      inp.placeholder = `问题${cn[idx] || (idx + 1)}（输入提问或局部改图指令...）`;
+      inp.value = "";
+      document.getElementById("pillHits2D").textContent = `${activeMarquee2D.handles.length} 图元`;
+      pill.style.display = "flex";
+      syncPromptPill2DPos();
+      setTimeout(() => inp.focus(), 20);
+    }
+
+    function syncPromptPill2DPos() {
+      const pill = document.getElementById("promptPill2D");
+      if (!activeMarquee2D || !pill || pill.style.display === "none") return;
+      const vp = document.getElementById("vp2d").getBoundingClientRect();
+      const sx0 = camPanX + activeMarquee2D.wx0 * camScale;
+      const sy0 = camPanY - activeMarquee2D.wy1 * camScale;
+      const sx1 = camPanX + activeMarquee2D.wx1 * camScale;
+      const sy1 = camPanY - activeMarquee2D.wy0 * camScale;
+      const cx = (sx0 + sx1) / 2, cy = (sy0 + sy1) / 2;
+      const pw = Math.min(390, vp.width - 28);
+      pill.style.left = Math.max(12, Math.min(vp.width - pw - 12, cx - pw * 0.25)) + "px";
+      pill.style.top = Math.max(12, Math.min(vp.height - 64, cy - 10)) + "px";
+    }
+
+    function closePromptPill2D() {
+      activeMarquee2D = null;
+      const pill = document.getElementById("promptPill2D");
+      if (pill) pill.style.display = "none";
+      draw2DScene();
+    }
+
+    async function submitPromptPill2D() {
+      if (!activeMarquee2D) return;
+      const inp = document.getElementById("pillInput2D");
+      const txt = inp.value.trim() || inp.placeholder.split("（")[0];
+      const boxMm = [
+        +activeMarquee2D.wx0.toFixed(2),
+        +activeMarquee2D.wy0.toFixed(2),
+        +activeMarquee2D.wx1.toFixed(2),
+        +activeMarquee2D.wy1.toFixed(2)
+      ];
+      const handles = activeMarquee2D.handles;
+      const pinNo = savedRegionPins2D.length + 1;
+      savedRegionPins2D.push({
+        idx: pinNo,
+        wx0: activeMarquee2D.wx0,
+        wy0: activeMarquee2D.wy0,
+        wx1: activeMarquee2D.wx1,
+        wy1: activeMarquee2D.wy1,
+        text: txt,
+        handles
+      });
+      highlightedHandleSet = new Set(handles);
+      closePromptPill2D();
+
+      const promptSummary = `[CAD框选批注 #${pinNo}] task_id=${lastTaskData?.task_id || revState.taskId || "local"} · 区域=[${boxMm.join(", ")}]mm · 命中Handles=[${handles.slice(0, 20).join(", ")}] · 指令：${txt}`;
+      try { await navigator.clipboard.writeText(promptSummary); } catch (_) {}
+      setAlert(`已添加框选批注 #${pinNo}（命中 ${handles.length} 个图元，已复制精准上下文，可直接发给 AI 或点右上角“送入局部改图台”）`, "ok");
+      if (activeTab === "revise" && handles.length) {
+        const match = revState.entities.find(e => handles.includes(e.handle));
+        if (match) {
+          revState.selectedEntity = match;
+          highlightedHandle = match.handle;
+          renderEntityList();
+          renderRevOpParams();
+        }
+      }
+    }
+
+    document.getElementById("pillSubmit2D").onclick = submitPromptPill2D;
+    document.getElementById("pillCancel2D").onclick = closePromptPill2D;
+    document.getElementById("pillInput2D").addEventListener("keydown", e => {
+      if (e.key === "Enter") submitPromptPill2D();
+      else if (e.key === "Escape") closePromptPill2D();
+    });
 
     function renderLayerPanel() {
       const panel = document.getElementById("layerPanel");
@@ -963,8 +1261,11 @@ def render_studio_html() -> str:
       });
     }
 
-    // 2D Canvas Wheel Zoom & Drag Pan
+    // 2D Canvas Wheel Zoom, Marquee Box Selection & Drag Pan
     const cv2d = document.getElementById("canvas2d");
+    window.addEventListener("keydown", e => { if (e.code === "Space") spaceHeld2D = true; });
+    window.addEventListener("keyup", e => { if (e.code === "Space") spaceHeld2D = false; });
+
     cv2d.addEventListener("wheel", e => {
       e.preventDefault();
       const rect = cv2d.getBoundingClientRect();
@@ -978,25 +1279,78 @@ def render_studio_html() -> str:
       draw2DScene();
     }, { passive: false });
 
-    cv2d.addEventListener("mousedown", e => { isPanning2D = true; panStartX = e.clientX - camPanX; panStartY = e.clientY - camPanY; });
-    window.addEventListener("mouseup", () => { isPanning2D = false; drag3D = false; });
+    cv2d.addEventListener("mousedown", e => {
+      const rect = cv2d.getBoundingClientRect();
+      const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+      const wantMarquee = (marqueeMode2D || e.shiftKey) && !spaceHeld2D && e.button === 0 && cadScene;
+      if (!wantMarquee) {
+        isPanning2D = true;
+        panStartX = e.clientX - camPanX;
+        panStartY = e.clientY - camPanY;
+        return;
+      }
+      isSelectingBox2D = true;
+      document.getElementById("promptPill2D").style.display = "none";
+      selStartScreen2D = [mx, my];
+      const wx = (mx - camPanX) / camScale, wy = (camPanY - my) / camScale;
+      activeMarquee2D = { wx0: wx, wy0: wy, wx1: wx, wy1: wy, handles: [] };
+      draw2DScene();
+    });
+
+    window.addEventListener("mouseup", () => {
+      isPanning2D = false;
+      drag3D = false;
+      if (isSelectingBox2D) {
+        isSelectingBox2D = false;
+        if (activeMarquee2D) {
+          const sx0 = camPanX + activeMarquee2D.wx0 * camScale, sy1 = camPanY - activeMarquee2D.wy0 * camScale;
+          const sx1 = camPanX + activeMarquee2D.wx1 * camScale, sy0 = camPanY - activeMarquee2D.wy1 * camScale;
+          if (Math.abs(sx1 - sx0) < 10 || Math.abs(sy1 - sy0) < 10) {
+            closePromptPill2D();
+          } else {
+            activeMarquee2D.handles = hitTestMarquee2D(activeMarquee2D.wx0, activeMarquee2D.wy0, activeMarquee2D.wx1, activeMarquee2D.wy1);
+            draw2DScene();
+            openPromptPill2D();
+          }
+        }
+      }
+    });
+
     cv2d.addEventListener("mousemove", e => {
       const rect = cv2d.getBoundingClientRect();
       const mx = e.clientX - rect.left, my = e.clientY - rect.top;
       const wx = (mx - camPanX) / camScale, wy = (camPanY - my) / camScale;
-      document.getElementById("coordReadout").textContent = `光标坐标 X: ${wx.toFixed(2)} mm, Y: ${wy.toFixed(2)} mm  |  滚轮无级缩放 · 拖拽平移`;
+      document.getElementById("coordReadout").textContent = `光标坐标 X: ${wx.toFixed(2)} mm, Y: ${wy.toFixed(2)} mm  |  ${marqueeMode2D ? "拖拽拉出蓝色虚线框提问/改图（按住空格平移）" : "左键拖拽平移（按住 Shift 框选提问）"} · 滚轮缩放`;
       if (isPanning2D) {
         camPanX = e.clientX - panStartX;
         camPanY = e.clientY - panStartY;
+        draw2DScene();
+        return;
+      }
+      if (isSelectingBox2D && selStartScreen2D) {
+        const wStartX = (selStartScreen2D[0] - camPanX) / camScale;
+        const wStartY = (camPanY - selStartScreen2D[1]) / camScale;
+        activeMarquee2D = {
+          wx0: Math.min(wStartX, wx),
+          wy0: Math.min(wStartY, wy),
+          wx1: Math.max(wStartX, wx),
+          wy1: Math.max(wStartY, wy),
+          handles: []
+        };
         draw2DScene();
       }
     });
     cv2d.addEventListener("dblclick", fit2DCamera);
 
+    document.getElementById("btnMarquee2D").onclick = e => {
+      marqueeMode2D = !marqueeMode2D;
+      e.target.classList.toggle("active", marqueeMode2D);
+      cv2d.classList.toggle("marquee-mode", marqueeMode2D);
+    };
     document.getElementById("btnFit2D").onclick = fit2DCamera;
     document.getElementById("btnTheme2D").onclick = e => {
       darkCadTheme = !darkCadTheme;
-      e.target.textContent = darkCadTheme ? "🌙 黑底彩线" : "☀️ 白纸黑线";
+      e.target.textContent = darkCadTheme ? "🌙 黑底彩线" : "☀️ 白纸蓝图";
       renderLayerPanel();
       draw2DScene();
     };
@@ -1185,6 +1539,9 @@ def render_studio_html() -> str:
     async function displayTaskResult(data) {
       lastTaskData = data;
       highlightedHandle = null;
+      highlightedHandleSet = null;
+      savedRegionPins2D = [];
+      closePromptPill2D();
       document.getElementById("vpDiff").style.display = "none";
       document.getElementById("vp2d").style.display = "block";
 

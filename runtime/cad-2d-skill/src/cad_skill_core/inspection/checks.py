@@ -1198,6 +1198,13 @@ def _allowed_pair(
         return True
     if second.kind == "frame" and first.owner_zone == second.owner_zone:
         return True
+    if (
+        first.kind == "table-grid"
+        and second.kind == "table-grid"
+        and first.owner_zone is not None
+        and first.owner_zone == second.owner_zone
+    ):
+        return True
     if first.group_id != second.group_id:
         return False
     kinds = {first.kind, second.kind}

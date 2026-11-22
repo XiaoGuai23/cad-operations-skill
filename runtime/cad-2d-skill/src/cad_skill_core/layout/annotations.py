@@ -11,6 +11,7 @@ from sys import float_info
 
 import ezdxf
 from ezdxf import bbox
+from ezdxf.enums import TextEntityAlignment
 from ezdxf.lldxf.tagger import ascii_tags_loader, tag_compiler
 from ezdxf.math import Matrix44
 
@@ -99,17 +100,52 @@ def _emit_measure(
     return _measure_document(doc, centered, span_tuple), span_tuple
 
 
+_CENTERED_CELL_KINDS = {
+    "title-label",
+    "title-material",
+    "title",
+    "drawing-number",
+    "scale",
+    "projection",
+    "parts-column",
+    "parts-row",
+}
+
+
 def _center_measured_view_labels(
     doc: ezdxf.document.Drawing,
     plan: LayoutPlan,
     spans: tuple[tuple[int, int], ...],
 ) -> LayoutPlan:
-    """Center view labels from their real rendered bounds, not text estimates."""
+    """Center view labels and table cell text from their real rendered bounds."""
 
     entities = list(doc.modelspace())
     views = {view.name: view.bounds for view in plan.views}
     updated: list[AnnotationLayout] = []
     for annotation, (start, end) in zip(plan.annotations, spans, strict=True):
+        if annotation.kind in _CENTERED_CELL_KINDS and len(annotation.points) >= 2:
+            target_cx, target_cy = annotation.points[1]
+            dx = target_cx - annotation.bounds.center[0]
+            dy = target_cy - annotation.bounds.center[1]
+            if not (isclose(dx, 0.0, abs_tol=1e-12) and isclose(dy, 0.0, abs_tol=1e-12)):
+                matrix = Matrix44.translate(dx, dy, 0.0)
+                for entity in entities[start:end]:
+                    entity.transform(matrix)
+                updated.append(
+                    replace(
+                        annotation,
+                        bounds=Bounds(
+                            annotation.bounds.min_x + dx,
+                            annotation.bounds.min_y + dy,
+                            annotation.bounds.max_x + dx,
+                            annotation.bounds.max_y + dy,
+                        ),
+                        points=((annotation.points[0][0] + dx, annotation.points[0][1] + dy), (target_cx, target_cy)),
+                    )
+                )
+            else:
+                updated.append(annotation)
+            continue
         if annotation.kind != "view-label" or annotation.owner_view is None:
             updated.append(annotation)
             continue
@@ -427,6 +463,13 @@ def _allowed_pair(first: AnnotationLayout, second: AnnotationLayout) -> bool:
         return True
     if second.kind == "frame" and first.owner_zone == second.owner_zone:
         return True
+    if (
+        first.kind == "table-grid"
+        and second.kind == "table-grid"
+        and first.owner_zone is not None
+        and first.owner_zone == second.owner_zone
+    ):
+        return True
     if first.group_id != second.group_id:
         return False
     kinds = {first.kind, second.kind}
@@ -594,7 +637,13 @@ def _emit(modelspace: ezdxf.layouts.Modelspace, annotation: AnnotationLayout, pl
     if annotation.kind == "frame":
         bounds = annotation.bounds
         modelspace.add_lwpolyline([(bounds.min_x, bounds.min_y), (bounds.max_x, bounds.min_y), (bounds.max_x, bounds.max_y), (bounds.min_x, bounds.max_y)], close=True, dxfattribs={"layer": annotation.layer})
-    elif annotation.kind in {"title-label", "title", "drawing-number", "scale", "projection", "notes-header", "parts-header", "parts-column", "parts-row", "view-label", "technical-note", "annotation", "balloon-text"}:
+    elif annotation.kind == "table-grid":
+        modelspace.add_line(annotation.points[0], annotation.points[1], dxfattribs={"layer": annotation.layer})
+    elif annotation.kind in _CENTERED_CELL_KINDS:
+        style_heights = {name: h for name, _, h, _ in plan.text_styles}
+        text_h = style_heights.get(annotation.style, plan.text_height_mm) or plan.text_height_mm
+        modelspace.add_text(annotation.text, dxfattribs={"layer": annotation.layer, "style": annotation.style, "height": text_h}).set_placement(annotation.points[0])
+    elif annotation.kind in {"notes-header", "parts-header", "view-label", "technical-note", "annotation", "balloon-text"}:
         modelspace.add_text(annotation.text, dxfattribs={"layer": annotation.layer, "style": annotation.style, "height": plan.text_height_mm}).set_placement(annotation.points[0])
     elif annotation.kind == "dimension":
         if annotation.dim_kind == "vertical":

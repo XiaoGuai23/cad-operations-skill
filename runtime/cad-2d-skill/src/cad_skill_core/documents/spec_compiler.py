@@ -231,14 +231,24 @@ def compile_spec_from_fragments(
                 bom_header_seen = True
                 continue
             if bom_header_seen and len(cols) >= 2:
-                # Try parsing BOM row: [item_no?, name, qty]
+                # Try parsing BOM row: [item_no?, name, qty, material?]
                 qty_match = re.search(r"^(\d+)\s*(?:件|个|套|pcs)?$", cols[-1], re.IGNORECASE)
+                mat_col: str | None = None
+                if not qty_match and len(cols) >= 3:
+                    qty_match = re.search(r"^(\d+)\s*(?:件|个|套|pcs)?$", cols[-2], re.IGNORECASE)
+                    if qty_match:
+                        mat_col = cols[-1].strip() or None
                 if qty_match:
                     item_name = cols[1] if len(cols) >= 3 and cols[0].isdigit() else cols[0]
                     if item_name and not any(k in item_name for k in ("参数", "外径", "内径", "宽度", "高度", "厚度")):
-                        parts_list.append(
-                            {"item": item_name, "quantity": int(qty_match.group(1)), "source_id": sid}
-                        )
+                        part_entry: dict[str, Any] = {
+                            "item": item_name,
+                            "quantity": int(qty_match.group(1)),
+                            "source_id": sid,
+                        }
+                        if mat_col:
+                            part_entry["material"] = mat_col
+                        parts_list.append(part_entry)
                         drawing_type = "assembly"
                         continue
             if len(cols) >= 2:

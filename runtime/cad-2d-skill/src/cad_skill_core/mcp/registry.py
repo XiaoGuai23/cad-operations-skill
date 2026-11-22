@@ -38,11 +38,13 @@ from cad_skill_core.standards.sample_learner import (
     save_standard_yaml,
 )
 
+from .cad_scene import extract_dxf_vector_scene
 from .industry_adapters import (
     build_auto_style_font_map,
     generate_electrical_sld_bundle,
     generate_pavement_bundle,
 )
+from .mcp_app_ui import MCP_APP_MIME_TYPE, MCP_APP_RESOURCE_URI, get_mcp_app_viewer_html
 from .sandbox import MCPSandboxError, MCPWorkspaceSandbox, default_runtime_root
 
 
@@ -212,12 +214,29 @@ class VerifyRoundTripArgs(StrictInputModel):
     bbox_tolerance_mm: float = Field(default=0.5, gt=0.0, le=50.0)
 
 
+class OpenViewerArgs(StrictInputModel):
+    task_id: str | None = Field(
+        default=None,
+        description="Optional MCP task_id to display immediately in the interactive CAD blueprint & 3D viewer.",
+    )
+    dxf_path: str | None = Field(
+        default=None,
+        description="Optional DXF path inside allowed sandbox roots to inspect and region-comment.",
+    )
+
+
+class AppLoadSceneArgs(StrictInputModel):
+    task_id: str | None = Field(default=None, description="Task ID containing 2D DXF and/or 3D OBJ artifacts.")
+    dxf_path: str | None = Field(default=None, description="Direct DXF path inside allowed roots.")
+
+
 @dataclass(frozen=True, slots=True)
 class ToolDefinition:
     name: str
     description: str
     input_model: type[StrictInputModel]
     handler: Callable[[MCPWorkspaceSandbox, Any], tuple[dict[str, Any], Path | None, bool]]
+    meta: dict[str, Any] | None = None
 
 
 def _resolve_dxf_source(
@@ -775,6 +794,63 @@ def _handle_verify_roundtrip(
     return payload, None, report.status == "failed"
 
 
+def _handle_open_viewer(
+    sandbox: MCPWorkspaceSandbox, args: OpenViewerArgs
+) -> tuple[dict[str, Any], Path | None, bool]:
+    payload: dict[str, Any] = {
+        "status": "ready",
+        "viewer_uri": MCP_APP_RESOURCE_URI,
+        "task_id": args.task_id,
+        "dxf_path": args.dxf_path,
+    }
+    if args.task_id:
+        meta = sandbox.read_task_metadata(args.task_id)
+        payload["domain"] = meta.get("domain")
+    return payload, None, False
+
+
+def _handle_app_load_scene(
+    sandbox: MCPWorkspaceSandbox, args: AppLoadSceneArgs
+) -> tuple[dict[str, Any], Path | None, bool]:
+    cad_scene_data: dict[str, Any] | None = None
+    obj_text: str | None = None
+    resolved_dxf_str: str | None = None
+
+    if args.task_id:
+        meta = sandbox.read_task_metadata(args.task_id)
+        artifacts = meta.get("artifacts", [])
+        dxf_art = next(
+            (a for a in artifacts if str(a.get("name", "")).endswith(".dxf") and a.get("name") != "model3d.dxf"),
+            None,
+        )
+        if dxf_art is not None:
+            dxf_file = sandbox.resolve_task_artifact(args.task_id, str(dxf_art["name"]))
+            resolved_dxf_str = str(dxf_file)
+            cad_scene_data = extract_dxf_vector_scene(dxf_file)
+        obj_art = next((a for a in artifacts if str(a.get("name", "")).endswith(".obj")), None)
+        if obj_art is not None:
+            obj_file = sandbox.resolve_task_artifact(args.task_id, str(obj_art["name"]))
+            obj_text = obj_file.read_text(encoding="utf-8", errors="replace")
+    elif args.dxf_path:
+        dxf_file = sandbox.resolve_readable_file(args.dxf_path)
+        resolved_dxf_str = str(dxf_file)
+        cad_scene_data = extract_dxf_vector_scene(dxf_file)
+    else:
+        raise ValueError("provide task_id or dxf_path")
+
+    return (
+        {
+            "status": "ok",
+            "task_id": args.task_id,
+            "dxf_path": resolved_dxf_str,
+            "cad_scene": cad_scene_data,
+            "obj_text": obj_text,
+        },
+        None,
+        False,
+    )
+
+
 TOOLS: tuple[ToolDefinition, ...] = (
     ToolDefinition(
         "cad_doctor",
@@ -805,18 +881,21 @@ TOOLS: tuple[ToolDefinition, ...] = (
         "Generate an audited GB/T 2D mechanical drawing (DXF, SVG, PNG, audit.json) with automatic collision repair and font verification.",
         GenerateMechanical2DArgs,
         _handle_generate_mechanical_2d,
+        meta={"ui": {"resourceUri": MCP_APP_RESOURCE_URI}},
     ),
     ToolDefinition(
         "cad_generate_electrical_sld",
         "Generate an audited electrical main single-line diagram (single/split/double busbar) as DXF, SVG, PDF, and PNG.",
         GenerateElectricalSLDArgs,
         _handle_generate_electrical_sld,
+        meta={"ui": {"resourceUri": MCP_APP_RESOURCE_URI}},
     ),
     ToolDefinition(
         "cad_generate_pavement",
         "Generate an audited road pavement structure cross-section CAD drawing with native HATCH and DIMENSION entities.",
         GeneratePavementArgs,
         _handle_generate_pavement,
+        meta={"ui": {"resourceUri": MCP_APP_RESOURCE_URI}},
     ),
     ToolDefinition(
         "cad_inventory_dxf",
@@ -829,18 +908,21 @@ TOOLS: tuple[ToolDefinition, ...] = (
         "Apply a hash-bound, atomic incremental revision plan to an existing DXF (supports dry_run simulation).",
         ReviseDXFArgs,
         _handle_revise_dxf,
+        meta={"ui": {"resourceUri": MCP_APP_RESOURCE_URI}},
     ),
     ToolDefinition(
         "cad_preview_and_diff",
         "Render high-DPI PNG/PDF crops of a DXF or matched before/after local revision diff views.",
         PreviewAndDiffArgs,
         _handle_preview_and_diff,
+        meta={"ui": {"resourceUri": MCP_APP_RESOURCE_URI}},
     ),
     ToolDefinition(
         "cad_generate_3d",
         "Generate and verify watertight 3D CAD models (.stl, .obj, .glb, model3d.dxf, iso.png, audit-3d.json) and optional 3D->2D GB/T sheet.",
         Generate3DArgs,
         _handle_generate_3d,
+        meta={"ui": {"resourceUri": MCP_APP_RESOURCE_URI}},
     ),
     ToolDefinition(
         "cad_project_3d_to_2d",
@@ -866,20 +948,44 @@ TOOLS: tuple[ToolDefinition, ...] = (
         Compile3DSpecArgs,
         _handle_compile_3d_spec,
     ),
+    ToolDefinition(
+        "cad_open_viewer",
+        "Open the interactive CAD Blueprint & 3D Review Pane (supports blue-dashed marquee region commenting & revision).",
+        OpenViewerArgs,
+        _handle_open_viewer,
+        meta={
+            "ui": {"resourceUri": MCP_APP_RESOURCE_URI},
+            "com.google.antigravity/ui": {
+                "entrypoints": [
+                    {"type": "aux_pane", "title": "CAD 交互审图台"},
+                ]
+            },
+        },
+    ),
+    ToolDefinition(
+        "cad_app_load_scene",
+        "App-only internal scene loader returning 2D vector primitives and 3D OBJ mesh for the MCP App canvas.",
+        AppLoadSceneArgs,
+        _handle_app_load_scene,
+        meta={"ui": {"visibility": ["app"]}},
+    ),
 )
 
 TOOL_BY_NAME: dict[str, ToolDefinition] = {tool.name: tool for tool in TOOLS}
 
 
 def list_mcp_tools() -> list[dict[str, Any]]:
-    return [
-        {
+    items: list[dict[str, Any]] = []
+    for tool in TOOLS:
+        entry: dict[str, Any] = {
             "name": tool.name,
             "description": tool.description,
             "inputSchema": tool.input_model.model_json_schema(),
         }
-        for tool in TOOLS
-    ]
+        if tool.meta is not None:
+            entry["_meta"] = tool.meta
+        items.append(entry)
+    return items
 
 
 def call_mcp_tool(
@@ -928,6 +1034,13 @@ def call_mcp_tool(
 def list_mcp_resources() -> list[dict[str, Any]]:
     return [
         {
+            "uri": MCP_APP_RESOURCE_URI,
+            "name": "CAD Interactive Blueprint & 3D Review App",
+            "description": "Interactive 2D GB/T blueprint viewer with blue-dashed marquee region commenting & 3D crease-edge viewport.",
+            "mimeType": MCP_APP_MIME_TYPE,
+            "_meta": {"ui": {"csp": {}}},
+        },
+        {
             "uri": "cad://standards/gb-mechanical",
             "name": "GB/T Mechanical Default Profile",
             "description": "Default configurable GB/T layer, font, dimension, and sheet standard YAML.",
@@ -955,6 +1068,17 @@ def list_mcp_resources() -> list[dict[str, Any]]:
 
 
 def read_mcp_resource(sandbox: MCPWorkspaceSandbox, uri: str) -> dict[str, Any]:
+    if uri == MCP_APP_RESOURCE_URI:
+        return {
+            "contents": [
+                {
+                    "uri": uri,
+                    "mimeType": MCP_APP_MIME_TYPE,
+                    "text": get_mcp_app_viewer_html(),
+                    "_meta": {"ui": {"csp": {}}},
+                }
+            ]
+        }
     if uri == "cad://standards/gb-mechanical":
         path = default_runtime_root() / "knowledge" / "standards" / "gb-mechanical.yaml"
         return {

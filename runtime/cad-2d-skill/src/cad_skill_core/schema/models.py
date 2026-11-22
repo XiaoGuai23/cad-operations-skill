@@ -117,6 +117,7 @@ class PartListItem(SchemaModel):
     item: str
     quantity: int
     source_id: NonBlankText
+    material: str | None = None
 
 
 class Provenance(SchemaModel):
