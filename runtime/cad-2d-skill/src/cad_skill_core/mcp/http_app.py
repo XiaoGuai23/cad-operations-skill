@@ -15,6 +15,8 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from cad_skill_core.cad_drivers import probe_all_cad_drivers
+from cad_skill_core.documents.spec_compiler import PartFamily
+from cad_skill_core.standards.profile import list_builtin_standards
 
 from .cad_scene import extract_dxf_vector_scene
 from .protocol import MCPDispatcher, SERVER_INFO, SUPPORTED_PROTOCOL_VERSIONS
@@ -47,7 +49,7 @@ class WebCompileRequest(BaseModel):
 
     markdown_text: str | None = None
     input_paths: list[str] = Field(default_factory=list)
-    part_family: Literal["auto", "flange", "stepped-shaft", "slotted-bracket", "rounded-rect"] = "auto"
+    part_family: PartFamily = "auto"
     language: Literal["auto", "en", "zh"] = "auto"
 
 
@@ -72,6 +74,7 @@ class WebGenerateRequest(BaseModel):
     domain: Literal["mechanical_2d", "electrical_sld", "pavement", "model_3d"] = "mechanical_2d"
     spec: dict[str, Any] | None = None
     markdown_brief: str | None = None
+    standard_profile: str | None = None
     with_2d_sheet: bool = False
     run_native_cad: bool = False
     driver_preference: Literal["auto", "autocad", "zwcad", "gstarcad"] = "auto"
@@ -110,6 +113,22 @@ class WebUploadRequest(BaseModel):
     content_base64: str
 
 
+class WebScoreRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    dxf_path: str | None = None
+    task_id: str | None = None
+    artifact_name: str = "drawing.dxf"
+    custom_rubric: dict[str, Any] | list[dict[str, Any]] | None = None
+
+
+class WebCAD1KEvalRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    bundle_dirs: list[str] | None = None
+    standard_profile: str = "gb-mechanical"
+
+
 def _attach_download_urls(payload: dict[str, Any]) -> dict[str, Any]:
     task_id = payload.get("task_id")
     if not task_id or "artifacts" not in payload:
@@ -132,6 +151,7 @@ def _map_generate_to_tool(req: WebGenerateRequest) -> tuple[str, dict[str, Any]]
             {
                 "spec": req.spec,
                 "markdown_brief": req.markdown_brief,
+                "standard_profile": req.standard_profile,
                 "max_repair_iterations": req.max_repair_iterations,
             },
         )
@@ -223,6 +243,10 @@ def create_mcp_http_app(
     def get_drivers() -> dict[str, Any]:
         return probe_all_cad_drivers()
 
+    @app.get("/api/v1/standards")
+    def get_standards() -> dict[str, Any]:
+        return {"standards": list_builtin_standards()}
+
     @app.post("/api/v1/uploads")
     def upload_file(req: WebUploadRequest) -> JSONResponse:
         clean_name = re.sub(r'[<>:"/\\|?*]', "_", req.filename.strip())
@@ -260,6 +284,9 @@ def create_mcp_http_app(
             inv_res = call_mcp_tool(sandbox, "cad_inventory_dxf", {"dxf_path": str(validated_path)})
             if not inv_res["isError"]:
                 payload["inventory"] = inv_res["structuredContent"]
+            score_res = call_mcp_tool(sandbox, "cad_score_drawing", {"dxf_path": str(validated_path)})
+            if not score_res["isError"]:
+                payload["rubric_score"] = score_res["structuredContent"]
             try:
                 payload["scene"] = extract_dxf_vector_scene(validated_path)
             except Exception:
@@ -351,6 +378,19 @@ def create_mcp_http_app(
     @app.post("/api/v1/tasks/revise")
     def web_revise(req: WebReviseRequest) -> JSONResponse:
         res = call_mcp_tool(sandbox, "cad_revise_dxf", req.model_dump())
+        structured = _attach_download_urls(res["structuredContent"])
+        status_code = 400 if res["isError"] else 200
+        return JSONResponse(status_code=status_code, content=structured)
+
+    @app.post("/api/v1/tasks/score")
+    def web_score_drawing(req: WebScoreRequest) -> JSONResponse:
+        res = call_mcp_tool(sandbox, "cad_score_drawing", req.model_dump())
+        status_code = 400 if res["isError"] else 200
+        return JSONResponse(status_code=status_code, content=res["structuredContent"])
+
+    @app.post("/api/v1/benchmark/cad1k")
+    def web_benchmark_cad1k(req: WebCAD1KEvalRequest) -> JSONResponse:
+        res = call_mcp_tool(sandbox, "cad_run_cad1k_eval", req.model_dump())
         structured = _attach_download_urls(res["structuredContent"])
         status_code = 400 if res["isError"] else 200
         return JSONResponse(status_code=status_code, content=structured)

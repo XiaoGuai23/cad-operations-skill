@@ -10,12 +10,14 @@
 | --- | --- |
 | **工程文档智能语义编译** | 自动读取 `.md` / `.txt` / `.csv` / `.tsv` / `.docx`（含合并单元格去重）/ `.pdf` 项目书与参数表，编译 `DrawingSpec`，自动拦截缺失尺寸（`missing`）与冲突参数（`conflicts`） |
 | **参考样图标准学习** | 自动扫描参考样图 DXF 的图层、颜色、线宽、字高、`DIMSTYLE` 与图幅，导出可复用的 `DrawingStandard` YAML |
-| **国标二维自动制图与防乱码/防重叠** | 真实几何特征绑定标注（水平/竖直/对齐/直径 `⌀`/半径 `R`/公差）、多视图“长对正/高平齐/宽相等”投影核验、紧贴内图框的标准分格国标标题栏、自下而上生长 4 列国标明细表（`序号 | 名称 | 件数 | 材料`）与真实字形防压线避让 |
+| **国标二维自动制图与 7 大经典零件族** | 覆盖**直齿圆柱齿轮（GB/T 4459.2 轮齿不剖+分度圆）**、**减速器轴承透盖**、**带加强筋 L 型直角支座**、连接法兰、带颈法兰、多阶梯轴、腰形槽支架等全系平放/正交“主、俯、左”三视图，含完整尺寸链、紧贴内图框的标准分格国标标题栏、自下而上 4 列国标明细表与真实字形防压线避让 |
+| **4 套多行业标准预设一键切换** | 内置 `gb-mechanical`（机械精加工）、`gb-heavy-machinery`（重工夹具总装）、`gb-civil-construction`（市政土建）与 `iso-international`（国际英文蓝图）四套标准，支持一键切换线宽序列与标题栏风格 |
+| **Rubric 100 分制审图打分与 CAD-1K 评测器** | 五维量化审图引擎（几何拓扑、图层线宽、三视图对齐、尺寸链完整度、图框字体，自动评定 `S/A/B/C/D` 级），兼容 `cad-1000-hours` 的 `rubrics.json`，内置免视频轻量离线基准评测器 `benchmark-cad1k` |
 | **基线哈希锁定的局部原子改图** | 绑定原图 SHA-256，支持线段/圆弧/复合轮廓编辑、交点分段、原生可移动 `DIMENSION`/`MULTILEADER` 同步、`DocumentCheckpoint` 异常回滚与修改前后对比审阅 |
 | **三维参数化建模与 3D→2D 联动** | 零额外商业软件依赖构建水密流形（Watertight Manifold）三维实体（多特征组合实体 `compound_3d`、法兰盘、阶梯轴、腰形槽支架、拉伸多边形等），导出 `.stl` / `.obj` / `.glb` / `model3d.dxf` / `iso.png`，一键正交/剖视投影生成二维国标工程图，并独立重开回测输出 `audit-3d.json` |
 | **跨版本 AutoCAD 与国产 CAD 驱动层** | 支持 **AutoCAD 2021 (`R24.0`) – 2026 (`R25.1`)**、**中望 CAD（ZWCAD / `ZWCoConsole`）**、**浩辰 CAD（GstarCAD）**、**CAXA 电子图板** 与 **ODA File Converter** 的 Authenticode 签名校验发现、国标字体融合、受控脚本执行与 **DWG ↔ DXF 双向结构无损核验** |
 | **电气与道路行业专项出图** | 单母/分段/双母线变电站电气主接线图（`DXF`/`SVG`/`PDF`/`PNG` + 交叉审计）与道路沥青/水稳路面结构图（原生 `HATCH` + `DIMENSION`） |
-| **标准 MCP App 与自动出图 Web 工作台** | 原生支持 MCP `stdio`、Streamable HTTP 与 **MCP App 常驻分屏审图台（`ui://cad-operations/viewer.html`）**，暴露 17 个强校验 Tools + 5 个 Resources，支持白底蓝图 **“蓝色虚线框选 + 悬浮胶囊提问/改图”**、三维特征棱线交互检视与内置 **Web Studio 2.1（`/studio`）** |
+| **标准 MCP App 与自动出图 Web 工作台** | 原生支持 MCP `stdio`、Streamable HTTP 与 **MCP App 常驻分屏审图台（`ui://cad-operations/viewer.html`）**，暴露 19 个强校验 Tools + 6 个 Resources，支持白底蓝图 **“蓝色虚线框选 + 悬浮胶囊提问/改图”**、实时 `🏆 图纸评分` 徽章、三维特征棱线交互检视与内置 **Web Studio 2.2（`/studio`）** |
 
 ---
 
@@ -67,7 +69,11 @@ python -m cad_skill_core inventory output/revision-demo/baseline.dxf --json
 python -m cad_skill_core revise output/revision-demo/baseline.dxf output/revision-demo/plan.json --out output/revision-demo/revised --dry-run --json
 python -m cad_skill_core revise output/revision-demo/baseline.dxf output/revision-demo/plan.json --out output/revision-demo/revised --json
 
-# 5) 行业专项图纸与环境诊断
+# 5) Rubric 100分制审图体检 & 免视频 cad-1000-hours 离线基准评测
+python -m cad_skill_core score-drawing output/revision-demo/revised/revised.dxf --json
+python -m cad_skill_core benchmark-cad1k --out output/cad1k-eval --json
+
+# 6) 行业专项图纸与环境诊断
 python -m cad_skill_core doctor --cache output/cad-environment.json --json
 python scripts/make_main_sld.py examples/electrical_sld_spec.json --outdir output/sld --stem demo_sld
 python scripts/generate_pavement_cad_ezdxf.py examples/pavement_structure_spec.json --out output/pavement

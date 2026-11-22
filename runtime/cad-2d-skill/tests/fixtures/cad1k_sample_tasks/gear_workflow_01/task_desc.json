@@ -1,0 +1,6 @@
+{
+  "task_id": "CAD1K-SAMPLE-GEAR-01",
+  "title": "直齿圆柱齿轮国标三视图（m=2.5, z=32）",
+  "software": "AutoCAD 2024",
+  "prompt": "# 直齿圆柱齿轮\n图号：GEAR-M25Z32\n材料：40Cr\n模数：2.5 mm\n齿数：32\n齿宽：26 mm\n轴孔：22 mm\n技术要求：1. 调质处理 HB240-270；2. 未注倒角 C1。\n"
+}

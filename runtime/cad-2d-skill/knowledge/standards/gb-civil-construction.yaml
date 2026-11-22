@@ -1,0 +1,85 @@
+name: GB/T civil & structural construction profile
+description: Color-coded construction & municipal structural CAD profile with cyan outlines, green dimensions, and red axes.
+profile_type: configurable-project-profile
+scope: automation-defaults
+family: GB/T
+units: mm
+projection: first-angle
+
+layers:
+  OUTLINE:
+    linetype: CONTINUOUS
+    lineweight_mm: 0.60
+    color: 4
+  THIN:
+    linetype: CONTINUOUS
+    lineweight_mm: 0.25
+    color: 8
+  CENTER:
+    linetype: CENTER
+    lineweight_mm: 0.18
+    color: 1
+  HIDDEN:
+    linetype: HIDDEN
+    lineweight_mm: 0.25
+    color: 2
+  DIM:
+    linetype: CONTINUOUS
+    lineweight_mm: 0.18
+    color: 3
+  TEXT:
+    linetype: CONTINUOUS
+    lineweight_mm: 0.18
+    color: 7
+  HATCH:
+    linetype: CONTINUOUS
+    lineweight_mm: 0.15
+    color: 9
+  FRAME:
+    linetype: CONTINUOUS
+    lineweight_mm: 0.70
+    color: 7
+
+text_styles:
+  normal:
+    font: project-default
+    height_mm: 3.5
+    width_factor: 0.85
+  title:
+    font: project-default
+    height_mm: 5.0
+    width_factor: 0.90
+
+dimension:
+  text_height_mm: 3.5
+  gap_mm: 5.0
+  arrow_size_mm: 3.0
+  lineweight_mm: 0.18
+
+spacing:
+  view_gap_mm: 20.0
+  dimension_gap_mm: 5.0
+
+sheets:
+  A0:
+    width_mm: 1189.0
+    height_mm: 841.0
+  A1:
+    width_mm: 841.0
+    height_mm: 594.0
+  A2:
+    width_mm: 594.0
+    height_mm: 420.0
+  A3:
+    width_mm: 420.0
+    height_mm: 297.0
+  A4:
+    width_mm: 297.0
+    height_mm: 210.0
+
+protected_zones:
+  title_block:
+    anchor: bottom-right
+    width_mm: 180.0
+    height_mm: 55.0
+    margin_mm: 0.0

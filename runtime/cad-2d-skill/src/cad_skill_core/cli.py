@@ -83,7 +83,16 @@ def _parser() -> argparse.ArgumentParser:
     compile_cmd.add_argument('--out', type=Path, required=True, dest='output_path')
     compile_cmd.add_argument(
         '--part-family',
-        choices=('auto', 'flange', 'stepped-shaft', 'slotted-bracket', 'rounded-rect'),
+        choices=(
+            'auto',
+            'flange',
+            'stepped-shaft',
+            'slotted-bracket',
+            'rounded-rect',
+            'spur-gear',
+            'bearing-cap',
+            'ribbed-bracket',
+        ),
         default='auto',
     )
     compile_cmd.add_argument('--lang', choices=('auto', 'en', 'zh'), default='auto')
@@ -131,6 +140,18 @@ def _parser() -> argparse.ArgumentParser:
     rt_cmd.add_argument('--tolerance', type=float, default=0.5, dest='bbox_tolerance')
     rt_cmd.add_argument('--json', action='store_true', dest='as_json')
 
+    score_cmd = commands.add_parser('score-drawing', help='evaluate a DXF drawing on the 100-point engineering rubric (and optional cad-1000-hours rubrics.json)')
+    score_cmd.add_argument('source', type=Path)
+    score_cmd.add_argument('--audit-json', type=Path, default=None, dest='audit_json')
+    score_cmd.add_argument('--rubrics', type=Path, default=None, dest='rubrics_path')
+    score_cmd.add_argument('--json', action='store_true', dest='as_json')
+
+    cad1k_cmd = commands.add_parser('benchmark-cad1k', help='run video-free cad-1000-hours offline engineering benchmark and 100-point rubric evaluation')
+    cad1k_cmd.add_argument('--out', type=Path, default=Path('cad1k-eval-output'), dest='output_dir')
+    cad1k_cmd.add_argument('--bundle', type=Path, action='append', default=None, dest='bundle_dirs')
+    cad1k_cmd.add_argument('--standard-profile', default='gb-mechanical', dest='standard_profile')
+    cad1k_cmd.add_argument('--json', action='store_true', dest='as_json')
+
     for name, help_text in (
         ("generate", "generate and audit core DXF and previews"),
         ("inspect", "run a fresh zero-repair inspection generation"),
@@ -140,6 +161,7 @@ def _parser() -> argparse.ArgumentParser:
         command.add_argument("task_dir", type=Path)
         command.add_argument("--json", action="store_true", dest="as_json")
         command.add_argument("--max-repair-iterations", type=int, default=3)
+        command.add_argument("--standard-profile", default=None, dest="standard_profile")
         if name == "run":
             autocad = command.add_mutually_exclusive_group()
             autocad.add_argument("--autocad", action="store_true", dest="run_autocad")
@@ -169,6 +191,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _phase3_command(arguments)
     if arguments.command in {'drivers', 'verify-roundtrip'}:
         return _phase4_command(arguments)
+    if arguments.command in {'score-drawing', 'benchmark-cad1k'}:
+        return _cad1k_command(arguments)
 
     from .pipeline import PipelineInputError, PipelineOptions, run_task
     try:
@@ -179,6 +203,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             run_autocad=getattr(arguments, "run_autocad", False),
             max_repair_iterations=max_iterations,
             autocad_path=getattr(arguments, "autocad_path", None),
+            standard_profile=getattr(arguments, "standard_profile", None),
         )
         result = run_task(arguments.task_dir, options)
     except (PipelineInputError, TypeError, ValueError) as error:
@@ -407,6 +432,41 @@ def _phase4_command(arguments: argparse.Namespace) -> int:
         return 2
     except Exception as error:
         _write_error(f"CAD driver/roundtrip failure: {type(error).__name__}: {error}", arguments.as_json)
+        return 1
+
+
+def _cad1k_command(arguments: argparse.Namespace) -> int:
+    try:
+        if arguments.command == "score-drawing":
+            from .inspection.rubric_scorer import score_dxf_drawing
+
+            custom_rubric = None
+            if arguments.rubrics_path is not None:
+                custom_rubric = json.loads(arguments.rubrics_path.read_text(encoding="utf-8"))
+            report = score_dxf_drawing(
+                arguments.source,
+                audit_json_path=arguments.audit_json,
+                custom_rubric=custom_rubric,
+            )
+            payload = {"command": "score-drawing", **report.to_dict()}
+            print(_stable_json(payload) if arguments.as_json else json.dumps(payload, ensure_ascii=False, indent=2))
+            return 0
+
+        from .benchmark.cad1k_harness import run_cad1k_benchmark
+
+        summary = run_cad1k_benchmark(
+            arguments.output_dir,
+            external_bundle_dirs=arguments.bundle_dirs,
+            standard_profile=arguments.standard_profile,
+        )
+        payload = {"command": "benchmark-cad1k", **summary}
+        print(_stable_json(payload) if arguments.as_json else json.dumps(payload, ensure_ascii=False, indent=2))
+        return 0 if summary["passed_count"] == summary["task_count"] else 1
+    except (ValueError, TypeError, OSError) as error:
+        _write_error(f"user/validation error: {error}", arguments.as_json)
+        return 2
+    except Exception as error:
+        _write_error(f"rubric/benchmark failure: {type(error).__name__}: {error}", arguments.as_json)
         return 1
 
 

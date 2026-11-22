@@ -1,0 +1,22 @@
+{
+  "criteria": [
+    {
+      "id": "SG-1",
+      "description": "包含粗实线、细点画线、剖面线与尺寸图层",
+      "weight": 30,
+      "required_layers": ["OUTLINE", "CENTER", "HATCH", "DIM"]
+    },
+    {
+      "id": "SG-2",
+      "description": "解算分度圆80、齿顶圆85、齿宽26与轴孔22",
+      "weight": 40,
+      "expected_dimension_values": [80, 85, 26, 22]
+    },
+    {
+      "id": "SG-3",
+      "description": "三视图标题与材料40Cr完整",
+      "weight": 30,
+      "required_texts": ["主视图", "俯视图", "左视图", "40Cr"]
+    }
+  ]
+}

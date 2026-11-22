@@ -50,9 +50,12 @@ D:\Python312\python.exe -B -m cad_skill_core.cli mcp-http --host 127.0.0.1 --por
 | `/mcp` | `POST` | 标准 MCP Streamable HTTP JSON-RPC 2.0 接口 |
 | `/api/v1/health` | `GET` | 服务状态、协议版本、已注册工具数、鉴权开启状态与沙箱路径 |
 | `/api/v1/drivers` | `GET` | 本机 AutoCAD（2021–2026）与国产 CAD（中望/浩辰/CAXA/ODA）实时探测矩阵 |
-| `/api/v1/tasks/compile` | `POST` | 从项目书 Markdown / 参数表编译 `DrawingSpec` 并返回缺失与冲突项 |
-| `/api/v1/tasks/generate` | `POST` | 同步生成二维/三维图纸（`mechanical_2d` / `electrical_sld` / `pavement` / `model_3d`） |
+| `/api/v1/standards` | `GET` | 列出内置 4 套多行业制图标准预设包（机械精加工 / 重工夹具 / 市政土建 / ISO 国际蓝图） |
+| `/api/v1/tasks/compile` | `POST` | 从项目书 Markdown / 参数表编译 `DrawingSpec`（含齿轮/轴承透盖/带筋支座等 7 类零件族） |
+| `/api/v1/tasks/generate` | `POST` | 同步生成二维/三维图纸（支持 `standard_profile` 标准切换并自动返回 `rubric_score`） |
 | `/api/v1/tasks/revise` | `POST` | 基于图元 Handle 与 SHA-256 指纹执行原子局部改图 |
+| `/api/v1/tasks/score` | `POST` | 对任务图纸或任意 DXF 执行 100 分制五维工程审图打分（兼容 `cad-1000-hours` `rubrics.json`） |
+| `/api/v1/benchmark/cad1k` | `POST` | 运行免视频 `cad-1000-hours` 离线工程基准评测套件并返回成绩单 |
 | `/api/v1/tasks/{task_id}` | `GET` | 查询任务状态、审计摘要与产物清单 |
 | `/api/v1/tasks/{task_id}/artifacts/{filename}` | `GET` | 安全下载 `.dxf` / `.svg` / `.png` / `.pdf` / `.stl` / `.obj` / `.glb` / `audit.json` |
 | `/api/v1/jobs` | `POST` / `GET` | 提交或列出 **独立子进程隔离的异步出图任务**（`queued` → `running` → `completed`） |
@@ -66,13 +69,13 @@ D:\Python312\python.exe -B -m cad_skill_core.cli mcp-http --host 127.0.0.1 --por
 
 ---
 
-## 3. 已暴露的 15 个 MCP Tools（二维 + 三维 + 多特征组合 + 国产 CAD 驱动全闭环）
+## 3. 已暴露的 19 个 MCP Tools（二维 + 三维 + 审图打分 + CAD-1K 评测 + 国产 CAD 驱动全闭环）
 
 1. `cad_doctor`：诊断 Python 渲染栈、本机中文字体覆盖率、三维内核能力与多厂商 CAD 驱动状态。
 2. `cad_compile_spec`：解析项目书/手册/CSV/DOCX/PDF，编译 `DrawingSpec` 并拦截缺失尺寸与冲突参数。
 3. `cad_validate_spec`：严格校验 `DrawingSpec` 结构、尺寸锚点与溯源完整性。
 4. `cad_learn_standard`：从参考样图 DXF 自动提取图层、线宽、字高、`DIMSTYLE` 与图幅标准。
-5. `cad_generate_mechanical_2d`：生成国标零件/装配图（含自动避让修复、中文图框与 `ImageContent` 预览回传）。
+5. `cad_generate_mechanical_2d`：生成国标/ISO 三视图零件与装配图（支持 `standard_profile` 标准预设切换、自动避让修复与实时 `rubric_score`）。
 6. `cad_generate_electrical_sld`：生成单母/分段/双母电气主接线图（DXF/SVG/PDF/PNG + 交叉审计）。
 7. `cad_generate_pavement`：生成道路路面结构设计图（原生 `HATCH` + `DIMENSION` 审计级 DXF + PNG）。
 8. `cad_inventory_dxf`：列出 DXF 可编辑图元句柄（Handle）、坐标与当前 SHA-256。
@@ -83,11 +86,17 @@ D:\Python312\python.exe -B -m cad_skill_core.cli mcp-http --host 127.0.0.1 --por
 13. `cad_list_drivers`：只读探测本机安装的 AutoCAD（2021–2026）、中望 CAD（ZWCAD）、浩辰 CAD（GstarCAD）、CAXA 电子图板及 ODA 转换器矩阵。
 14. `cad_verify_roundtrip`：核验 DWG ↔ DXF 双向往返前后的图层、块、布局、样式、图元数与总包围盒结构无损性。
 15. `cad_compile_3d_spec`：将中英文口语化描述或项目书文档（`.md`/`.docx`/`.pdf`/`.csv`）编译为三维 `Model3DSpec`，并自动提示缺失或冲突参数。
+16. `cad_open_viewer`：打开 MCP App 常驻交互式蓝图与三维审图台（支持蓝色虚线框选局部提问与改图）。
+17. `cad_app_load_scene`：供 MCP App 画布内部加载二维矢量图元与三维棱线网格。
+18. `cad_score_drawing`：执行 100 分制五维工程审图打分（评定 `S/A/B/C/D` 级，兼容 `cad-1000-hours` `rubrics.json`）。
+19. `cad_run_cad1k_eval`：运行免视频 `cad-1000-hours` 离线工程基准评测套件（齿轮/轴承透盖/带筋支座/DXF 局部改图）。
 
 ## 4. MCP Resources 与 Prompts
 
 - **Resources**：
+  - `ui://cad-operations/viewer.html`
   - `cad://standards/gb-mechanical`
+  - `cad://standards/presets`
   - `cad://schemas/drawing-spec`
   - `cad://schemas/model-3d-spec`
   - `cad://revision/operations`

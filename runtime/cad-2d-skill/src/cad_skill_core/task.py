@@ -20,6 +20,7 @@ class PipelineOptions:
     run_autocad: bool = False
     max_repair_iterations: int = 3
     autocad_path: Path | None = None
+    standard_profile: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.run_autocad, bool):
