@@ -36,24 +36,44 @@ _NUMBER_TOL_RE = re.compile(
 _BOLT_PATTERN_RE = re.compile(
     r"(?<![A-Za-z0-9\u00d8\u2300\u2205\u03a6\u03c6-])(?P<count>\d+)\s*[×xX*-]\s*[⌀∅Φφ]\s*(?P<dia>\d+(?:\.\d+)?)"
 )
+_CONV_HOLES_RE = re.compile(
+    r"(?:均布|打|开|带|分布|钻)?\s*(?P<count>\d+)\s*个\s*(?:直径\s*|[⌀∅ΦφDd]\s*)?(?P<dia>\d+(?:\.\d+)?)\s*(?:mm|毫米)?\s*的?\s*(?:螺栓|安装|通)?孔"
+)
+_REV_BCD_RE = re.compile(
+    r"(?:在\s*)?[⌀∅Φφ]?\s*(?P<val>\d+(?:\.\d+)?)\s*(?:mm|毫米)?\s*的?\s*(?:节圆|孔距圆|分布圆)"
+)
 _SHAFT_STEP_RE = re.compile(
-    r"(?:轴段|台阶|step)\s*\d*\s*[:：]?\s*[⌀∅ΦφDd]?\s*(?P<dia>\d+(?:\.\d+)?)\s*[×xX*]\s*[Ll]?\s*(?P<len>\d+(?:\.\d+)?)",
+    r"(?:轴段|台阶|阶梯段|step)\s*\d*\s*[:：]?\s*[⌀∅ΦφDd]?\s*(?P<dia>\d+(?:\.\d+)?)\s*[×xX*]\s*[Ll]?\s*(?P<len>\d+(?:\.\d+)?)",
+    re.IGNORECASE,
+)
+_CONV_SHAFT_STEP_RE = re.compile(
+    r"(?:第[一二三四五六1-9]段|(?:轴|阶梯)段\s*[1-9])\s*[:：]?\s*(?:外径|直径|[⌀∅ΦφDd])?\s*(?P<dia>\d+(?:\.\d+)?)\s*(?:mm|毫米)?\s*[,，\s]*?(?:长(?:度)?|[Ll])\s*[:：]?\s*(?P<len>\d+(?:\.\d+)?)",
+    re.IGNORECASE,
+)
+_CONV_SLOT_PAIR_RE = re.compile(
+    r"(?P<slen>\d+(?:\.\d+)?)\s*[×xX*]\s*(?P<swid>\d+(?:\.\d+)?)\s*(?:mm|毫米)?\s*的?\s*(?:腰形槽|长圆槽|长槽)"
+)
+_INLINE_MATERIAL_RE = re.compile(
+    r"(?<![A-Za-z0-9])(304不锈钢|316L?不锈钢|45#?钢|40Cr|20CrMnTi|Q235[AB]?|Q345[AB]?|6061(?:-T6)?铝合金|HT200|HT250|QT450|黄铜)(?![A-Za-z0-9])",
     re.IGNORECASE,
 )
 
 _PARAM_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
-    ("outer_diameter", re.compile(r"(?:外径|outer\s*diameter|OD)\s*[:：=]?\s*[⌀∅Φφ]?\s*", re.IGNORECASE)),
-    ("bore_diameter", re.compile(r"(?:内径|内孔(?:直径)?|中心孔|bore(?:\s*diameter)?|ID)\s*[:：=]?\s*[⌀∅Φφ]?\s*", re.IGNORECASE)),
-    ("bolt_circle_diameter", re.compile(r"(?:节圆(?:直径)?|孔距圆|分布圆(?:直径)?|bolt\s*circle(?:\s*diameter)?|BCD|PCD)\s*[:：=]?\s*[⌀∅Φφ]?\s*", re.IGNORECASE)),
-    ("hole_diameter", re.compile(r"(?:安装孔径|螺栓孔径|孔径|hole\s*diameter)\s*[:：=]?\s*[⌀∅Φφ]?\s*", re.IGNORECASE)),
-    ("hole_count", re.compile(r"(?:孔数|螺栓孔数|安装孔数|hole\s*count)\s*[:：=]?\s*", re.IGNORECASE)),
-    ("thickness", re.compile(r"(?:厚度|板厚|法兰厚度|thickness)\s*[:：=]?\s*", re.IGNORECASE)),
-    ("width", re.compile(r"(?:宽度|总宽|板宽|width)\s*[:：=]?\s*", re.IGNORECASE)),
-    ("height", re.compile(r"(?:高度|总高|板高|height)\s*[:：=]?\s*", re.IGNORECASE)),
-    ("corner_radius", re.compile(r"(?:圆角(?:半径)?|倒圆|corner\s*radius|fillet\s*radius)\s*[:：=]?\s*[Rr]?\s*", re.IGNORECASE)),
-    ("slot_length", re.compile(r"(?:腰形槽长|槽长|长槽长度|slot\s*length)\s*[:：=]?\s*", re.IGNORECASE)),
-    ("slot_width", re.compile(r"(?:腰形槽宽|槽宽|slot\s*width)\s*[:：=]?\s*", re.IGNORECASE)),
-    ("hole_inset", re.compile(r"(?:孔边距|安装孔边距|hole\s*inset)\s*[:：=]?\s*", re.IGNORECASE)),
+    ("outer_diameter", re.compile(r"(?:外径|outer\s*diameter|OD)\s*(?:为|是)?\s*[:：=]?\s*[⌀∅Φφ]?\s*", re.IGNORECASE)),
+    ("bore_diameter", re.compile(r"(?:内径|内孔(?:直径)?|中心(?:通)?孔|bore(?:\s*diameter)?|ID)\s*(?:为|是)?\s*[:：=]?\s*[⌀∅Φφ]?\s*", re.IGNORECASE)),
+    ("bolt_circle_diameter", re.compile(r"(?:节圆(?:直径)?|孔距圆|分布圆(?:直径)?|bolt\s*circle(?:\s*diameter)?|BCD|PCD)\s*(?:为|是)?\s*[:：=]?\s*[⌀∅Φφ]?\s*", re.IGNORECASE)),
+    ("hole_diameter", re.compile(r"(?:安装孔径|螺栓孔径|孔径|hole\s*diameter)\s*(?:为|是)?\s*[:：=]?\s*[⌀∅Φφ]?\s*", re.IGNORECASE)),
+    ("hole_count", re.compile(r"(?:孔数|螺栓孔数|安装孔数|hole\s*count)\s*(?:为|是)?\s*[:：=]?\s*", re.IGNORECASE)),
+    ("hub_diameter", re.compile(r"(?:颈径|法兰颈(?:外)?径|凸台(?:外)?径|hub\s*diameter)\s*(?:为|是)?\s*[:：=]?\s*[⌀∅Φφ]?\s*", re.IGNORECASE)),
+    ("hub_height", re.compile(r"(?:颈高|法兰颈高|凸台高(?:度)?|hub\s*height)\s*(?:为|是)?\s*[:：=]?\s*", re.IGNORECASE)),
+    ("thickness", re.compile(r"(?:底盘厚(?:度)?|法兰厚(?:度)?|板厚|厚度|厚|thickness)\s*(?:为|是)?\s*[:：=]?\s*", re.IGNORECASE)),
+    ("width", re.compile(r"(?:总宽|板宽|宽度|宽|长|width)\s*(?:为|是)?\s*[:：=]?\s*", re.IGNORECASE)),
+    ("height", re.compile(r"(?:总高|板高|高度|高|height)\s*(?:为|是)?\s*[:：=]?\s*", re.IGNORECASE)),
+    ("depth", re.compile(r"(?:进深|深度|深|depth)\s*(?:为|是)?\s*[:：=]?\s*", re.IGNORECASE)),
+    ("corner_radius", re.compile(r"(?:(?:四角)?倒圆|圆角(?:半径)?|corner\s*radius|fillet\s*radius)\s*(?:为|是)?\s*[:：=]?\s*[Rr]?\s*", re.IGNORECASE)),
+    ("slot_length", re.compile(r"(?:腰形槽长|槽长|长槽长度|slot\s*length)\s*(?:为|是)?\s*[:：=]?\s*", re.IGNORECASE)),
+    ("slot_width", re.compile(r"(?:腰形槽宽|槽宽|slot\s*width)\s*(?:为|是)?\s*[:：=]?\s*", re.IGNORECASE)),
+    ("hole_inset", re.compile(r"(?:安装孔边距|孔边距|距边|边距|hole\s*inset)\s*(?:为|是)?\s*[:：=]?\s*", re.IGNORECASE)),
 )
 
 
@@ -192,6 +212,10 @@ def compile_spec_from_fragments(
             mat_val = m_mat.group(1).split("|")[0].strip().rstrip("。；;")
             if mat_val:
                 materials.append((mat_val, sid, frag.locator))
+        elif "|" not in line:
+            m_inl_mat = _INLINE_MATERIAL_RE.search(line)
+            if m_inl_mat and not materials:
+                materials.append((m_inl_mat.group(1), sid, frag.locator))
 
         # Technical notes extraction
         if re.search(r"^(?:技术要求|注\s*[:：]|note\s*[:：]|\d+[.、]\s*(?:未注|去毛刺|热处理|表面|公差|调质|倒角))", line, re.IGNORECASE):
@@ -228,13 +252,39 @@ def compile_spec_from_fragments(
             _record_param(params, "hole_count", cnt, None, None, sid, frag.locator)
             _record_param(params, "hole_diameter", hdia, None, None, sid, frag.locator)
 
+        for m_ch in _CONV_HOLES_RE.finditer(line):
+            cnt = float(m_ch.group("count"))
+            hdia = float(m_ch.group("dia"))
+            if "hole_count" not in params:
+                _record_param(params, "hole_count", cnt, None, None, sid, frag.locator)
+            if "hole_diameter" not in params:
+                _record_param(params, "hole_diameter", hdia, None, None, sid, frag.locator)
+
+        for m_rbcd in _REV_BCD_RE.finditer(line):
+            if "bolt_circle_diameter" not in params:
+                _record_param(params, "bolt_circle_diameter", float(m_rbcd.group("val")), None, None, sid, frag.locator)
+
+        for m_slp in _CONV_SLOT_PAIR_RE.finditer(line):
+            _record_param(params, "slot_length", float(m_slp.group("slen")), None, None, sid, frag.locator)
+            _record_param(params, "slot_width", float(m_slp.group("swid")), None, None, sid, frag.locator)
+
+        step_matched_spans: list[tuple[int, int]] = []
         for m_step in _SHAFT_STEP_RE.finditer(line):
             dia = float(m_step.group("dia"))
             length = float(m_step.group("len"))
             shaft_steps.append((length, dia, sid))
+            step_matched_spans.append(m_step.span())
+
+        for m_cstep in _CONV_SHAFT_STEP_RE.finditer(line):
+            sp = m_cstep.span()
+            if not any(not (sp[1] <= s0 or sp[0] >= s1) for s0, s1 in step_matched_spans):
+                shaft_steps.append((float(m_cstep.group("len")), float(m_cstep.group("dia")), sid))
+                step_matched_spans.append(sp)
 
         for pname, pattern in _PARAM_PATTERNS:
             for match in pattern.finditer(line):
+                if step_matched_spans and pname in {"width", "height"}:
+                    continue
                 tail = line[match.end() :]
                 num_m = _NUMBER_TOL_RE.match(tail)
                 if num_m:

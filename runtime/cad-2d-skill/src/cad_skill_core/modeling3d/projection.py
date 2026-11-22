@@ -27,7 +27,10 @@ from cad_skill_core.standards.profile import load_standard
 
 from .models import (
     Box3D,
+    BoxBoss3D,
+    CompoundSolid3D,
     Cylinder3D,
+    CylinderBoss3D,
     ExtrudePolygon3D,
     Flange3D,
     Model3DSpec,
@@ -152,6 +155,9 @@ def project_model3d_to_drawing_spec(
 
     elif isinstance(body, ExtrudePolygon3D):
         views, entities, view_indices, dims = _project_extrude_polygon(body, sid)
+
+    elif isinstance(body, CompoundSolid3D):
+        views, entities, view_indices, dims = _project_compound_3d(body, sid)
 
     else:
         raise TypeError(f"unsupported 3D body kind for 2D projection: {type(body)!r}")
@@ -477,3 +483,137 @@ def _project_extrude_polygon(
         },
     ]
     return ["front", "top"], entities, {"front": front_indices, "top": [top_idx]}, dims
+
+
+def _project_compound_3d(
+    body: CompoundSolid3D, sid: str
+) -> tuple[list[str], list[DrawingEntity], dict[str, list[int]], list[dict[str, Any]]]:
+    entities: list[DrawingEntity] = []
+    front_indices: list[int] = []
+    top_indices: list[int] = []
+    h_base = body.base_height
+
+    if body.base_shape == "box":
+        half_x = body.width / 2.0
+        half_y = body.depth / 2.0
+    else:
+        half_x = body.outer_diameter / 2.0
+        half_y = half_x
+
+    # 1. Front View (X-Z elevation): base outline + bosses + hidden holes/counterbores
+    base_front_idx = len(entities)
+    front_indices.append(base_front_idx)
+    entities.append(
+        PolylineEntity(
+            kind="polyline",
+            layer="OUTLINE",
+            vertices=[(-half_x, 0.0), (half_x, 0.0), (half_x, h_base), (-half_x, h_base)],
+            closed=True,
+            source_id=sid,
+        )
+    )
+    for boss in body.bosses:
+        z_top = h_base + boss.height
+        bx_half = boss.diameter / 2.0 if isinstance(boss, CylinderBoss3D) else boss.width / 2.0
+        front_indices.append(len(entities))
+        entities.append(
+            PolylineEntity(
+                kind="polyline",
+                layer="OUTLINE",
+                vertices=[(boss.x - bx_half, h_base), (boss.x + bx_half, h_base), (boss.x + bx_half, z_top), (boss.x - bx_half, z_top)],
+                closed=True,
+                source_id=sid,
+            )
+        )
+        if isinstance(boss, CylinderBoss3D) and boss.bore_diameter > 0:
+            rb = boss.bore_diameter / 2.0
+            for x_e in (boss.x - rb, boss.x + rb):
+                front_indices.append(len(entities))
+                entities.append(LineEntity(kind="line", layer="HIDDEN", start=(x_e, 0.0), end=(x_e, z_top), source_id=sid))
+
+    for hx, _, hd_i in body.through_holes:
+        rh = hd_i / 2.0
+        for x_e in (hx - rh, hx + rh):
+            front_indices.append(len(entities))
+            entities.append(LineEntity(kind="line", layer="HIDDEN", start=(x_e, 0.0), end=(x_e, h_base), source_id=sid))
+
+    for cb in body.counterbores:
+        r_th = cb.through_diameter / 2.0
+        r_cb = cb.cbore_diameter / 2.0
+        z_step = h_base - cb.cbore_depth
+        for x_e in (cb.x - r_th, cb.x + r_th):
+            front_indices.append(len(entities))
+            entities.append(LineEntity(kind="line", layer="HIDDEN", start=(x_e, 0.0), end=(x_e, z_step), source_id=sid))
+        for x_e in (cb.x - r_cb, cb.x + r_cb):
+            front_indices.append(len(entities))
+            entities.append(LineEntity(kind="line", layer="HIDDEN", start=(x_e, z_step), end=(x_e, h_base), source_id=sid))
+        front_indices.append(len(entities))
+        entities.append(LineEntity(kind="line", layer="HIDDEN", start=(cb.x - r_cb, z_step), end=(cb.x + r_cb, z_step), source_id=sid))
+
+    # 2. Top View (X-Y plan, exact X width == 2*half_x -> 长对正!)
+    top_base_idx = len(entities)
+    top_indices.append(top_base_idx)
+    if body.base_shape == "cylinder":
+        entities.append(CircularEntity(kind="circular", layer="OUTLINE", center=(0.0, 0.0), radius=half_x, source_id=sid))
+    else:
+        entities.append(
+            PolylineEntity(
+                kind="polyline",
+                layer="OUTLINE",
+                vertices=[(-half_x, -half_y), (half_x, -half_y), (half_x, half_y), (-half_x, half_y)],
+                closed=True,
+                source_id=sid,
+            )
+        )
+
+    for boss in body.bosses:
+        if isinstance(boss, CylinderBoss3D):
+            top_indices.append(len(entities))
+            entities.append(CircularEntity(kind="circular", layer="OUTLINE", center=(boss.x, boss.y), radius=boss.diameter / 2.0, source_id=sid))
+            if boss.bore_diameter > 0:
+                top_indices.append(len(entities))
+                entities.append(CircularEntity(kind="circular", layer="OUTLINE", center=(boss.x, boss.y), radius=boss.bore_diameter / 2.0, source_id=sid))
+        else:
+            assert isinstance(boss, BoxBoss3D)
+            bhw, bhd = boss.width / 2.0, boss.depth / 2.0
+            top_indices.append(len(entities))
+            entities.append(
+                PolylineEntity(
+                    kind="polyline",
+                    layer="OUTLINE",
+                    vertices=[(boss.x - bhw, boss.y - bhd), (boss.x + bhw, boss.y - bhd), (boss.x + bhw, boss.y + bhd), (boss.x - bhw, boss.y + bhd)],
+                    closed=True,
+                    source_id=sid,
+                )
+            )
+
+    for hx, hy, hd_i in body.through_holes:
+        top_indices.append(len(entities))
+        entities.append(CircularEntity(kind="circular", layer="OUTLINE", center=(hx, hy), radius=hd_i / 2.0, source_id=sid))
+
+    for cb in body.counterbores:
+        top_indices.append(len(entities))
+        entities.append(CircularEntity(kind="circular", layer="OUTLINE", center=(cb.x, cb.y), radius=cb.cbore_diameter / 2.0, source_id=sid))
+        top_indices.append(len(entities))
+        entities.append(CircularEntity(kind="circular", layer="OUTLINE", center=(cb.x, cb.y), radius=cb.through_diameter / 2.0, source_id=sid))
+
+    dims = [
+        {
+            "kind": "linear" if body.base_shape == "box" else "diameter",
+            "value": 2.0 * half_x,
+            "source_id": sid,
+            "owner_view": "top" if body.base_shape == "cylinder" else "front",
+            "target_entity_index": top_base_idx if body.base_shape == "cylinder" else base_front_idx,
+            "orientation": "horizontal",
+            **({"prefix": "⌀"} if body.base_shape == "cylinder" else {}),
+        },
+        {
+            "kind": "linear",
+            "value": h_base,
+            "source_id": sid,
+            "owner_view": "front",
+            "target_entity_index": base_front_idx,
+            "orientation": "vertical",
+        },
+    ]
+    return ["front", "top"], entities, {"front": front_indices, "top": top_indices}, dims

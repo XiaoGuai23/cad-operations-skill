@@ -17,6 +17,9 @@ from cad_skill_core.documents.spec_compiler import (
 from cad_skill_core.environment import check_environment
 from cad_skill_core.modeling3d import (
     Model3DSpec,
+    Part3DFamily,
+    compile_model3d_from_files,
+    compile_model3d_from_text,
     load_model3d_spec,
     probe_3d_capabilities,
     project_model3d_to_drawing_spec,
@@ -151,6 +154,10 @@ class PreviewAndDiffArgs(StrictInputModel):
 class Generate3DArgs(StrictInputModel):
     spec: dict[str, Any] | None = Field(default=None, description="Validated Model3DSpec JSON object.")
     spec_path: str | None = Field(default=None, description="Path to a Model3DSpec JSON file.")
+    markdown_brief: str | None = Field(
+        default=None,
+        description="Conversational natural-language or Markdown engineering brief to auto-compile into a 3D model.",
+    )
     with_2d_sheet: bool = Field(
         default=False,
         description="Also project and render an audited multi-view GB/T 2D engineering drawing alongside 3D outputs.",
@@ -167,6 +174,21 @@ class Generate3DArgs(StrictInputModel):
     include_image_base64: bool = Field(
         default=False,
         description="Attach shaded isometric iso.png as an MCP ImageContent block.",
+    )
+
+
+class Compile3DSpecArgs(StrictInputModel):
+    markdown_text: str | None = Field(
+        default=None,
+        description="Conversational engineering description or Markdown brief for 3D modeling.",
+    )
+    input_paths: list[str] = Field(
+        default_factory=list,
+        description="Paths to .md, .txt, .csv, .tsv, .docx, or .pdf files inside allowed workspace roots.",
+    )
+    part_family: Part3DFamily = Field(
+        default="auto",
+        description="Target 3D mechanical part family or 'auto' for automatic inference.",
     )
 
 
@@ -579,20 +601,76 @@ def _handle_preview_and_diff(
 
 
 def _resolve_model3d_spec(
-    sandbox: MCPWorkspaceSandbox, spec: dict[str, Any] | None, spec_path: str | None
+    sandbox: MCPWorkspaceSandbox,
+    spec: dict[str, Any] | None,
+    spec_path: str | None,
+    markdown_brief: str | None = None,
 ) -> Model3DSpec:
-    if (spec is None) == (spec_path is None):
-        raise ValueError("provide exactly one of spec or spec_path")
+    given = sum(x is not None for x in (spec, spec_path, markdown_brief))
+    if given != 1:
+        raise ValueError("provide exactly one of spec, spec_path, or markdown_brief")
     if spec is not None:
         return Model3DSpec.model_validate(spec)
+    if markdown_brief is not None:
+        compiled = compile_model3d_from_text(markdown_brief)
+        if compiled.validation.missing or compiled.validation.conflicts:
+            raise ValueError(
+                f"3D brief is incomplete or conflicting: missing={compiled.validation.missing}, conflicts={compiled.validation.conflicts}"
+            )
+        return compiled
     assert spec_path is not None
     return load_model3d_spec(sandbox.resolve_readable_file(spec_path))
+
+
+def _handle_compile_3d_spec(
+    sandbox: MCPWorkspaceSandbox, args: Compile3DSpecArgs
+) -> tuple[dict[str, Any], Path | None, bool]:
+    if not args.markdown_text and not args.input_paths:
+        raise ValueError("provide markdown_text, input_paths, or both")
+    task_id, task_dir = sandbox.allocate_task_dir("comp3d")
+    in_dir = task_dir / "input"
+    out_dir = task_dir / "output"
+    in_dir.mkdir()
+    out_dir.mkdir()
+
+    files: list[Path] = []
+    if args.markdown_text:
+        md_file = in_dir / "brief3d.md"
+        md_file.write_text(args.markdown_text, encoding="utf-8")
+        files.append(md_file)
+    for raw in args.input_paths:
+        files.append(sandbox.resolve_readable_file(raw))
+
+    spec_3d = compile_model3d_from_files(files, part_family=args.part_family)
+    out_file = out_dir / "model-3d-spec.json"
+    out_file.write_text(
+        json.dumps(spec_3d.model_dump(mode="json"), ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    incomplete = bool(spec_3d.validation.missing or spec_3d.validation.conflicts)
+    payload = {
+        "task_id": task_id,
+        "domain": "compile_3d_spec",
+        "status": "incomplete" if incomplete else "compiled",
+        "validation": spec_3d.validation.model_dump(mode="json"),
+        "artifacts": [
+            {
+                "name": out_file.name,
+                "path": str(out_file.resolve()),
+                "size": out_file.stat().st_size,
+                "sha256": sha256_file(out_file),
+            }
+        ],
+        "spec": spec_3d.model_dump(mode="json"),
+    }
+    sandbox.write_task_metadata(task_id, payload)
+    return payload, None, False
 
 
 def _handle_generate_3d(
     sandbox: MCPWorkspaceSandbox, args: Generate3DArgs
 ) -> tuple[dict[str, Any], Path | None, bool]:
-    spec_3d = _resolve_model3d_spec(sandbox, args.spec, args.spec_path)
+    spec_3d = _resolve_model3d_spec(sandbox, args.spec, args.spec_path, args.markdown_brief)
     task_id, task_dir = sandbox.allocate_task_dir("model3d")
     out_dir = task_dir / "output"
     bundle = run_3d_task(
@@ -782,6 +860,12 @@ TOOLS: tuple[ToolDefinition, ...] = (
         VerifyRoundTripArgs,
         _handle_verify_roundtrip,
     ),
+    ToolDefinition(
+        "cad_compile_3d_spec",
+        "Compile conversational Chinese/English descriptions or documents (.md/.docx/.pdf/.csv) into a validated 3D Model3DSpec.",
+        Compile3DSpecArgs,
+        _handle_compile_3d_spec,
+    ),
 )
 
 TOOL_BY_NAME: dict[str, ToolDefinition] = {tool.name: tool for tool in TOOLS}
@@ -947,6 +1031,13 @@ def list_mcp_prompts() -> list[dict[str, Any]]:
                 {"name": "change_request", "description": "Requested engineering modification.", "required": True},
             ],
         },
+        {
+            "name": "visual-self-check-and-revise",
+            "description": "Closed-loop visual quality self-inspection workflow after CAD generation.",
+            "arguments": [
+                {"name": "task_id", "description": "Generated task_id to visually inspect and refine.", "required": True},
+            ],
+        },
     ]
 
 
@@ -993,6 +1084,28 @@ def get_mcp_prompt(name: str, arguments: dict[str, Any] | None) -> dict[str, Any
                             "2. 调用 `cad_inventory_dxf` 获取目标图元 handle 与当前 `sha256`；\n"
                             "3. 先以 `dry_run=true` 调用 `cad_revise_dxf` 验证计划无误；\n"
                             "4. 再以 `dry_run=false` 正式生成，并调用 `cad_preview_and_diff` 进行修改前后对比复核。"
+                        ),
+                    },
+                }
+            ],
+        }
+    if name == "visual-self-check-and-revise":
+        task_id = str(args.get("task_id", "")).strip()
+        if not task_id:
+            raise ValueError("missing required prompt argument: task_id")
+        return {
+            "description": "Closed-loop visual self-check and surgical DXF refinement",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": {
+                        "type": "text",
+                        "text": (
+                            f"请对任务 `{task_id}` 产出的图纸执行闭环视觉复检：\n"
+                            "1. 读取 `cad://tasks/" + task_id + "/audit` 检查是否存在任何 warning/info 假设；\n"
+                            "2. 调用 `cad_inventory_dxf(task_id='" + task_id + "')` 获取关键标注与轮廓包围盒；\n"
+                            "3. 调用 `cad_preview_and_diff`（开启 `include_image_base64=true`）放大审阅标注密集区域；\n"
+                            "4. 如需微调尺寸文字位置或轮廓，先 `dry_run=true` 再正式执行 `cad_revise_dxf`。"
                         ),
                     },
                 }

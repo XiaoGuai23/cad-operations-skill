@@ -1,6 +1,12 @@
 """Parametric 3D solid/mesh modeling, 3D->2D projection, and manifold verification."""
 
 from .adapters import generate_autocad_3d_script, probe_3d_capabilities
+from .compiler3d import (
+    Part3DFamily,
+    compile_model3d_from_files,
+    compile_model3d_from_fragments,
+    compile_model3d_from_text,
+)
 from .exporters import (
     export_3d_dxf,
     export_binary_stl,
@@ -12,7 +18,11 @@ from .mesh_kernel import SolidMesh3D, build_solid_mesh
 from .models import (
     Body3D,
     Box3D,
+    BoxBoss3D,
+    CompoundSolid3D,
+    CounterboreHole3D,
     Cylinder3D,
+    CylinderBoss3D,
     ExtrudePolygon3D,
     Flange3D,
     Model3DSpec,
@@ -28,14 +38,22 @@ __all__ = [
     "Audit3DReport",
     "Body3D",
     "Box3D",
+    "BoxBoss3D",
+    "CompoundSolid3D",
+    "CounterboreHole3D",
     "Cylinder3D",
+    "CylinderBoss3D",
     "ExtrudePolygon3D",
     "Flange3D",
     "Model3DSpec",
+    "Part3DFamily",
     "SlottedBracket3D",
     "SolidMesh3D",
     "SteppedShaft3D",
     "build_solid_mesh",
+    "compile_model3d_from_files",
+    "compile_model3d_from_fragments",
+    "compile_model3d_from_text",
     "export_3d_dxf",
     "export_binary_stl",
     "export_glb",

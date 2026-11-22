@@ -1,23 +1,23 @@
-"""Zero-build-step responsive Chinese Web Auto-Drafting Studio (2D SVG + 3D Orbit Viewer)."""
+"""Studio 2.0: Interactive 2D Vector CAD Viewer, Crease-Edge 3D Viewer, Visual Forms & DXF Revision Diff."""
 
 from __future__ import annotations
 
 
 def render_studio_html() -> str:
-    """Return self-contained HTML5/CSS/JS application for the CAD Auto-Drafting Studio."""
+    """Return self-contained HTML5/CSS/JS CAD Studio 2.0 application."""
 
-    return """<!DOCTYPE html>
+    return r"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>CAD Operations Skill — 智能自动出图工作台</title>
+  <title>CAD Operations Skill · 智能自动出图工作台 — CAD Operations Studio 2.0</title>
   <style>
     :root {
-      --bg: #0b1220;
-      --panel: #121c2f;
-      --panel-alt: #18253d;
-      --border: #263654;
+      --bg: #090e1a;
+      --panel: #11192c;
+      --panel-alt: #17223b;
+      --border: #263657;
       --text: #e2e8f0;
       --muted: #94a3b8;
       --accent: #38bdf8;
@@ -31,93 +31,131 @@ def render_studio_html() -> str:
       font-family: "Microsoft YaHei", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       background: var(--bg);
       color: var(--text);
-      min-height: 100vh;
+      height: 100vh;
       display: flex;
       flex-direction: column;
+      overflow: hidden;
     }
     header {
       background: var(--panel);
       border-bottom: 1px solid var(--border);
-      padding: 12px 20px;
+      padding: 9px 18px;
       display: flex;
       align-items: center;
       justify-content: space-between;
-      flex-wrap: wrap;
-      gap: 12px;
+      gap: 10px;
+      flex-shrink: 0;
     }
-    .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 17px; }
+    .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 15.5px; }
     .badge {
-      font-size: 12px;
-      padding: 3px 9px;
+      font-size: 11.5px;
+      padding: 2px 8px;
       border-radius: 999px;
       background: var(--panel-alt);
       border: 1px solid var(--border);
       color: var(--muted);
+      white-space: nowrap;
     }
-    .badge.ok { border-color: rgba(16,185,129,.45); color: #34d399; }
-    .badge.warn { border-color: rgba(245,158,11,.45); color: #fbbf24; }
-    .top-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .badge.ok { border-color: rgba(16,185,129,.5); color: #34d399; }
+    .badge.warn { border-color: rgba(245,158,11,.5); color: #fbbf24; }
+    .row { display: flex; gap: 7px; align-items: center; flex-wrap: wrap; }
     input.api-key {
       background: var(--bg);
       border: 1px solid var(--border);
       color: var(--text);
-      padding: 5px 10px;
+      padding: 4px 9px;
       border-radius: 6px;
       font-size: 12px;
-      width: 190px;
+      width: 165px;
     }
     main {
       flex: 1;
       display: grid;
-      grid-template-columns: 430px 1fr;
-      gap: 16px;
-      padding: 16px;
+      grid-template-columns: 420px 1fr;
+      gap: 12px;
+      padding: 12px;
+      min-height: 0;
     }
-    @media (max-width: 1024px) { main { grid-template-columns: 1fr; } }
-    .card {
+    .sidebar {
       background: var(--panel);
       border: 1px solid var(--border);
       border-radius: 10px;
-      padding: 15px;
       display: flex;
       flex-direction: column;
-      gap: 12px;
+      min-height: 0;
+      overflow: hidden;
     }
-    .tabs { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; }
+    .nav-tabs {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 5px;
+      padding: 10px;
+      border-bottom: 1px solid var(--border);
+      background: #0d1526;
+    }
     .tab-btn {
       background: var(--panel-alt);
       border: 1px solid var(--border);
       color: var(--muted);
-      padding: 8px 10px;
+      padding: 7px 6px;
       border-radius: 6px;
       cursor: pointer;
-      font-size: 12.5px;
+      font-size: 12px;
       font-weight: 600;
-      transition: .15s;
+      text-align: center;
     }
     .tab-btn.active {
       background: rgba(56,189,248,.16);
       border-color: var(--accent);
       color: var(--accent);
     }
-    textarea {
-      width: 100%;
-      min-height: 230px;
-      background: #080e1a;
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      color: #f1f5f9;
-      padding: 10px;
-      font-family: Consolas, "Courier New", monospace;
-      font-size: 12.5px;
-      line-height: 1.5;
-      resize: vertical;
+    .sidebar-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 11px;
     }
-    .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-    button.primary, button.secondary {
-      padding: 8px 14px;
+    .sidebar-footer {
+      padding: 10px 12px;
+      border-top: 1px solid var(--border);
+      background: #0d1526;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .sec-title { font-size: 12px; font-weight: 700; color: var(--accent); letter-spacing: .3px; }
+    .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .field { display: flex; flex-direction: column; gap: 3px; }
+    .field.full { grid-column: 1 / -1; }
+    .field label { font-size: 11.5px; color: var(--muted); }
+    .field input, .field select, textarea {
+      background: #080d18;
+      border: 1px solid var(--border);
       border-radius: 6px;
-      font-size: 13px;
+      color: #f1f5f9;
+      padding: 6px 8px;
+      font-size: 12.5px;
+      font-family: inherit;
+    }
+    textarea { font-family: Consolas, monospace; min-height: 76px; resize: vertical; line-height: 1.45; }
+    .dropzone {
+      border: 1.5px dashed #3b5280;
+      border-radius: 8px;
+      padding: 10px;
+      text-align: center;
+      font-size: 12px;
+      color: var(--muted);
+      background: rgba(23,34,59,.45);
+      cursor: pointer;
+      transition: .15s;
+    }
+    .dropzone:hover, .dropzone.drag { border-color: var(--accent); color: var(--accent); background: rgba(56,189,248,.08); }
+    button.primary, button.secondary, button.ghost {
+      padding: 7px 12px;
+      border-radius: 6px;
+      font-size: 12.5px;
       font-weight: 600;
       cursor: pointer;
       border: 1px solid transparent;
@@ -126,240 +164,280 @@ def render_studio_html() -> str:
     button.primary:hover { background: #0369a1; }
     button.secondary { background: var(--panel-alt); border-color: var(--border); color: var(--text); }
     button.secondary:hover { border-color: var(--accent); }
-    .preset-bar { display: flex; gap: 6px; flex-wrap: wrap; }
-    .preset-chip {
-      font-size: 11.5px;
-      padding: 3px 8px;
-      border-radius: 5px;
-      background: #0f172a;
-      border: 1px solid var(--border);
-      color: var(--accent);
-      cursor: pointer;
-    }
+    button.ghost { background: transparent; border-color: var(--border); color: var(--muted); padding: 4px 8px; font-size: 11.5px; }
+    button.ghost.active, button.ghost:hover { border-color: var(--accent); color: var(--accent); }
     .alert {
-      font-size: 12.5px;
-      padding: 9px 11px;
-      border-radius: 7px;
-      background: rgba(245,158,11,.12);
+      font-size: 12px;
+      padding: 8px 10px;
+      border-radius: 6px;
+      background: rgba(245,158,11,.13);
       border: 1px solid rgba(245,158,11,.4);
       color: #fde68a;
       display: none;
       white-space: pre-wrap;
     }
-    .alert.error {
-      background: rgba(239,68,68,.12);
-      border-color: rgba(239,68,68,.45);
-      color: #fecaca;
-    }
-    .viewport-grid {
-      display: grid;
-      grid-template-rows: auto 1fr auto;
-      gap: 12px;
-      min-height: 620px;
-    }
-    .preview-stage {
-      background: #070c17;
+    .alert.error { background: rgba(239,68,68,.14); border-color: rgba(239,68,68,.45); color: #fecaca; }
+    .alert.ok { background: rgba(16,185,129,.13); border-color: rgba(16,185,129,.45); color: #a7f3d0; }
+    .layer-table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+    .layer-table th, .layer-table td { border-bottom: 1px solid var(--border); padding: 4px 5px; text-align: left; }
+    .layer-table input { width: 100%; background: #080d18; border: 1px solid var(--border); color: var(--text); padding: 3px 5px; border-radius: 4px; font-size: 11.5px; }
+    .entity-list {
+      max-height: 175px;
+      overflow-y: auto;
       border: 1px solid var(--border);
-      border-radius: 8px;
+      border-radius: 6px;
+      background: #080d18;
+      font-size: 11.5px;
+    }
+    .ent-row {
+      padding: 5px 8px;
+      border-bottom: 1px solid #162038;
+      cursor: pointer;
+      display: flex;
+      justify-content: space-between;
+      gap: 6px;
+    }
+    .ent-row:hover { background: #13203a; }
+    .ent-row.selected { background: rgba(56,189,248,.22); color: #7dd3fc; font-weight: 600; }
+
+    /* Right Workspace */
+    .workspace {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      display: grid;
+      grid-template-rows: auto 1fr auto auto;
+      min-height: 0;
+      overflow: hidden;
+    }
+    .ws-toolbar {
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      background: #0d1526;
+      flex-wrap: wrap;
+    }
+    .stage {
+      position: relative;
       display: grid;
       grid-template-columns: 1fr;
+      min-height: 0;
+      background: #060a12;
       overflow: hidden;
-      position: relative;
-      min-height: 440px;
     }
-    .preview-stage.split { grid-template-columns: 1fr 1fr; }
-    .pane {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      overflow: auto;
-      padding: 12px;
+    .stage.split { grid-template-columns: 1fr 1fr; }
+    .viewport {
       position: relative;
+      width: 100%;
+      height: 100%;
+      min-height: 0;
+      overflow: hidden;
       border-right: 1px solid var(--border);
     }
-    .pane:last-child { border-right: none; }
-    .pane img { max-width: 100%; max-height: 480px; background: #fff; border-radius: 4px; }
-    canvas#viewer3d { width: 100%; height: 440px; display: block; cursor: grab; }
-    .artifacts { display: flex; gap: 8px; flex-wrap: wrap; }
-    .dl-btn {
-      font-size: 12px;
-      padding: 5px 10px;
-      border-radius: 6px;
+    .viewport:last-child { border-right: none; }
+    canvas.cad-canvas { width: 100%; height: 100%; display: block; }
+    .floating-layers {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      background: rgba(15,23,42,.9);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-size: 11.5px;
+      max-height: 240px;
+      overflow-y: auto;
+      min-width: 145px;
+      backdrop-filter: blur(6px);
+    }
+    .lyr-item { display: flex; align-items: center; gap: 6px; padding: 2px 0; cursor: pointer; }
+    .color-dot { width: 9px; height: 9px; border-radius: 2px; display: inline-block; border: 1px solid rgba(255,255,255,.3); }
+    .floating-3d-bar {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      display: flex;
+      gap: 5px;
+      flex-wrap: wrap;
+      z-index: 4;
+    }
+    .diff-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      padding: 12px;
+      height: 100%;
+      overflow: auto;
+      align-items: center;
+    }
+    .diff-card {
+      background: #0b1220;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px;
+      text-align: center;
+    }
+    .diff-card img { max-width: 100%; max-height: 430px; background: #fff; border-radius: 4px; margin-top: 6px; }
+    .status-strip {
+      padding: 5px 12px;
+      background: #090f1d;
+      border-top: 1px solid var(--border);
+      font-family: Consolas, monospace;
+      font-size: 11.5px;
+      color: var(--muted);
+      display: flex;
+      justify-content: space-between;
+    }
+    .artifact-strip {
+      padding: 8px 12px;
+      border-top: 1px solid var(--border);
+      background: #0d1526;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      flex-wrap: wrap;
+    }
+    .dl-chip {
+      font-size: 11.5px;
+      padding: 4px 9px;
+      border-radius: 5px;
       background: var(--panel-alt);
       border: 1px solid var(--border);
       color: var(--accent);
-      text-decoration: none;
       cursor: pointer;
     }
-    .jobs-list { font-size: 12px; max-height: 150px; overflow-y: auto; display: flex; flex-direction: column; gap: 5px; }
-    .job-item {
-      display: flex;
-      justify-content: space-between;
-      padding: 6px 8px;
-      background: var(--panel-alt);
-      border-radius: 5px;
-      cursor: pointer;
-    }
+    .dl-chip:hover { border-color: var(--accent); background: rgba(56,189,248,.12); }
+    details.adv-json summary { font-size: 11.5px; color: var(--muted); cursor: pointer; padding: 4px 0; }
   </style>
 </head>
 <body>
   <header>
     <div class="brand">
-      <span>CAD Operations Skill · 智能自动出图工作台</span>
-      <span id="healthBadge" class="badge">正在连接网关...</span>
+      <span>📐 CAD Operations Studio 2.0</span>
+      <span id="healthBadge" class="badge">连接中...</span>
     </div>
-    <div class="top-controls">
+    <div class="row">
       <div id="driverBadges" class="row"></div>
-      <input id="apiKeyInput" class="api-key" type="password" placeholder="可选 API Key (Bearer)" />
+      <input id="apiKeyInput" class="api-key" type="password" placeholder="可选 API Key" />
     </div>
   </header>
 
   <main>
-    <section class="card">
-      <div class="tabs">
-        <button class="tab-btn active" data-domain="mechanical_2d">1. 国标二维机械图</button>
-        <button class="tab-btn" data-domain="model_3d">2. 三维建模 + 3D→2D</button>
-        <button class="tab-btn" data-domain="electrical_sld">3. 电气主接线图</button>
-        <button class="tab-btn" data-domain="pavement">4. 道路路面结构图</button>
+    <!-- Left Parameter & Revision Control Panel -->
+    <aside class="sidebar">
+      <div class="nav-tabs">
+        <button class="tab-btn active" data-tab="mech2d">1. 二维机械图</button>
+        <button class="tab-btn" data-tab="model3d">2. 三维+工程图</button>
+        <button class="tab-btn" data-tab="sld">3. 电气主接线</button>
+        <button class="tab-btn" data-tab="pavement">4. 路面结构图</button>
+        <button class="tab-btn" data-tab="revise" style="grid-column: span 2;">5. ✏️ 上传 DXF 局部改图与对比</button>
       </div>
 
-      <div class="preset-bar" id="presetBar"></div>
-      <textarea id="inputEditor" spellcheck="false"></textarea>
-
-      <div class="row" id="extraOptions">
-        <label style="font-size:12.5px;color:var(--muted);display:flex;align-items:center;gap:5px;">
-          <input type="checkbox" id="chkWith2D" checked /> 三维模式同步投影生成国标二维工程图
-        </label>
+      <div class="sidebar-body" id="sidebarBody">
+        <!-- Dynamic form injected per tab -->
       </div>
 
-      <div id="alertBox" class="alert"></div>
-
-      <div class="row">
-        <button class="secondary" id="btnCompile">智能语义编译检查</button>
-        <button class="primary" id="btnGenerateSync">立即自动出图 (同步)</button>
-        <button class="secondary" id="btnSubmitAsync">提交后台队列 (异步)</button>
-      </div>
-
-      <div style="border-top:1px solid var(--border);padding-top:10px;">
-        <div class="row" style="justify-content:space-between;margin-bottom:6px;">
-          <span style="font-size:12.5px;font-weight:600;color:var(--muted);">异步任务队列 (/api/v1/jobs)</span>
-          <button class="preset-chip" id="btnRefreshJobs">刷新列表</button>
+      <div class="sidebar-footer">
+        <div id="alertBox" class="alert"></div>
+        <div class="row" id="actionRow">
+          <button class="primary" id="btnRunSync" style="flex:1;">⚡ 立即生成并交互预览</button>
+          <button class="secondary" id="btnRunAsync" title="在独立隔离的 Python 子进程中排队执行">后台队列</button>
         </div>
-        <div id="jobsList" class="jobs-list"></div>
       </div>
-    </section>
+    </aside>
 
-    <section class="card viewport-grid">
-      <div class="row" style="justify-content:space-between;">
-        <div class="row" id="auditSummary">
-          <span class="badge">等待生成任务 — 选择左侧模板点击“立即自动出图”体验全闭环</span>
+    <!-- Right Interactive CAD Canvas & 3D Viewport -->
+    <section class="workspace">
+      <div class="ws-toolbar">
+        <div class="row" id="auditBadges">
+          <span class="badge">就绪 — 选择左侧参数点击“立即生成”，鼠标滚轮无级缩放图纸</span>
+        </div>
+        <div class="row">
+          <button class="ghost" id="btnSendToRevise" style="display:none;">✏️ 送入局部改图台</button>
+          <button class="ghost" id="btnFit2D">⛶ 适应窗口</button>
+          <button class="ghost" id="btnTheme2D">🌙 黑底彩线</button>
+          <button class="ghost active" id="btnGrid2D"># 坐标网格</button>
+          <button class="ghost" id="btnToggleLayers">图层面板</button>
         </div>
       </div>
 
-      <div id="previewStage" class="preview-stage">
-        <div class="pane" id="pane2d">
-          <span style="color:var(--muted);font-size:13px;">二维工程图 / 渲染预览区 (.png / .svg)</span>
+      <div class="stage" id="stage">
+        <!-- 2D Vector CAD Canvas -->
+        <div class="viewport" id="vp2d">
+          <canvas id="canvas2d" class="cad-canvas"></canvas>
+          <div class="floating-layers" id="layerPanel" style="display:none;"></div>
         </div>
-        <div class="pane" id="pane3d" style="display:none;">
-          <canvas id="viewer3d" width="520" height="440"></canvas>
+
+        <!-- 3D Industrial Crease-Edge Viewport -->
+        <div class="viewport" id="vp3d" style="display:none;">
+          <div class="floating-3d-bar">
+            <button class="ghost" onclick="set3DView(-0.58, 0.68)">等轴测</button>
+            <button class="ghost" onclick="set3DView(-1.5708, 0)">主视</button>
+            <button class="ghost" onclick="set3DView(0, 0)">俯视</button>
+            <button class="ghost" onclick="set3DView(-1.5708, -1.5708)">右视</button>
+            <button class="ghost" id="btnRenderMode3D" onclick="cycle3DMode()">实体+棱线</button>
+          </div>
+          <canvas id="viewer3d" class="cad-canvas"></canvas>
+        </div>
+
+        <!-- Before/After Revision Diff View -->
+        <div class="viewport" id="vpDiff" style="display:none;">
+          <div class="diff-grid" id="diffGrid"></div>
         </div>
       </div>
 
-      <div>
-        <div style="font-size:12px;color:var(--muted);margin-bottom:6px;">已验证工程产物下载（零乱码 / 零重叠 / 独立审计）：</div>
-        <div id="artifactBar" class="artifacts"></div>
+      <div class="status-strip">
+        <span id="coordReadout">光标坐标 X: 0.00 mm, Y: 0.00 mm  |  滚轮缩放 · 左键拖拽平移</span>
+        <span id="sceneStats">图元: 0 · 缩放: 100%</span>
+      </div>
+
+      <div class="artifact-strip" id="artifactBar">
+        <span style="font-size:11.5px;color:var(--muted);">工程产物下载区：生成后在此一键下载 .dxf / .svg / .png / .pdf / .glb / .stl</span>
       </div>
     </section>
   </main>
 
+  <input type="file" id="hiddenFileInput" style="display:none;" accept=".dxf,.md,.txt,.csv,.tsv,.docx,.pdf,.json" />
+
   <script>
-    const PRESETS = {
-      mechanical_2d: [
-        {
-          label: "法兰盘项目书 (Markdown)",
-          text: "# 连接法兰盘零件图\\n图号：FLG-2026-08\\n材料：45钢\\n外径：140 mm\\n内孔：48 mm\\n节圆直径：102 mm\\n安装孔：4×Φ14\\n厚度：20 mm\\n技术要求：未注倒角 C1.5，去毛刺。"
-        },
-        {
-          label: "阶梯传动轴项目书",
-          text: "# 三段阶梯传动轴\\n图号：SHF-2026-02\\n材料：40Cr\\n阶梯段1：Φ26×32\\n阶梯段2：Φ40×48\\n阶梯段3：Φ22×28"
-        }
-      ],
-      model_3d: [
-        {
-          label: "三维带颈法兰 (Model3DSpec)",
-          text: JSON.stringify({
-            schema_version: "1.0",
-            project: { name: "带颈连接法兰", drawing_number: "FLG-3D-101" },
-            material: { text: "304不锈钢", source_id: "src" },
-            technical_notes: [{ text: "未注圆角 R2，去毛刺。", source_id: "src" }],
-            body: {
-              kind: "flange_3d",
-              outer_diameter: 140.0,
-              bore_diameter: 46.0,
-              thickness: 18.0,
-              hub_diameter: 74.0,
-              hub_height: 22.0,
-              bolt_circle_diameter: 104.0,
-              hole_diameter: 12.0,
-              hole_count: 6,
-              source_id: "src"
-            },
-            provenance: [{ id: "src", file: "studio", locator: "preset", confidence: 1.0 }]
-          }, null, 2)
-        }
-      ],
-      electrical_sld: [
-        {
-          label: "110kV双母线/35kV单母分段主接线",
-          text: JSON.stringify({
-            title: "110kV/35kV 变电站电气主接线图",
-            sheet: { width_mm: 440, height_mm: 317 },
-            title_block: { "专业": "电气", "比例": "示意", "图号": "SLD-2026-01" },
-            voltage_levels: [
-              {
-                name: "110kV",
-                bus: "双母线",
-                feeders: ["110kV进线1", "110kV进线2"],
-                transformers: ["1#主变", "2#主变"],
-                pt: 2
-              },
-              {
-                name: "35kV",
-                bus: "单母分段",
-                feeders: ["35kV出线1", "35kV出线2", "35kV出线3", "35kV出线4"],
-                pt: 2,
-                reactors: 2,
-                capacitors: 2
-              }
-            ]
-          }, null, 2)
-        }
-      ],
-      pavement: [
-        {
-          label: "高等级沥青路面结构图",
-          text: JSON.stringify({
-            title: "主干路沥青混凝土路面结构图",
-            project: "市政主干道工程",
-            drawing_no: "LM-2026-01",
-            width: 10000,
-            vertical_exaggeration: 5,
-            scale_note: "水平按实际尺寸，竖向放大5倍示意",
-            layers: [
-              { name: "细粒式沥青混凝土", material: "AC-13C", thickness: 40, note: "上面层" },
-              { name: "中粒式沥青混凝土", material: "AC-20C", thickness: 60, note: "中面层" },
-              { name: "水泥稳定碎石基层", material: "5% 水泥稳定碎石", thickness: 200 },
-              { name: "级配碎石底基层", material: "级配碎石", thickness: 180 }
-            ],
-            annotations: ["未注明单位均为 mm", "结构层厚度以施工图为准"]
-          }, null, 2)
-        }
-      ]
+    // ===================== Global Studio State =====================
+    let activeTab = "mech2d";
+    let lastTaskData = null;
+    let cadScene = null;
+    let hiddenLayers = new Set();
+    let darkCadTheme = true;
+    let showCadGrid = true;
+    let highlightedHandle = null;
+
+    // 2D Camera (world mm -> screen px: sx = camPanX + wx * camScale, sy = camPanY - wy * camScale)
+    let camScale = 1.8, camPanX = 60, camPanY = 420;
+    let isPanning2D = false, panStartX = 0, panStartY = 0;
+
+    // 3D Camera & Crease-Edge Mesh
+    let mesh3d = null;
+    let rotX = -0.58, rotY = 0.68, zoom3d = 1.0, renderMode3D = 0; // 0=solid+edges, 1=xray, 2=wireframe
+    let drag3D = false, last3DX = 0, last3DY = 0;
+
+    // Revision Workspace State
+    let revState = {
+      dxfPath: null,
+      taskId: null,
+      sha256: null,
+      units: "mm",
+      entities: [],
+      selectedEntity: null
     };
 
-    let currentDomain = "mechanical_2d";
-    let mesh3d = null;
-    let rotX = -0.55, rotY = 0.65, zoom3d = 1.0, dragging = false, lastX = 0, lastY = 0;
+    // Pavement Dynamic Layers State
+    let pavLayers = [
+      { name: "细粒式沥青混凝土", material: "AC-13C", thickness: 40 },
+      { name: "中粒式沥青混凝土", material: "AC-20C", thickness: 60 },
+      { name: "水泥稳定碎石基层", material: "5%水泥稳定碎石", thickness: 200 },
+      { name: "级配碎石底基层", material: "级配碎石", thickness: 180 }
+    ];
 
     function authHeaders() {
       const k = document.getElementById("apiKeyInput").value.trim();
@@ -368,22 +446,1176 @@ def render_studio_html() -> str:
       return h;
     }
 
-    async function loadStatus() {
+    function setAlert(msg, kind = "warn") {
+      const box = document.getElementById("alertBox");
+      if (!msg) { box.style.display = "none"; return; }
+      box.style.display = "block";
+      box.className = "alert" + (kind === "error" ? " error" : (kind === "ok" ? " ok" : ""));
+      box.textContent = msg;
+    }
+
+    // ===================== Sidebar Form Templates =====================
+    function renderSidebar() {
+      const body = document.getElementById("sidebarBody");
+      const actRow = document.getElementById("actionRow");
+      actRow.style.display = activeTab === "revise" ? "none" : "flex";
+      setAlert("");
+
+      if (activeTab === "mech2d") {
+        body.innerHTML = `
+          <div class="sec-title">方式一：一句话口语描述 或 拖入项目书 (.docx/.pdf/.md)</div>
+          <div class="dropzone" onclick="triggerUpload('doc')">📄 点击或拖拽上传项目需求文档 (.docx / .pdf / .csv / .md)</div>
+          <div class="field full">
+            <label>自然语言工程描述（支持口语直接解析，留空则使用下方参数表单）</label>
+            <textarea id="m2dBrief" placeholder="例如：画个304不锈钢连接法兰，外径150内孔48厚20，在112的节圆上均布6个14的孔"></textarea>
+          </div>
+          <div class="row">
+            <button class="ghost" onclick="fillM2DBrief('画个304不锈钢连接法兰，外径150内孔48厚20，在112的节圆上均布6个14的螺栓孔')">口语示例：连接法兰</button>
+            <button class="ghost" onclick="fillM2DBrief('设计一根45钢三段阶梯轴，第一段直径26长32，第二段40长50，第三段22长28')">口语示例：阶梯传动轴</button>
+          </div>
+
+          <div class="sec-title" style="margin-top:4px;">方式二：可视化标准零件参数表单</div>
+          <div class="form-grid">
+            <div class="field">
+              <label>零件族</label>
+              <select id="m2dFamily" onchange="syncM2DFormVisibility()">
+                <option value="flange">连接法兰盘 (Flange)</option>
+                <option value="stepped-shaft">多阶梯传动轴 (Shaft)</option>
+                <option value="slotted-bracket">圆角腰形槽支架板</option>
+              </select>
+            </div>
+            <div class="field"><label>材料牌号</label><input id="m2dMat" value="45钢" /></div>
+            <div class="field"><label>图纸名称</label><input id="m2dName" value="连接法兰盘" /></div>
+            <div class="field"><label>图号</label><input id="m2dNo" value="FLG-2026-01" /></div>
+          </div>
+          <div id="m2dParamFields" class="form-grid"></div>
+          <button class="secondary" onclick="checkCompile2D()">🔍 预检参数完整性 (缺失/冲突检查)</button>
+        `;
+        syncM2DFormVisibility();
+      } else if (activeTab === "model3d") {
+        body.innerHTML = `
+          <div class="sec-title">三维参数化建模 + 3D→2D 国标工程图联动</div>
+          <div class="field full">
+            <label>建模方式</label>
+            <select id="m3dMode" onchange="syncM3DFields()">
+              <option value="compound_3d">✨ 多特征组合实体 (底座 + 凸台 + 沉头孔 + 通孔)</option>
+              <option value="flange_3d">带颈螺栓连接法兰 (Flange 3D)</option>
+              <option value="stepped_shaft_3d">空心/实心多阶梯轴 (Shaft 3D)</option>
+              <option value="brief_3d">口语一句话直出三维模型</option>
+            </select>
+          </div>
+          <div id="m3dDynamic"></div>
+          <label style="font-size:12px;color:var(--muted);display:flex;align-items:center;gap:6px;">
+            <input type="checkbox" id="chk3DWith2D" checked /> 同时正交投影生成二维国标工程图（双视口同屏检视）
+          </label>
+        `;
+        syncM3DFields();
+      } else if (activeTab === "sld") {
+        body.innerHTML = `
+          <div class="sec-title">变电站电气主接线图可视化配置</div>
+          <div class="form-grid">
+            <div class="field full"><label>工程图名</label><input id="sldTitle" value="110kV/35kV 变电站电气主接线图" /></div>
+            <div class="field"><label>高压侧电压等级</label><input id="sldHvName" value="110kV" /></div>
+            <div class="field">
+              <label>高压侧母线制式</label>
+              <select id="sldHvBus">
+                <option value="双母线" selected>双母线 (含母联间隔)</option>
+                <option value="单母分段">单母线分段</option>
+                <option value="单母线">单母线</option>
+              </select>
+            </div>
+            <div class="field"><label>高压进线回路数</label><input type="number" id="sldHvIn" value="2" min="1" max="6" /></div>
+            <div class="field"><label>主变压器台数</label><input type="number" id="sldTrCount" value="2" min="1" max="4" /></div>
+            <div class="field"><label>低压侧电压等级</label><input id="sldLvName" value="35kV" /></div>
+            <div class="field">
+              <label>低压侧母线制式</label>
+              <select id="sldLvBus">
+                <option value="单母分段" selected>单母线分段</option>
+                <option value="单母线">单母线</option>
+              </select>
+            </div>
+            <div class="field"><label>低压出线回路数</label><input type="number" id="sldLvOut" value="4" min="1" max="8" /></div>
+            <div class="field"><label>无功补偿电容组数</label><input type="number" id="sldCap" value="2" min="0" max="4" /></div>
+          </div>
+        `;
+      } else if (activeTab === "pavement") {
+        body.innerHTML = `
+          <div class="sec-title">道路路面结构层可视化设计表</div>
+          <div class="form-grid">
+            <div class="field full"><label>图纸标题</label><input id="pavTitle" value="主干路沥青混凝土路面结构图" /></div>
+            <div class="field"><label>路面示意总宽 (mm)</label><input type="number" id="pavWidth" value="10000" step="500" /></div>
+            <div class="field"><label>竖向厚度放大倍数</label><input type="number" id="pavExag" value="5" min="1" max="15" /></div>
+          </div>
+          <div class="row" style="justify-content:space-between;">
+            <span style="font-size:11.5px;color:var(--muted);">自上而下结构层（单位 mm）：</span>
+            <button class="ghost" onclick="addPavLayer()">+ 新增结构层</button>
+          </div>
+          <table class="layer-table">
+            <thead><tr><th>结构层名称</th><th>材料</th><th style="width:68px;">厚(mm)</th><th></th></tr></thead>
+            <tbody id="pavTableBody"></tbody>
+          </table>
+        `;
+        renderPavTable();
+      } else if (activeTab === "revise") {
+        renderReviseSidebar();
+      }
+    }
+
+    function fillM2DBrief(txt) { document.getElementById("m2dBrief").value = txt; }
+
+    function syncM2DFormVisibility() {
+      const fam = document.getElementById("m2dFamily").value;
+      const box = document.getElementById("m2dParamFields");
+      if (fam === "flange") {
+        box.innerHTML = `
+          <div class="field"><label>外径 OD (mm)</label><input type="number" id="f_od" value="140" /></div>
+          <div class="field"><label>内孔 ID (mm)</label><input type="number" id="f_id" value="48" /></div>
+          <div class="field"><label>厚度 T (mm)</label><input type="number" id="f_th" value="20" /></div>
+          <div class="field"><label>节圆直径 BCD (mm)</label><input type="number" id="f_bcd" value="102" /></div>
+          <div class="field"><label>螺栓孔数</label><input type="number" id="f_hc" value="4" /></div>
+          <div class="field"><label>螺栓孔径 (mm)</label><input type="number" id="f_hd" value="14" /></div>
+        `;
+      } else if (fam === "stepped-shaft") {
+        document.getElementById("m2dName").value = "阶梯传动轴";
+        box.innerHTML = `
+          <div class="field"><label>轴段1 直径×长度</label><input id="s_1" value="26×32" /></div>
+          <div class="field"><label>轴段2 直径×长度</label><input id="s_2" value="40×50" /></div>
+          <div class="field"><label>轴段3 直径×长度</label><input id="s_3" value="22×28" /></div>
+        `;
+      } else {
+        document.getElementById("m2dName").value = "圆角腰形槽安装板";
+        box.innerHTML = `
+          <div class="field"><label>板宽 W (mm)</label><input type="number" id="b_w" value="140" /></div>
+          <div class="field"><label>板高 H (mm)</label><input type="number" id="b_h" value="80" /></div>
+          <div class="field"><label>板厚 T (mm)</label><input type="number" id="b_t" value="12" /></div>
+          <div class="field"><label>圆角 R (mm)</label><input type="number" id="b_r" value="8" /></div>
+          <div class="field"><label>腰形槽长 (mm)</label><input type="number" id="b_sl" value="46" /></div>
+          <div class="field"><label>腰形槽宽 (mm)</label><input type="number" id="b_sw" value="14" /></div>
+        `;
+      }
+    }
+
+    function syncM3DFields() {
+      const m = document.getElementById("m3dMode").value;
+      const box = document.getElementById("m3dDynamic");
+      if (m === "compound_3d") {
+        box.innerHTML = `
+          <div class="form-grid">
+            <div class="field"><label>底板长度 W (mm)</label><input type="number" id="c3_w" value="150" /></div>
+            <div class="field"><label>底板宽度 D (mm)</label><input type="number" id="c3_d" value="96" /></div>
+            <div class="field"><label>底板厚度 H (mm)</label><input type="number" id="c3_h" value="18" /></div>
+            <div class="field"><label>底板圆角 R (mm)</label><input type="number" id="c3_r" value="8" /></div>
+            <div class="field"><label>中心圆柱凸台外径</label><input type="number" id="c3_bd" value="54" /></div>
+            <div class="field"><label>中心凸台高度</label><input type="number" id="c3_bh" value="24" /></div>
+            <div class="field"><label>中心轴承通孔径</label><input type="number" id="c3_bbore" value="26" /></div>
+            <div class="field"><label>四角沉头孔 M8/Φ9×Φ15</label><input type="number" id="c3_cb" value="4" disabled /></div>
+          </div>
+        `;
+      } else if (m === "flange_3d") {
+        box.innerHTML = `
+          <div class="form-grid">
+            <div class="field"><label>法兰外径 (mm)</label><input type="number" id="f3_od" value="145" /></div>
+            <div class="field"><label>中心通孔 (mm)</label><input type="number" id="f3_id" value="46" /></div>
+            <div class="field"><label>底盘厚度 (mm)</label><input type="number" id="f3_th" value="18" /></div>
+            <div class="field"><label>法兰颈外径 (mm)</label><input type="number" id="f3_hdia" value="74" /></div>
+            <div class="field"><label>法兰颈高度 (mm)</label><input type="number" id="f3_hh" value="22" /></div>
+            <div class="field"><label>节圆直径 BCD</label><input type="number" id="f3_bcd" value="108" /></div>
+            <div class="field"><label>螺栓孔数</label><input type="number" id="f3_hc" value="6" /></div>
+            <div class="field"><label>螺栓孔径 (mm)</label><input type="number" id="f3_hd" value="12" /></div>
+          </div>
+        `;
+      } else if (m === "stepped_shaft_3d") {
+        box.innerHTML = `
+          <div class="form-grid">
+            <div class="field"><label>第1段 长度,直径</label><input id="sh3_1" value="30,26" /></div>
+            <div class="field"><label>第2段 长度,直径</label><input id="sh3_2" value="46,42" /></div>
+            <div class="field"><label>第3段 长度,直径</label><input id="sh3_3" value="28,22" /></div>
+            <div class="field"><label>轴向中心通孔 (mm)</label><input type="number" id="sh3_bore" value="10" /></div>
+          </div>
+        `;
+      } else {
+        box.innerHTML = `
+          <div class="field full">
+            <label>一句口语描述三维零件</label>
+            <textarea id="m3dBriefTxt">做一个304不锈钢带颈法兰，外径150内孔48底盘厚18颈径76颈高24，在112的分布圆上均布6个12的孔</textarea>
+          </div>
+        `;
+      }
+    }
+
+    function renderPavTable() {
+      const tb = document.getElementById("pavTableBody");
+      if (!tb) return;
+      tb.innerHTML = "";
+      pavLayers.forEach((l, i) => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td><input value="${l.name}" onchange="pavLayers[${i}].name=this.value" /></td>
+          <td><input value="${l.material}" onchange="pavLayers[${i}].material=this.value" /></td>
+          <td><input type="number" value="${l.thickness}" onchange="pavLayers[${i}].thickness=+this.value" /></td>
+          <td><button class="ghost" onclick="pavLayers.splice(${i},1);renderPavTable()">×</button></td>
+        `;
+        tb.appendChild(tr);
+      });
+    }
+    function addPavLayer() { pavLayers.push({ name: "结构层", material: "级配碎石", thickness: 150 }); renderPavTable(); }
+
+    // ===================== Build Request Payload from Visual Forms =====================
+    function buildGeneratePayload() {
+      if (activeTab === "mech2d") {
+        const brief = document.getElementById("m2dBrief").value.trim();
+        if (brief) return { domain: "mechanical_2d", markdown_brief: brief };
+        const fam = document.getElementById("m2dFamily").value;
+        const name = document.getElementById("m2dName").value.trim() || "机械零件";
+        const dno = document.getElementById("m2dNo").value.trim() || "MECH-01";
+        const mat = document.getElementById("m2dMat").value.trim() || "45钢";
+        let md = `# ${name}\n图号：${dno}\n材料：${mat}\n`;
+        if (fam === "flange") {
+          md += `外径：${+document.getElementById("f_od").value} mm\n内孔：${+document.getElementById("f_id").value} mm\n厚度：${+document.getElementById("f_th").value} mm\n`;
+          const hc = +document.getElementById("f_hc").value;
+          if (hc > 0) md += `节圆直径：${+document.getElementById("f_bcd").value} mm\n安装孔：${hc}×Φ${+document.getElementById("f_hd").value}\n`;
+        } else if (fam === "stepped-shaft") {
+          ["s_1", "s_2", "s_3"].forEach((id, idx) => {
+            const v = document.getElementById(id).value.trim();
+            if (v) md += `轴段${idx + 1}：Φ${v}\n`;
+          });
+        } else {
+          md += `宽度：${+document.getElementById("b_w").value} mm\n高度：${+document.getElementById("b_h").value} mm\n厚度：${+document.getElementById("b_t").value} mm\n圆角：R${+document.getElementById("b_r").value}\n腰形槽长：${+document.getElementById("b_sl").value} mm\n腰形槽宽：${+document.getElementById("b_sw").value} mm\n`;
+        }
+        return { domain: "mechanical_2d", markdown_brief: md };
+      }
+
+      if (activeTab === "model3d") {
+        const m = document.getElementById("m3dMode").value;
+        const with2d = document.getElementById("chk3DWith2D").checked;
+        if (m === "brief_3d") {
+          return { domain: "model_3d", markdown_brief: document.getElementById("m3dBriefTxt").value.trim(), with_2d_sheet: with2d };
+        }
+        let bodyObj;
+        let pName = "三维参数化零件";
+        if (m === "compound_3d") {
+          pName = "轴承凸台沉孔安装座";
+          const w = +document.getElementById("c3_w").value, d = +document.getElementById("c3_d").value, h = +document.getElementById("c3_h").value;
+          const cx = w / 2 - 18, cy = d / 2 - 16;
+          bodyObj = {
+            kind: "compound_3d",
+            base_shape: "box",
+            width: w, depth: d, base_height: h,
+            corner_radius: +document.getElementById("c3_r").value,
+            bosses: [{
+              kind: "cylinder_boss", x: 0, y: 0,
+              diameter: +document.getElementById("c3_bd").value,
+              height: +document.getElementById("c3_bh").value,
+              bore_diameter: +document.getElementById("c3_bbore").value
+            }],
+            through_holes: [],
+            counterbores: [
+              { x: -cx, y: -cy, through_diameter: 9.0, cbore_diameter: 15.0, cbore_depth: 6.0 },
+              { x: cx, y: -cy, through_diameter: 9.0, cbore_diameter: 15.0, cbore_depth: 6.0 },
+              { x: cx, y: cy, through_diameter: 9.0, cbore_diameter: 15.0, cbore_depth: 6.0 },
+              { x: -cx, y: cy, through_diameter: 9.0, cbore_diameter: 15.0, cbore_depth: 6.0 }
+            ],
+            source_id: "src"
+          };
+        } else if (m === "flange_3d") {
+          pName = "带颈连接法兰";
+          bodyObj = {
+            kind: "flange_3d",
+            outer_diameter: +document.getElementById("f3_od").value,
+            bore_diameter: +document.getElementById("f3_id").value,
+            thickness: +document.getElementById("f3_th").value,
+            hub_diameter: +document.getElementById("f3_hdia").value,
+            hub_height: +document.getElementById("f3_hh").value,
+            bolt_circle_diameter: +document.getElementById("f3_bcd").value,
+            hole_count: +document.getElementById("f3_hc").value,
+            hole_diameter: +document.getElementById("f3_hd").value,
+            source_id: "src"
+          };
+        } else {
+          pName = "空心多阶梯传动轴";
+          const steps = ["sh3_1", "sh3_2", "sh3_3"].map(id => document.getElementById(id).value.split(",").map(Number));
+          bodyObj = { kind: "stepped_shaft_3d", steps, bore_diameter: +document.getElementById("sh3_bore").value, source_id: "src" };
+        }
+        return {
+          domain: "model_3d",
+          with_2d_sheet: with2d,
+          spec: {
+            schema_version: "1.0",
+            project: { name: pName, drawing_number: "CAD3D-2026-01" },
+            material: { text: "45钢", source_id: "src" },
+            technical_notes: [{ text: "未注倒角 C1.5，去毛刺。", source_id: "src" }],
+            body: bodyObj,
+            provenance: [{ id: "src", file: "studio-form", locator: "form", confidence: 1.0 }]
+          }
+        };
+      }
+
+      if (activeTab === "sld") {
+        const hvName = document.getElementById("sldHvName").value.trim();
+        const lvName = document.getElementById("sldLvName").value.trim();
+        const hvIn = +document.getElementById("sldHvIn").value;
+        const trCnt = +document.getElementById("sldTrCount").value;
+        const lvOut = +document.getElementById("sldLvOut").value;
+        return {
+          domain: "electrical_sld",
+          spec: {
+            title: document.getElementById("sldTitle").value.trim(),
+            sheet: { width_mm: 440, height_mm: 317 },
+            title_block: { "专业": "电气", "比例": "示意", "图号": "SLD-01" },
+            voltage_levels: [
+              {
+                name: hvName,
+                bus: document.getElementById("sldHvBus").value,
+                feeders: Array.from({ length: hvIn }, (_, i) => `${hvName}进线${i + 1}`),
+                transformers: Array.from({ length: trCnt }, (_, i) => `${i + 1}#主变`),
+                pt: 2
+              },
+              {
+                name: lvName,
+                bus: document.getElementById("sldLvBus").value,
+                feeders: Array.from({ length: lvOut }, (_, i) => `${lvName}出线${i + 1}`),
+                pt: 2,
+                capacitors: +document.getElementById("sldCap").value
+              }
+            ]
+          }
+        };
+      }
+
+      return {
+        domain: "pavement",
+        spec: {
+          title: document.getElementById("pavTitle").value.trim(),
+          width: +document.getElementById("pavWidth").value,
+          vertical_exaggeration: +document.getElementById("pavExag").value,
+          scale_note: `水平按实际尺寸，竖向放大${+document.getElementById("pavExag").value}倍示意`,
+          layers: pavLayers,
+          annotations: ["未注明单位均为 mm", "结构层厚度以施工图为准"]
+        }
+      };
+    }
+
+    async function checkCompile2D() {
+      const p = buildGeneratePayload();
+      const r = await fetch("/api/v1/tasks/compile", {
+        method: "POST", headers: authHeaders(),
+        body: JSON.stringify({ markdown_text: p.markdown_brief })
+      });
+      const d = await r.json();
+      const miss = d.validation?.missing || [], conf = d.validation?.conflicts || [];
+      if (miss.length || conf.length) {
+        setAlert(`检测到参数缺失或冲突：\n缺失：${miss.join(", ") || "无"}\n冲突：${conf.join(", ") || "无"}`, "warn");
+      } else {
+        setAlert(`✅ 语义编译检查通过！识别零件族：${d.spec?.geometry?.parameters?.part_family || "已就绪"}，自动比例 ${d.spec?.sheet?.scale}`, "ok");
+      }
+    }
+
+    // ===================== Interactive 2D Vector CAD Canvas =====================
+    function resizeCanvases() {
+      for (const id of ["canvas2d", "viewer3d"]) {
+        const cv = document.getElementById(id);
+        if (!cv || !cv.parentElement) continue;
+        const rect = cv.parentElement.getBoundingClientRect();
+        if (rect.width > 10 && rect.height > 10) {
+          cv.width = Math.floor(rect.width * window.devicePixelRatio);
+          cv.height = Math.floor(rect.height * window.devicePixelRatio);
+        }
+      }
+      draw2DScene();
+      draw3D();
+    }
+    window.addEventListener("resize", resizeCanvases);
+
+    function fit2DCamera() {
+      if (!cadScene) return;
+      const cv = document.getElementById("canvas2d");
+      const dpr = window.devicePixelRatio || 1;
+      const w = cv.width / dpr, h = cv.height / dpr;
+      const [minX, minY, maxX, maxY] = cadScene.bounds_mm;
+      const spanX = Math.max(maxX - minX, 1), spanY = Math.max(maxY - minY, 1);
+      camScale = Math.min((w - 64) / spanX, (h - 64) / spanY);
+      camPanX = (w - spanX * camScale) / 2 - minX * camScale;
+      camPanY = h - (h - spanY * camScale) / 2 + minY * camScale;
+      draw2DScene();
+    }
+
+    function draw2DScene() {
+      const cv = document.getElementById("canvas2d");
+      if (!cv) return;
+      const ctx = cv.getContext("2d");
+      const dpr = window.devicePixelRatio || 1;
+      const W = cv.width / dpr, H = cv.height / dpr;
+      ctx.save();
+      ctx.scale(dpr, dpr);
+      ctx.fillStyle = darkCadTheme ? "#070c16" : "#f8fafc";
+      ctx.fillRect(0, 0, W, H);
+
+      if (showCadGrid) {
+        let stepMm = 10;
+        while (stepMm * camScale < 28) stepMm *= 2;
+        while (stepMm * camScale > 90 && stepMm > 1) stepMm /= 2;
+        ctx.strokeStyle = darkCadTheme ? "rgba(51,65,85,0.32)" : "rgba(203,213,225,0.65)";
+        ctx.lineWidth = 0.6;
+        const x0 = Math.floor((-camPanX / camScale) / stepMm) * stepMm;
+        const x1 = Math.ceil(((W - camPanX) / camScale) / stepMm) * stepMm;
+        const y0 = Math.floor(((camPanY - H) / camScale) / stepMm) * stepMm;
+        const y1 = Math.ceil((camPanY / camScale) / stepMm) * stepMm;
+        ctx.beginPath();
+        for (let x = x0; x <= x1; x += stepMm) {
+          const sx = camPanX + x * camScale;
+          ctx.moveTo(sx, 0); ctx.lineTo(sx, H);
+        }
+        for (let y = y0; y <= y1; y += stepMm) {
+          const sy = camPanY - y * camScale;
+          ctx.moveTo(0, sy); ctx.lineTo(W, sy);
+        }
+        ctx.stroke();
+      }
+
+      if (!cadScene) {
+        ctx.fillStyle = "#64748b";
+        ctx.font = "13px 'Microsoft YaHei', sans-serif";
+        ctx.fillText("交互式矢量 CAD 审图画布 — 生成或上传 DXF 后支持滚轮无级缩放与图层控制", Math.max(24, W / 2 - 225), H / 2);
+        ctx.restore();
+        return;
+      }
+
+      const lyrMap = {};
+      for (const l of cadScene.layers) lyrMap[l.name] = l;
+
+      for (const p of cadScene.primitives) {
+        if (hiddenLayers.has(p.l)) continue;
+        const lInfo = lyrMap[p.l];
+        const isHi = highlightedHandle && p.h === highlightedHandle;
+        const stroke = isHi ? "#22d3ee" : (darkCadTheme ? (lInfo?.hex_dark || "#f8fafc") : (lInfo?.hex_light || "#0f172a"));
+        ctx.strokeStyle = stroke;
+        ctx.fillStyle = stroke;
+        ctx.lineWidth = isHi ? 2.8 : (p.l === "OUTLINE" || p.l === "BUS" ? 1.5 : 0.95);
+
+        const lt = lInfo?.linetype || "CONTINUOUS";
+        if (!isHi && lt.includes("CENTER")) ctx.setLineDash([10, 4, 2, 4]);
+        else if (!isHi && lt.includes("HIDDEN")) ctx.setLineDash([6, 4]);
+        else ctx.setLineDash([]);
+
+        if (p.k === "seg") {
+          const [x1, y1, x2, y2] = p.d;
+          ctx.beginPath();
+          ctx.moveTo(camPanX + x1 * camScale, camPanY - y1 * camScale);
+          ctx.lineTo(camPanX + x2 * camScale, camPanY - y2 * camScale);
+          ctx.stroke();
+        } else if (p.k === "circle") {
+          const [cx, cy, r] = p.d;
+          ctx.beginPath();
+          ctx.arc(camPanX + cx * camScale, camPanY - cy * camScale, Math.max(r * camScale, 0.5), 0, Math.PI * 2);
+          ctx.stroke();
+        } else if (p.k === "arc") {
+          const [cx, cy, r, sa, ea] = p.d;
+          // CAD CCW [sa -> ea] in Y-up maps to screen Y-down [-sa -> -ea] anticlockwise=true!
+          ctx.beginPath();
+          ctx.arc(
+            camPanX + cx * camScale,
+            camPanY - cy * camScale,
+            Math.max(r * camScale, 0.5),
+            (-sa * Math.PI) / 180,
+            (-ea * Math.PI) / 180,
+            true
+          );
+          ctx.stroke();
+        } else if (p.k === "poly" || p.k === "solid") {
+          ctx.beginPath();
+          p.pts.forEach(([x, y], i) => {
+            const sx = camPanX + x * camScale, sy = camPanY - y * camScale;
+            if (i === 0) ctx.moveTo(sx, sy); else ctx.lineTo(sx, sy);
+          });
+          if (p.c || p.k === "solid") ctx.closePath();
+          if (p.k === "solid") ctx.fill(); else ctx.stroke();
+        } else if (p.k === "text") {
+          const pxSize = Math.max(p.s * camScale, 1.0);
+          if (pxSize >= 4.0) {
+            ctx.save();
+            ctx.translate(camPanX + p.x * camScale, camPanY - p.y * camScale);
+            if (p.r) ctx.rotate((-p.r * Math.PI) / 180);
+            ctx.font = `${Math.min(pxSize, 48)}px 'Microsoft YaHei', Arial, sans-serif`;
+            ctx.fillText(p.t, 0, 0);
+            ctx.restore();
+          }
+        }
+      }
+      ctx.restore();
+      document.getElementById("sceneStats").textContent = `图元: ${cadScene.primitive_count} · 图层: ${cadScene.layers.length} · 缩放: ${Math.round(camScale * 50)}%`;
+    }
+
+    function renderLayerPanel() {
+      const panel = document.getElementById("layerPanel");
+      if (!cadScene) { panel.innerHTML = "<span style='color:var(--muted)'>暂无图层</span>"; return; }
+      panel.innerHTML = `<div style="font-weight:700;margin-bottom:5px;color:var(--accent);">图层显隐控制</div>`;
+      cadScene.layers.forEach(l => {
+        const row = document.createElement("label");
+        row.className = "lyr-item";
+        const checked = !hiddenLayers.has(l.name) ? "checked" : "";
+        const dotColor = darkCadTheme ? l.hex_dark : l.hex_light;
+        row.innerHTML = `<input type="checkbox" ${checked} /> <span class="color-dot" style="background:${dotColor}"></span> <span>${l.name} (${l.count})</span>`;
+        row.querySelector("input").onchange = e => {
+          if (e.target.checked) hiddenLayers.delete(l.name); else hiddenLayers.add(l.name);
+          draw2DScene();
+        };
+        panel.appendChild(row);
+      });
+    }
+
+    // 2D Canvas Wheel Zoom & Drag Pan
+    const cv2d = document.getElementById("canvas2d");
+    cv2d.addEventListener("wheel", e => {
+      e.preventDefault();
+      const rect = cv2d.getBoundingClientRect();
+      const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+      const wx = (mx - camPanX) / camScale;
+      const wy = (camPanY - my) / camScale;
+      const factor = e.deltaY < 0 ? 1.16 : 1 / 1.16;
+      camScale = Math.max(0.05, Math.min(80.0, camScale * factor));
+      camPanX = mx - wx * camScale;
+      camPanY = my + wy * camScale;
+      draw2DScene();
+    }, { passive: false });
+
+    cv2d.addEventListener("mousedown", e => { isPanning2D = true; panStartX = e.clientX - camPanX; panStartY = e.clientY - camPanY; });
+    window.addEventListener("mouseup", () => { isPanning2D = false; drag3D = false; });
+    cv2d.addEventListener("mousemove", e => {
+      const rect = cv2d.getBoundingClientRect();
+      const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+      const wx = (mx - camPanX) / camScale, wy = (camPanY - my) / camScale;
+      document.getElementById("coordReadout").textContent = `光标坐标 X: ${wx.toFixed(2)} mm, Y: ${wy.toFixed(2)} mm  |  滚轮无级缩放 · 拖拽平移`;
+      if (isPanning2D) {
+        camPanX = e.clientX - panStartX;
+        camPanY = e.clientY - panStartY;
+        draw2DScene();
+      }
+    });
+    cv2d.addEventListener("dblclick", fit2DCamera);
+
+    document.getElementById("btnFit2D").onclick = fit2DCamera;
+    document.getElementById("btnTheme2D").onclick = e => {
+      darkCadTheme = !darkCadTheme;
+      e.target.textContent = darkCadTheme ? "🌙 黑底彩线" : "☀️ 白纸黑线";
+      renderLayerPanel();
+      draw2DScene();
+    };
+    document.getElementById("btnGrid2D").onclick = e => {
+      showCadGrid = !showCadGrid;
+      e.target.classList.toggle("active", showCadGrid);
+      draw2DScene();
+    };
+    document.getElementById("btnToggleLayers").onclick = () => {
+      const p = document.getElementById("layerPanel");
+      p.style.display = p.style.display === "none" ? "block" : "none";
+      renderLayerPanel();
+    };
+
+    // ===================== Industrial Crease-Edge 3D Viewer =====================
+    function parseOBJWithCreaseEdges(txt) {
+      const rawV = [], faces = [];
+      for (const line of txt.split("\n")) {
+        const p = line.trim().split(/\s+/);
+        if (p[0] === "v") rawV.push([+p[1], +p[2], +p[3]]);
+        else if (p[0] === "f") faces.push(p.slice(1, 4).map(t => parseInt(t.split("/")[0], 10) - 1));
+      }
+      if (!rawV.length) return null;
+      let minX=1e9,minY=1e9,minZ=1e9,maxX=-1e9,maxY=-1e9,maxZ=-1e9;
+      for (const [x,y,z] of rawV) {
+        if(x<minX)minX=x; if(y<minY)minY=y; if(z<minZ)minZ=z;
+        if(x>maxX)maxX=x; if(y>maxY)maxY=y; if(z>maxZ)maxZ=z;
+      }
+      const cx=(minX+maxX)/2, cy=(minY+maxY)/2, cz=(minZ+maxZ)/2;
+      const span = Math.max(maxX-minX, maxY-minY, maxZ-minZ, 1);
+      const verts = rawV.map(([x,y,z]) => [(x-cx)/span, (y-cy)/span, (z-cz)/span]);
+
+      // Compute face normals & extract sharp feature/crease edges (angle > 26 deg)
+      const fNormals = [];
+      const edgeAdj = new Map();
+      faces.forEach(([a, b, c], fi) => {
+        const va = verts[a], vb = verts[b], vc = verts[c];
+        const ux = vb[0]-va[0], uy = vb[1]-va[1], uz = vb[2]-va[2];
+        const vx = vc[0]-va[0], vy = vc[1]-va[1], vz = vc[2]-va[2];
+        let nx = uy*vz - uz*vy, ny = uz*vx - ux*vz, nz = ux*vy - uy*vx;
+        const nl = Math.hypot(nx, ny, nz) || 1;
+        fNormals.push([nx/nl, ny/nl, nz/nl]);
+        for (const [u, v] of [[a,b],[b,c],[c,a]]) {
+          const key = u < v ? `${u}_${v}` : `${v}_${u}`;
+          if (!edgeAdj.has(key)) edgeAdj.set(key, { u: Math.min(u,v), v: Math.max(u,v), faces: [] });
+          edgeAdj.get(key).faces.push(fi);
+        }
+      });
+
+      const creaseEdges = [];
+      for (const item of edgeAdj.values()) {
+        if (item.faces.length === 1) {
+          creaseEdges.push([item.u, item.v]);
+        } else if (item.faces.length >= 2) {
+          const n1 = fNormals[item.faces[0]], n2 = fNormals[item.faces[1]];
+          const dot = n1[0]*n2[0] + n1[1]*n2[1] + n1[2]*n2[2];
+          if (dot < 0.898) creaseEdges.push([item.u, item.v]); // > ~26 deg sharp CAD edge!
+        }
+      }
+      return { verts, faces, creaseEdges, minZNorm: (minZ - cz) / span };
+    }
+
+    function set3DView(rx, ry) { rotX = rx; rotY = ry; draw3D(); }
+    function cycle3DMode() {
+      renderMode3D = (renderMode3D + 1) % 3;
+      document.getElementById("btnRenderMode3D").textContent = ["实体+棱线", "X-Ray 半透明", "工程线框"][renderMode3D];
+      draw3D();
+    }
+
+    function rotPt3D([x, y, z]) {
+      // Z-up CAD world -> rotate around Z by rotY, then tilt by rotX
+      const cz = Math.cos(rotY), sz = Math.sin(rotY);
+      const x1 = x * cz - y * sz;
+      const y1 = x * sz + y * cz;
+      const cx = Math.cos(rotX), sx = Math.sin(rotX);
+      const y2 = y1 * cx - z * sx;
+      const z2 = y1 * sx + z * cx;
+      return [x1, z2, y2]; // screen X, screen Y (up), depth
+    }
+
+    function draw3D() {
+      const cv = document.getElementById("viewer3d");
+      if (!cv || cv.parentElement.style.display === "none") return;
+      const ctx = cv.getContext("2d");
+      const dpr = window.devicePixelRatio || 1;
+      const W = cv.width / dpr, H = cv.height / dpr;
+      ctx.save();
+      ctx.scale(dpr, dpr);
+
+      const grad = ctx.createLinearGradient(0, 0, 0, H);
+      grad.addColorStop(0, "#0b1324");
+      grad.addColorStop(1, "#132038");
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, W, H);
+
+      if (!mesh3d) { ctx.restore(); return; }
+      const cx = W / 2, cy = H / 2 + 10;
+      const sc = Math.min(W, H) * 0.68 * zoom3d;
+
+      // 1. Draw XY Reference Grid on floor z = minZNorm
+      ctx.strokeStyle = "rgba(56,189,248,0.13)";
+      ctx.lineWidth = 0.7;
+      ctx.beginPath();
+      const gz = mesh3d.minZNorm;
+      for (let g = -0.6; g <= 0.601; g += 0.2) {
+        const a1 = rotPt3D([g, -0.6, gz]), a2 = rotPt3D([g, 0.6, gz]);
+        ctx.moveTo(cx + a1[0]*sc, cy - a1[1]*sc); ctx.lineTo(cx + a2[0]*sc, cy - a2[1]*sc);
+        const b1 = rotPt3D([-0.6, g, gz]), b2 = rotPt3D([0.6, g, gz]);
+        ctx.moveTo(cx + b1[0]*sc, cy - b1[1]*sc); ctx.lineTo(cx + b2[0]*sc, cy - b2[1]*sc);
+      }
+      ctx.stroke();
+
+      // 2. Project vertices
+      const proj = mesh3d.verts.map(v => {
+        const [rx, ry, rz] = rotPt3D(v);
+        return [cx + rx * sc, cy - ry * sc, rz, rx, ry];
+      });
+
+      // 3. Draw shaded triangles (if not wireframe)
+      if (renderMode3D !== 2) {
+        const tris = mesh3d.faces.map(([a, b, c]) => {
+          const pa = proj[a], pb = proj[b], pc = proj[c];
+          const ux = pb[3]-pa[3], uy = pb[4]-pa[4], uz = pb[2]-pa[2];
+          const vx = pc[3]-pa[3], vy = pc[4]-pa[4], vz = pc[2]-pa[2];
+          let nx = uy*vz - uz*vy, ny = uz*vx - ux*vz, nz = ux*vy - uy*vx;
+          const nl = Math.hypot(nx, ny, nz) || 1;
+          nx/=nl; ny/=nl; nz/=nl;
+          const diff = Math.max(0, Math.abs(nx * 0.35 + ny * 0.52 + nz * 0.78));
+          const spec = Math.pow(Math.max(0, Math.abs(nz)), 12) * 0.28;
+          return { pa, pb, pc, depth: (pa[2]+pb[2]+pc[2])/3, lum: Math.min(1, 0.24 + diff * 0.65 + spec) };
+        }).sort((m, n) => m.depth - n.depth);
+
+        const alpha = renderMode3D === 1 ? 0.42 : 1.0;
+        for (const t of tris) {
+          const r = Math.round(52 + t.lum * 135);
+          const g = Math.round(92 + t.lum * 142);
+          const b = Math.round(135 + t.lum * 115);
+          ctx.fillStyle = `rgba(${r},${g},${b},${alpha})`;
+          ctx.beginPath();
+          ctx.moveTo(t.pa[0], t.pa[1]);
+          ctx.lineTo(t.pb[0], t.pb[1]);
+          ctx.lineTo(t.pc[0], t.pc[1]);
+          ctx.closePath();
+          ctx.fill();
+        }
+      }
+
+      // 4. Crisp CAD Feature / Crease Edges
+      ctx.strokeStyle = renderMode3D === 0 ? "#09101d" : "#38bdf8";
+      ctx.lineWidth = renderMode3D === 0 ? 1.15 : 0.85;
+      ctx.beginPath();
+      for (const [u, v] of mesh3d.creaseEdges) {
+        ctx.moveTo(proj[u][0], proj[u][1]);
+        ctx.lineTo(proj[v][0], proj[v][1]);
+      }
+      ctx.stroke();
+
+      // 5. RGB XYZ Axis Triad in bottom-left
+      const ox = 42, oy = H - 38, alen = 26;
+      for (const [vec, col, lbl] of [[[1,0,0],"#ef4444","X"], [[0,1,0],"#22c55e","Y"], [[0,0,1],"#38bdf8","Z"]]) {
+        const [ax, ay] = rotPt3D(vec);
+        ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(ox, oy); ctx.lineTo(ox + ax*alen, oy - ay*alen); ctx.stroke();
+        ctx.font = "bold 11px Consolas";
+        ctx.fillText(lbl, ox + ax*(alen+9) - 3, oy - ay*(alen+9) + 4);
+      }
+      ctx.restore();
+    }
+
+    const cv3d = document.getElementById("viewer3d");
+    cv3d.addEventListener("mousedown", e => { drag3D = true; last3DX = e.clientX; last3DY = e.clientY; });
+    cv3d.addEventListener("mousemove", e => {
+      if (!drag3D) return;
+      rotY += (e.clientX - last3DX) * 0.011;
+      rotX = Math.max(-3.0, Math.min(0.4, rotX + (e.clientY - last3DY) * 0.011));
+      last3DX = e.clientX; last3DY = e.clientY;
+      draw3D();
+    });
+    cv3d.addEventListener("wheel", e => {
+      e.preventDefault();
+      zoom3d = Math.max(0.35, Math.min(3.5, zoom3d * (e.deltaY < 0 ? 1.12 : 0.89)));
+      draw3D();
+    }, { passive: false });
+
+    // ===================== Display Generated Task Result =====================
+    async function displayTaskResult(data) {
+      lastTaskData = data;
+      highlightedHandle = null;
+      document.getElementById("vpDiff").style.display = "none";
+      document.getElementById("vp2d").style.display = "block";
+
+      const badges = document.getElementById("auditBadges");
+      badges.innerHTML = "";
+      const bMain = document.createElement("span");
+      bMain.className = "badge " + (["passed","complete","partial"].includes(data.status) ? "ok" : "warn");
+      bMain.textContent = `状态: ${data.status} · ${data.task_id || ""}`;
+      badges.appendChild(bMain);
+
+      if (data.audit_3d) {
+        const b3 = document.createElement("span");
+        b3.className = "badge ok";
+        b3.textContent = `3D水密流形: ${data.audit_3d.watertight ? "通过" : "异常"} · 体积 ${Math.round(data.audit_3d.actual_volume_mm3)} mm³`;
+        badges.appendChild(b3);
+      }
+      const s2d = data.audit_summary || data.sheet_2d?.audit_summary;
+      if (s2d) {
+        const b2 = document.createElement("span");
+        b2.className = "badge " + ((s2d.errors || 0) === 0 ? "ok" : "warn");
+        b2.textContent = `2D审计: 错误 ${s2d.errors ?? 0} / 警告 ${s2d.warnings ?? 0}`;
+        badges.appendChild(b2);
+      }
+
+      const arts = data.artifacts || [];
+      const has2DDxf = arts.some(a => a.name.endsWith(".dxf") && a.name !== "model3d.dxf");
+      document.getElementById("btnSendToRevise").style.display = has2DDxf ? "inline-block" : "none";
+
+      // Download chips
+      const bar = document.getElementById("artifactBar");
+      bar.innerHTML = "";
+      arts.forEach(a => {
+        const chip = document.createElement("span");
+        chip.className = "dl-chip";
+        chip.textContent = `⬇ ${a.name} (${(a.size/1024).toFixed(1)} KB)`;
+        chip.onclick = async () => {
+          const r = await fetch(a.download_url, { headers: authHeaders() });
+          const blob = await r.blob();
+          const u = URL.createObjectURL(blob);
+          const link = document.createElement("a");
+          link.href = u; link.download = a.name; link.click();
+          URL.revokeObjectURL(u);
+        };
+        bar.appendChild(chip);
+      });
+
+      // Load 2D Vector CAD Scene if task has a 2D DXF
+      if (has2DDxf && data.task_id) {
+        const sr = await fetch(`/api/v1/tasks/${data.task_id}/cad-scene`, { headers: authHeaders() });
+        if (sr.ok) {
+          cadScene = await sr.json();
+          hiddenLayers.clear();
+          renderLayerPanel();
+          resizeCanvases();
+          fit2DCamera();
+        }
+      }
+
+      // Load 3D Crease-Edge Mesh if task has .obj
+      const objArt = arts.find(a => a.name.endsWith(".obj"));
+      const vp3d = document.getElementById("vp3d");
+      const stage = document.getElementById("stage");
+      if (objArt) {
+        vp3d.style.display = "block";
+        stage.classList.add("split");
+        if (!has2DDxf) {
+          document.getElementById("vp2d").style.display = "none";
+          stage.classList.remove("split");
+        }
+        const objTxt = await (await fetch(objArt.download_url, { headers: authHeaders() })).text();
+        mesh3d = parseOBJWithCreaseEdges(objTxt);
+        resizeCanvases();
+      } else {
+        vp3d.style.display = "none";
+        stage.classList.remove("split");
+        resizeCanvases();
+      }
+    }
+
+    // ===================== Step B: Visual DXF Upload, Highlight & Revision Studio =====================
+    function renderReviseSidebar() {
+      const body = document.getElementById("sidebarBody");
+      body.innerHTML = `
+        <div class="sec-title">第 1 步：导入现有 DXF 图纸</div>
+        <div class="dropzone" onclick="triggerUpload('dxf')">📂 点击或拖拽上传本地 .dxf 图纸进入改图台</div>
+        <div style="font-size:11.5px;color:var(--muted);" id="revFileInfo">
+          ${revState.dxfPath ? `当前基线：${revState.dxfPath.split(/[\\/]/).pop()} · SHA256: ${revState.sha256?.slice(0,10)}...` : "尚未加载 DXF（也可在其他标签页生成后点右上角“送入局部改图台”）"}
+        </div>
+
+        <div class="sec-title">第 2 步：点击选择图元（画布自动高亮定位）</div>
+        <div class="field full">
+          <select id="revTypeFilter" onchange="renderEntityList()">
+            <option value="ALL">全部可编辑图元 (${revState.entities.length})</option>
+            <option value="LINE">直线 LINE</option>
+            <option value="CIRCLE">圆孔 CIRCLE</option>
+            <option value="LWPOLYLINE">多段线轮廓 LWPOLYLINE</option>
+            <option value="DIMENSION">尺寸标注 DIMENSION</option>
+          </select>
+        </div>
+        <div class="entity-list" id="revEntityList"></div>
+
+        <div class="sec-title">第 3 步：零代码局部修改操作</div>
+        <div class="field full">
+          <label>改图动作</label>
+          <select id="revOpKind" onchange="renderRevOpParams()">
+            <option value="delete_entities">删除选中图元 (delete_entities)</option>
+            <option value="set_length">修改选中直线长度 (set_length)</option>
+            <option value="resize_fixed_edge">固定边调整轮廓跨度 (resize_fixed_edge)</option>
+            <option value="dimension_move">平移选中尺寸文字位置 (dimension_move)</option>
+          </select>
+        </div>
+        <div id="revOpFields" class="form-grid"></div>
+        <div class="row">
+          <button class="secondary" onclick="executeRevision(true)" style="flex:1;">🔍 Dry-Run 预演</button>
+          <button class="primary" onclick="executeRevision(false)" style="flex:1;">✅ 正式改图并对比</button>
+        </div>
+      `;
+      renderEntityList();
+      renderRevOpParams();
+    }
+
+    function renderEntityList() {
+      const box = document.getElementById("revEntityList");
+      if (!box) return;
+      const flt = document.getElementById("revTypeFilter").value;
+      box.innerHTML = "";
+      const list = revState.entities.filter(e => flt === "ALL" || e.type === flt);
+      if (!list.length) {
+        box.innerHTML = `<div style="padding:10px;color:var(--muted);">无匹配图元</div>`;
+        return;
+      }
+      list.slice(0, 120).forEach(ent => {
+        const row = document.createElement("div");
+        const isSel = revState.selectedEntity?.handle === ent.handle;
+        row.className = "ent-row" + (isSel ? " selected" : "");
+        let brief = "";
+        if (ent.geometry?.radius) brief = `R=${ent.geometry.radius}`;
+        else if (ent.geometry?.length) brief = `L=${ent.geometry.length}`;
+        row.innerHTML = `<span>#${ent.handle} · ${ent.type} [${ent.layer}]</span><span>${brief}</span>`;
+        row.onclick = () => {
+          revState.selectedEntity = ent;
+          highlightedHandle = ent.handle;
+          document.getElementById("vpDiff").style.display = "none";
+          document.getElementById("vp2d").style.display = "block";
+          renderEntityList();
+          renderRevOpParams();
+          draw2DScene();
+        };
+        box.appendChild(row);
+      });
+    }
+
+    function renderRevOpParams() {
+      const box = document.getElementById("revOpFields");
+      if (!box) return;
+      const op = document.getElementById("revOpKind").value;
+      const sel = revState.selectedEntity;
+      if (op === "delete_entities") {
+        box.innerHTML = `<div class="field full"><label>目标图元 Handle</label><input id="ro_target" value="${sel?.handle || ''}" /></div>`;
+      } else if (op === "set_length") {
+        box.innerHTML = `
+          <div class="field"><label>直线 Handle</label><input id="ro_target" value="${sel?.handle || ''}" /></div>
+          <div class="field"><label>新长度 (mm)</label><input type="number" id="ro_len" value="80" /></div>
+          <div class="field full"><label>不动端点</label><select id="ro_fixed"><option value="start">固定起点 (start)</option><option value="end">固定终点 (end)</option></select></div>
+        `;
+      } else if (op === "resize_fixed_edge") {
+        box.innerHTML = `
+          <div class="field"><label>轮廓 Handle</label><input id="ro_target" value="${sel?.handle || ''}" /></div>
+          <div class="field"><label>新跨度尺寸 (mm)</label><input type="number" id="ro_size" value="120" /></div>
+          <div class="field"><label>方向轴</label><select id="ro_axis"><option value="x">水平 X 轴</option><option value="y">竖直 Y 轴</option></select></div>
+          <div class="field"><label>固定侧</label><select id="ro_fixed"><option value="min">固定小坐标侧 (min)</option><option value="max">固定大坐标侧 (max)</option></select></div>
+        `;
+      } else {
+        box.innerHTML = `
+          <div class="field"><label>标注 Handle</label><input id="ro_target" value="${sel?.handle || ''}" /></div>
+          <div class="field"><label>新位置 X,Y</label><input id="ro_pos" value="120,90" /></div>
+        `;
+      }
+    }
+
+    async function executeRevision(dryRun) {
+      if (!revState.sha256) { setAlert("请先上传或导入一份 DXF 图纸", "error"); return; }
+      const opKind = document.getElementById("revOpKind").value;
+      const target = document.getElementById("ro_target")?.value.trim();
+      if (!target) { setAlert("请先在上方图元列表中点击选择一个目标图元", "warn"); return; }
+
+      let opObj = { id: "op-1", type: opKind };
+      if (opKind === "delete_entities") opObj.targets = [{ handle: target }];
+      else if (opKind === "set_length") {
+        opObj.target = { handle: target };
+        opObj.length = +document.getElementById("ro_len").value;
+        opObj.fixed = document.getElementById("ro_fixed").value;
+      } else if (opKind === "resize_fixed_edge") {
+        opObj.targets = [{ handle: target }];
+        opObj.axis = document.getElementById("ro_axis").value;
+        opObj.fixed = document.getElementById("ro_fixed").value;
+        opObj.size = +document.getElementById("ro_size").value;
+      } else {
+        const [px, py] = document.getElementById("ro_pos").value.split(",").map(Number);
+        opObj.target = { handle: target };
+        opObj.position = [px, py];
+      }
+
+      const reqBody = {
+        dxf_path: revState.dxfPath,
+        task_id: revState.dxfPath ? null : revState.taskId,
+        artifact_name: revState.artifactName || "drawing.dxf",
+        dry_run: dryRun,
+        plan: {
+          schema: "cad-revision/v1",
+          baseline_sha256: revState.sha256,
+          units: revState.units,
+          tolerance: 1e-4,
+          operations: [opObj]
+        }
+      };
+
+      const r = await fetch("/api/v1/tasks/revise", { method: "POST", headers: authHeaders(), body: JSON.stringify(reqBody) });
+      const d = await r.json();
+      if (!r.ok) { setAlert(d.error || d.detail || JSON.stringify(d), "error"); return; }
+      if (dryRun) {
+        setAlert("✅ Dry-Run 安全预演验证通过！几何约束合法，可放心点击“正式改图并对比”。", "ok");
+        return;
+      }
+
+      setAlert("✅ 改图已完成！正在生成修改前后分屏对比审阅图...", "ok");
+      const newDxfArt = (d.artifacts || []).find(a => a.name.endsWith(".dxf"));
+      if (newDxfArt && (revState.dxfPath || d.source_path)) {
+        const beforeP = revState.dxfPath;
+        const afterP = newDxfArt.path;
+        if (beforeP && afterP) {
+          const dr = await fetch("/api/v1/tasks/diff", {
+            method: "POST", headers: authHeaders(),
+            body: JSON.stringify({ before_dxf_path: beforeP, after_dxf_path: afterP })
+          });
+          if (dr.ok) {
+            const diffData = await dr.json();
+            await showBeforeAfterDiff(diffData, d);
+            return;
+          }
+        }
+      }
+      await displayTaskResult(d);
+    }
+
+    async function showBeforeAfterDiff(diffData, revTaskData) {
+      document.getElementById("vp2d").style.display = "none";
+      document.getElementById("vp3d").style.display = "none";
+      document.getElementById("stage").classList.remove("split");
+      const vpDiff = document.getElementById("vpDiff");
+      vpDiff.style.display = "block";
+
+      const arts = diffData.artifacts || [];
+      const bArt = arts.find(a => a.name.includes("before") && a.name.endsWith(".png")) || arts[0];
+      const aArt = arts.find(a => a.name.includes("after") && a.name.endsWith(".png")) || arts[1];
+
+      const fetchImg = async art => {
+        if (!art) return "";
+        const res = await fetch(art.download_url, { headers: authHeaders() });
+        return URL.createObjectURL(await res.blob());
+      };
+      const bUrl = await fetchImg(bArt), aUrl = await fetchImg(aArt);
+      document.getElementById("diffGrid").innerHTML = `
+        <div class="diff-card"><div class="badge">修改前基线 (Before)</div>${bUrl ? `<img src="${bUrl}" />` : ""}</div>
+        <div class="diff-card"><div class="badge ok">修改后结果 (After · 邻域问题 ${(diffData.issues||[]).length} 项)</div>${aUrl ? `<img src="${aUrl}" />` : ""}</div>
+      `;
+
+      // Also expose revised.dxf in bottom download bar
+      const bar = document.getElementById("artifactBar");
+      bar.innerHTML = "";
+      (revTaskData.artifacts || []).forEach(a => {
+        const chip = document.createElement("span");
+        chip.className = "dl-chip";
+        chip.textContent = `⬇ ${a.name} (${(a.size/1024).toFixed(1)} KB)`;
+        chip.onclick = async () => {
+          const r = await fetch(a.download_url, { headers: authHeaders() });
+          const u = URL.createObjectURL(await r.blob());
+          const l = document.createElement("a"); l.href = u; l.download = a.name; l.click();
+        };
+        bar.appendChild(chip);
+      });
+    }
+
+    // Send generated drawing directly into Revision Studio
+    document.getElementById("btnSendToRevise").onclick = async () => {
+      if (!lastTaskData) return;
+      const dxfArt = (lastTaskData.artifacts || []).find(a => a.name.endsWith(".dxf") && a.name !== "model3d.dxf");
+      if (!dxfArt) return;
+      const invResp = await fetch("/api/v1/tasks/inventory", {
+        method: "POST", headers: authHeaders(),
+        body: JSON.stringify({ task_id: lastTaskData.task_id, artifact_name: dxfArt.name })
+      });
+      if (invResp.ok) {
+        const inv = await invResp.json();
+        revState = {
+          dxfPath: inv.path,
+          taskId: lastTaskData.task_id,
+          artifactName: dxfArt.name,
+          sha256: inv.sha256,
+          units: inv.units,
+          entities: inv.entities || [],
+          selectedEntity: null
+        };
+        switchTab("revise");
+      }
+    };
+
+    // ===================== Drag & Drop / File Upload =====================
+    let uploadMode = "doc";
+    function triggerUpload(mode) {
+      uploadMode = mode;
+      const inp = document.getElementById("hiddenFileInput");
+      inp.accept = mode === "dxf" ? ".dxf" : ".md,.txt,.csv,.tsv,.docx,.pdf";
+      inp.click();
+    }
+
+    document.getElementById("hiddenFileInput").onchange = async e => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const buf = await file.arrayBuffer();
+      let binary = "";
+      const bytes = new Uint8Array(buf);
+      for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+      const b64 = btoa(binary);
+
+      setAlert(`正在安全上传并解析 ${file.name}...`);
+      const r = await fetch("/api/v1/uploads", {
+        method: "POST", headers: authHeaders(),
+        body: JSON.stringify({ filename: file.name, content_base64: b64 })
+      });
+      const d = await r.json();
+      if (!r.ok) { setAlert(d.detail || JSON.stringify(d), "error"); return; }
+
+      if (file.name.toLowerCase().endsWith(".dxf") && d.inventory) {
+        revState = {
+          dxfPath: d.uploaded_path,
+          taskId: null,
+          sha256: d.inventory.sha256,
+          units: d.inventory.units,
+          entities: d.inventory.entities || [],
+          selectedEntity: null
+        };
+        if (d.scene) {
+          cadScene = d.scene;
+          hiddenLayers.clear();
+          document.getElementById("vpDiff").style.display = "none";
+          document.getElementById("vp3d").style.display = "none";
+          document.getElementById("vp2d").style.display = "block";
+          document.getElementById("stage").classList.remove("split");
+          renderLayerPanel();
+          resizeCanvases();
+          fit2DCamera();
+        }
+        renderReviseSidebar();
+        setAlert(`✅ 已加载 DXF（共 ${revState.entities.length} 个可编辑图元），点击列表即可高亮定位！`, "ok");
+      } else {
+        const compResp = await fetch("/api/v1/tasks/compile", {
+          method: "POST", headers: authHeaders(),
+          body: JSON.stringify({ input_paths: [d.uploaded_path] })
+        });
+        const comp = await compResp.json();
+        if (comp.spec) {
+          setAlert(`✅ 已从文档提取工程规约（图名：${comp.spec.project.name}），正在自动渲染图纸...`, "ok");
+          const genR = await fetch("/api/v1/tasks/generate", {
+            method: "POST", headers: authHeaders(),
+            body: JSON.stringify({ domain: "mechanical_2d", spec: comp.spec })
+          });
+          if (genR.ok) await displayTaskResult(await genR.json());
+        }
+      }
+      e.target.value = "";
+    };
+
+    // ===================== Main Run Buttons & Tab Switching =====================
+    document.getElementById("btnRunSync").onclick = async () => {
+      setAlert("正在编译几何、核验字体防重叠并生成交互图纸...");
+      try {
+        const payload = buildGeneratePayload();
+        const r = await fetch("/api/v1/tasks/generate", {
+          method: "POST", headers: authHeaders(), body: JSON.stringify(payload)
+        });
+        const d = await r.json();
+        if (!r.ok) { setAlert(d.error || d.detail || JSON.stringify(d), "error"); return; }
+        setAlert("");
+        await displayTaskResult(d);
+      } catch (err) { setAlert(String(err), "error"); }
+    };
+
+    document.getElementById("btnRunAsync").onclick = async () => {
+      setAlert("正在提交独立子进程异步队列...");
+      try {
+        const payload = buildGeneratePayload();
+        const r = await fetch("/api/v1/jobs", {
+          method: "POST", headers: authHeaders(), body: JSON.stringify(payload)
+        });
+        const d = await r.json();
+        if (!r.ok) { setAlert(d.error || d.detail || JSON.stringify(d), "error"); return; }
+        setAlert(`⏳ 后台子进程任务 ${d.job_id} 运行中...`);
+        const timer = setInterval(async () => {
+          const jr = await (await fetch(`/api/v1/jobs/${d.job_id}`, { headers: authHeaders() })).json();
+          if (["completed", "failed", "cancelled"].includes(jr.status)) {
+            clearInterval(timer);
+            if (jr.status === "completed" && jr.result) { setAlert(""); await displayTaskResult(jr.result); }
+            else setAlert(`后台任务结束: ${jr.status} ${jr.error || ""}`, "error");
+          }
+        }, 700);
+      } catch (err) { setAlert(String(err), "error"); }
+    };
+
+    function switchTab(t) {
+      activeTab = t;
+      document.querySelectorAll(".tab-btn").forEach(b => b.classList.toggle("active", b.dataset.tab === t));
+      renderSidebar();
+    }
+    document.querySelectorAll(".tab-btn").forEach(b => b.onclick = () => switchTab(b.dataset.tab));
+
+    async function initStudio() {
+      renderSidebar();
+      resizeCanvases();
       try {
         const h = await (await fetch("/api/v1/health")).json();
         const hb = document.getElementById("healthBadge");
         hb.textContent = `在线 · ${h.tool_count} MCP Tools`;
         hb.className = "badge ok";
-      } catch (e) {
-        document.getElementById("healthBadge").textContent = "网关离线";
-      }
+      } catch (_) {}
       try {
         const dr = await fetch("/api/v1/drivers", { headers: authHeaders() });
         if (dr.ok) {
-          const data = await dr.json();
+          const d = await dr.json();
           const box = document.getElementById("driverBadges");
-          box.innerHTML = "";
-          for (const [id, info] of Object.entries(data.drivers || {})) {
+          for (const [id, info] of Object.entries(d.drivers || {})) {
             const sp = document.createElement("span");
             sp.className = "badge " + (info.status === "available" ? "ok" : "");
             sp.textContent = `${id.toUpperCase()}: ${info.status}`;
@@ -393,257 +1625,7 @@ def render_studio_html() -> str:
         }
       } catch (_) {}
     }
-
-    function setDomain(dom) {
-      currentDomain = dom;
-      document.querySelectorAll(".tab-btn").forEach(b => b.classList.toggle("active", b.dataset.domain === dom));
-      const bar = document.getElementById("presetBar");
-      bar.innerHTML = "";
-      (PRESETS[dom] || []).forEach((p, idx) => {
-        const chip = document.createElement("span");
-        chip.className = "preset-chip";
-        chip.textContent = "示例：" + p.label;
-        chip.onclick = () => { document.getElementById("inputEditor").value = p.text; };
-        bar.appendChild(chip);
-        if (idx === 0) document.getElementById("inputEditor").value = p.text;
-      });
-      document.getElementById("btnCompile").style.display = dom === "mechanical_2d" ? "inline-block" : "none";
-      document.getElementById("extraOptions").style.display = dom === "model_3d" ? "flex" : "none";
-    }
-
-    function showAlert(msg, isErr = false) {
-      const box = document.getElementById("alertBox");
-      if (!msg) { box.style.display = "none"; return; }
-      box.style.display = "block";
-      box.className = "alert" + (isErr ? " error" : "");
-      box.textContent = msg;
-    }
-
-    function buildGenerateBody() {
-      const raw = document.getElementById("inputEditor").value.trim();
-      if (currentDomain === "mechanical_2d") {
-        if (raw.startsWith("{")) return { domain: "mechanical_2d", spec: JSON.parse(raw) };
-        return { domain: "mechanical_2d", markdown_brief: raw };
-      }
-      return {
-        domain: currentDomain,
-        spec: JSON.parse(raw),
-        with_2d_sheet: document.getElementById("chkWith2D").checked
-      };
-    }
-
-    async function renderResult(data) {
-      const sum = document.getElementById("auditSummary");
-      sum.innerHTML = "";
-      const stBadge = document.createElement("span");
-      stBadge.className = "badge " + (["passed","complete","partial"].includes(data.status) ? "ok" : "warn");
-      stBadge.textContent = `状态: ${data.status} · 任务 ${data.task_id || ""}`;
-      sum.appendChild(stBadge);
-
-      if (data.audit_3d) {
-        const b3 = document.createElement("span");
-        b3.className = "badge ok";
-        b3.textContent = `水密流形: ${data.audit_3d.watertight ? "通过" : "失败"} · 面片 ${data.audit_3d.triangle_count} · 体积 ${Math.round(data.audit_3d.actual_volume_mm3)} mm³`;
-        sum.appendChild(b3);
-      }
-      if (data.audit_summary) {
-        const b2 = document.createElement("span");
-        b2.className = "badge " + (data.audit_summary.errors === 0 ? "ok" : "warn");
-        b2.textContent = `二维审计: 错误 ${data.audit_summary.errors ?? 0} / 警告 ${data.audit_summary.warnings ?? 0}`;
-        sum.appendChild(b2);
-      }
-
-      const arts = data.artifacts || [];
-      const bar = document.getElementById("artifactBar");
-      bar.innerHTML = "";
-      arts.forEach(a => {
-        const btn = document.createElement("a");
-        btn.className = "dl-btn";
-        btn.textContent = `⬇ ${a.name} (${(a.size/1024).toFixed(1)} KB)`;
-        btn.onclick = async () => {
-          const r = await fetch(a.download_url, { headers: authHeaders() });
-          const blob = await r.blob();
-          const u = URL.createObjectURL(blob);
-          const link = document.createElement("a");
-          link.href = u; link.download = a.name; link.click();
-          URL.revokeObjectURL(u);
-        };
-        bar.appendChild(btn);
-      });
-
-      const pngArt = arts.find(a => a.name === "sheet2d.png") || arts.find(a => a.name.endsWith(".png"));
-      const objArt = arts.find(a => a.name.endsWith(".obj"));
-      const stage = document.getElementById("previewStage");
-      const pane2d = document.getElementById("pane2d");
-      const pane3d = document.getElementById("pane3d");
-
-      if (pngArt) {
-        const r = await fetch(pngArt.download_url, { headers: authHeaders() });
-        if (!r.ok) {
-          pane2d.innerHTML = `<span style="color:var(--err);font-size:13px;">预览图加载失败 (HTTP ${r.status})</span>`;
-        } else {
-          const blob = await r.blob();
-          const imgUrl = URL.createObjectURL(blob);
-          pane2d.innerHTML = `<img src="${imgUrl}" alt="CAD Preview" />`;
-        }
-      }
-      if (objArt) {
-        pane3d.style.display = "flex";
-        stage.classList.add("split");
-        const objTxt = await (await fetch(objArt.download_url, { headers: authHeaders() })).text();
-        mesh3d = parseOBJ(objTxt);
-        draw3D();
-      } else {
-        pane3d.style.display = "none";
-        stage.classList.remove("split");
-      }
-    }
-
-    function parseOBJ(txt) {
-      const verts = [], faces = [];
-      for (const line of txt.split("\\n")) {
-        const p = line.trim().split(/\\s+/);
-        if (p[0] === "v") verts.push([+p[1], +p[2], +p[3]]);
-        else if (p[0] === "f") faces.push(p.slice(1, 4).map(tok => parseInt(tok.split("/")[0], 10) - 1));
-      }
-      if (!verts.length) return null;
-      let minX=1e9,minY=1e9,minZ=1e9,maxX=-1e9,maxY=-1e9,maxZ=-1e9;
-      for (const [x,y,z] of verts) {
-        if(x<minX)minX=x; if(y<minY)minY=y; if(z<minZ)minZ=z;
-        if(x>maxX)maxX=x; if(y>maxY)maxY=y; if(z>maxZ)maxZ=z;
-      }
-      const cx=(minX+maxX)/2, cy=(minY+maxY)/2, cz=(minZ+maxZ)/2;
-      const span = Math.max(maxX-minX, maxY-minY, maxZ-minZ, 1);
-      return { verts: verts.map(([x,y,z]) => [(x-cx)/span, (y-cy)/span, (z-cz)/span]), faces };
-    }
-
-    function draw3D() {
-      const cv = document.getElementById("viewer3d");
-      const ctx = cv.getContext("2d");
-      ctx.clearRect(0, 0, cv.width, cv.height);
-      if (!mesh3d) return;
-      const cx = cv.width / 2, cy = cv.height / 2, sc = Math.min(cx, cy) * 1.45 * zoom3d;
-      const cy1 = Math.cos(rotY), sy1 = Math.sin(rotY), cx1 = Math.cos(rotX), sx1 = Math.sin(rotX);
-      const proj = mesh3d.verts.map(([x, y, z]) => {
-        const x1 = x * cy1 + z * sy1;
-        const z1 = -x * sy1 + z * cy1;
-        const y2 = y * cx1 - z1 * sx1;
-        const z2 = y * sx1 + z1 * cx1;
-        return [cx + x1 * sc, cy - y2 * sc, z2, x1, y2];
-      });
-      const tris = mesh3d.faces.map(([a, b, c]) => {
-        const pa = proj[a], pb = proj[b], pc = proj[c];
-        const ux = pb[3]-pa[3], uy = pb[4]-pa[4], uz = pb[2]-pa[2];
-        const vx = pc[3]-pa[3], vy = pc[4]-pa[4], vz = pc[2]-pa[2];
-        let nx = uy*vz - uz*vy, ny = uz*vx - ux*vz, nz = ux*vy - uy*vx;
-        const nl = Math.hypot(nx, ny, nz) || 1;
-        nx/=nl; ny/=nl; nz/=nl;
-        const shade = Math.max(0.22, Math.abs(nx*0.35 + ny*0.45 + nz*0.82));
-        return { pa, pb, pc, depth: (pa[2]+pb[2]+pc[2])/3, shade };
-      }).sort((m, n) => m.depth - n.depth);
-
-      for (const t of tris) {
-        const g = Math.round(55 + t.shade * 165);
-        ctx.fillStyle = `rgb(${Math.round(g*0.58)}, ${Math.round(g*0.82)}, ${g})`;
-        ctx.strokeStyle = `rgba(15,23,42,0.28)`;
-        ctx.lineWidth = 0.5;
-        ctx.beginPath();
-        ctx.moveTo(t.pa[0], t.pa[1]);
-        ctx.lineTo(t.pb[0], t.pb[1]);
-        ctx.lineTo(t.pc[0], t.pc[1]);
-        ctx.closePath();
-        ctx.fill();
-        ctx.stroke();
-      }
-      ctx.fillStyle = "#94a3b8";
-      ctx.font = "12px sans-serif";
-      ctx.fillText("三维交互视图 (拖拽旋转 / 滚轮缩放)", 12, 22);
-    }
-
-    const cv3 = document.getElementById("viewer3d");
-    cv3.onmousedown = e => { dragging = true; lastX = e.clientX; lastY = e.clientY; };
-    window.onmouseup = () => { dragging = false; };
-    window.onmousemove = e => {
-      if (!dragging) return;
-      rotY += (e.clientX - lastX) * 0.01;
-      rotX += (e.clientY - lastY) * 0.01;
-      lastX = e.clientX; lastY = e.clientY;
-      draw3D();
-    };
-    cv3.onwheel = e => { e.preventDefault(); zoom3d = Math.max(0.4, Math.min(3.0, zoom3d * (e.deltaY < 0 ? 1.1 : 0.9))); draw3D(); };
-
-    document.getElementById("btnCompile").onclick = async () => {
-      showAlert("");
-      try {
-        const r = await fetch("/api/v1/tasks/compile", {
-          method: "POST",
-          headers: authHeaders(),
-          body: JSON.stringify({ markdown_text: document.getElementById("inputEditor").value })
-        });
-        const d = await r.json();
-        if (d.validation && ((d.validation.missing||[]).length || (d.validation.conflicts||[]).length)) {
-          showAlert(`检测到待确认参数：\\n缺失: ${(d.validation.missing||[]).join(", ")}\\n冲突: ${(d.validation.conflicts||[]).join(", ")}`);
-        } else {
-          showAlert(`语义编译通过！识别图幅比例 ${d.spec?.sheet?.scale || "1:1"}，零缺失零冲突。`);
-        }
-      } catch (e) { showAlert(String(e), true); }
-    };
-
-    document.getElementById("btnGenerateSync").onclick = async () => {
-      showAlert("正在自动生成并审计图纸...");
-      try {
-        const body = buildGenerateBody();
-        const r = await fetch("/api/v1/tasks/generate", { method: "POST", headers: authHeaders(), body: JSON.stringify(body) });
-        const d = await r.json();
-        if (!r.ok) { showAlert(d.error || d.detail || JSON.stringify(d), true); return; }
-        showAlert("");
-        await renderResult(d);
-      } catch (e) { showAlert(String(e), true); }
-    };
-
-    async function refreshJobs() {
-      const r = await fetch("/api/v1/jobs", { headers: authHeaders() });
-      if (!r.ok) return;
-      const d = await r.json();
-      const box = document.getElementById("jobsList");
-      box.innerHTML = "";
-      (d.jobs || []).forEach(j => {
-        const row = document.createElement("div");
-        row.className = "job-item";
-        row.innerHTML = `<span>${j.job_id} (${j.domain})</span><span class="badge ${j.status==='completed'?'ok':''}">${j.status}</span>`;
-        row.onclick = async () => {
-          const jr = await (await fetch(`/api/v1/jobs/${j.job_id}`, { headers: authHeaders() })).json();
-          if (jr.result) await renderResult(jr.result);
-        };
-        box.appendChild(row);
-      });
-    }
-
-    document.getElementById("btnSubmitAsync").onclick = async () => {
-      try {
-        const body = buildGenerateBody();
-        const r = await fetch("/api/v1/jobs", { method: "POST", headers: authHeaders(), body: JSON.stringify(body) });
-        const d = await r.json();
-        if (!r.ok) { showAlert(d.error || d.detail || JSON.stringify(d), true); return; }
-        showAlert(`已提交后台子进程任务：${d.job_id}（状态自动刷新中）`);
-        await refreshJobs();
-        const timer = setInterval(async () => {
-          const jr = await (await fetch(`/api/v1/jobs/${d.job_id}`, { headers: authHeaders() })).json();
-          await refreshJobs();
-          if (["completed", "failed", "cancelled"].includes(jr.status)) {
-            clearInterval(timer);
-            if (jr.status === "completed" && jr.result) { showAlert(""); await renderResult(jr.result); }
-            else showAlert(`后台任务结束：${jr.status} ${jr.error || ""}`, jr.status !== "completed");
-          }
-        }, 800);
-      } catch (e) { showAlert(String(e), true); }
-    };
-
-    document.getElementById("btnRefreshJobs").onclick = refreshJobs;
-    document.querySelectorAll(".tab-btn").forEach(b => b.onclick = () => setDomain(b.dataset.domain));
-    setDomain("mechanical_2d");
-    loadStatus();
-    refreshJobs();
+    initStudio();
   </script>
 </body>
 </html>

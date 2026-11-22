@@ -244,13 +244,150 @@ class SlottedBracket3D(Strict3DModel):
         return self
 
 
+class CylinderBoss3D(Strict3DModel):
+    """Additive cylindrical boss rising from the top face of a CompoundSolid3D base."""
+
+    kind: Literal["cylinder_boss"] = "cylinder_boss"
+    x: float = 0.0
+    y: float = 0.0
+    diameter: float
+    height: float
+    bore_diameter: float = 0.0
+
+
+class BoxBoss3D(Strict3DModel):
+    """Additive rectangular boss rising from the top face of a CompoundSolid3D base."""
+
+    kind: Literal["box_boss"] = "box_boss"
+    x: float = 0.0
+    y: float = 0.0
+    width: float
+    depth: float
+    height: float
+
+
+class CounterboreHole3D(Strict3DModel):
+    """Subtractive counterbored hole from top face (cbore_diameter x cbore_depth) + through shaft."""
+
+    x: float
+    y: float
+    through_diameter: float
+    cbore_diameter: float
+    cbore_depth: float
+
+
+BossFeature3D: TypeAlias = Annotated[
+    CylinderBoss3D | BoxBoss3D,
+    Field(discriminator="kind"),
+]
+
+
+class CompoundSolid3D(Strict3DModel):
+    """Multi-feature CSG-like solid: box/cylinder base + multiple bosses + through-holes + counterbores."""
+
+    kind: Literal["compound_3d"]
+    base_shape: Literal["box", "cylinder"] = "box"
+    width: float = 120.0
+    depth: float = 80.0
+    outer_diameter: float = 120.0
+    base_height: float = 16.0
+    corner_radius: float = 0.0
+    bosses: list[BossFeature3D] = Field(default_factory=list)
+    through_holes: list[HoleXY] = Field(default_factory=list)
+    counterbores: list[CounterboreHole3D] = Field(default_factory=list)
+    source_id: NonBlankStr
+
+    @model_validator(mode="after")
+    def validate_compound(self) -> CompoundSolid3D:
+        if not isfinite(self.base_height) or self.base_height <= 0:
+            raise ValueError("compound_3d base_height must be positive and finite")
+        if self.base_shape == "box":
+            if not all(isfinite(v) for v in (self.width, self.depth, self.corner_radius)):
+                raise ValueError("compound_3d box dimensions must be finite")
+            if self.width <= 0 or self.depth <= 0:
+                raise ValueError("compound_3d box width and depth must be positive")
+            if self.corner_radius < 0 or self.corner_radius >= min(self.width, self.depth) / 2.0:
+                raise ValueError("compound_3d corner_radius must satisfy 0 <= r < min(width, depth)/2")
+        else:
+            if not isfinite(self.outer_diameter) or self.outer_diameter <= 0:
+                raise ValueError("compound_3d cylinder outer_diameter must be positive")
+
+        def _within_base(cx: float, cy: float, rx: float, ry: float, label: str) -> None:
+            margin = 1.0
+            if self.base_shape == "box":
+                hw, hd = self.width / 2.0, self.depth / 2.0
+                if abs(cx) + rx >= hw - margin or abs(cy) + ry >= hd - margin:
+                    raise ValueError(f"{label} exceeds base plate boundary")
+            else:
+                r_base = self.outer_diameter / 2.0
+                if hypot(abs(cx) + rx, abs(cy) + ry) >= r_base - margin:
+                    raise ValueError(f"{label} exceeds cylindrical base boundary")
+
+        # Collect top-face footprints (cx, cy, bounding_radius) to guarantee disjoint manifold stitching
+        top_footprints: list[tuple[float, float, float, str]] = []
+        bot_footprints: list[tuple[float, float, float, str]] = []
+
+        for idx, boss in enumerate(self.bosses):
+            if isinstance(boss, CylinderBoss3D):
+                if not all(isfinite(v) for v in (boss.x, boss.y, boss.diameter, boss.height, boss.bore_diameter)):
+                    raise ValueError(f"boss {idx} parameters must be finite")
+                if boss.diameter <= 0 or boss.height <= 0:
+                    raise ValueError(f"boss {idx} diameter and height must be positive")
+                if boss.bore_diameter < 0 or (boss.bore_diameter > 0 and boss.bore_diameter >= boss.diameter - 1.5):
+                    raise ValueError(f"boss {idx} bore_diameter invalid")
+                rb = boss.diameter / 2.0
+                _within_base(boss.x, boss.y, rb, rb, f"cylinder_boss {idx}")
+                top_footprints.append((boss.x, boss.y, rb, f"boss[{idx}]"))
+                if boss.bore_diameter > 0:
+                    bot_footprints.append((boss.x, boss.y, boss.bore_diameter / 2.0, f"boss_bore[{idx}]"))
+            else:
+                if not all(isfinite(v) for v in (boss.x, boss.y, boss.width, boss.depth, boss.height)):
+                    raise ValueError(f"box_boss {idx} parameters must be finite")
+                if boss.width <= 0 or boss.depth <= 0 or boss.height <= 0:
+                    raise ValueError(f"box_boss {idx} dimensions must be positive")
+                hw_b, hd_b = boss.width / 2.0, boss.depth / 2.0
+                _within_base(boss.x, boss.y, hw_b, hd_b, f"box_boss {idx}")
+                top_footprints.append((boss.x, boss.y, hypot(hw_b, hd_b), f"box_boss[{idx}]"))
+
+        for idx, (hx, hy, hd) in enumerate(self.through_holes):
+            if not all(isfinite(v) for v in (hx, hy, hd)) or hd <= 0:
+                raise ValueError(f"through_hole {idx} must be positive and finite")
+            rh = hd / 2.0
+            _within_base(hx, hy, rh, rh, f"through_hole {idx}")
+            top_footprints.append((hx, hy, rh, f"through_hole[{idx}]"))
+            bot_footprints.append((hx, hy, rh, f"through_hole[{idx}]"))
+
+        for idx, cb in enumerate(self.counterbores):
+            if not all(isfinite(v) for v in (cb.x, cb.y, cb.through_diameter, cb.cbore_diameter, cb.cbore_depth)):
+                raise ValueError(f"counterbore {idx} parameters must be finite")
+            if cb.through_diameter <= 0 or cb.cbore_diameter <= cb.through_diameter + 1.0:
+                raise ValueError(f"counterbore {idx} requires cbore_diameter > through_diameter + 1.0")
+            if not (0 < cb.cbore_depth < self.base_height - 1.0):
+                raise ValueError(f"counterbore {idx} cbore_depth must lie strictly inside base_height")
+            rcb = cb.cbore_diameter / 2.0
+            rth = cb.through_diameter / 2.0
+            _within_base(cb.x, cb.y, rcb, rcb, f"counterbore {idx}")
+            top_footprints.append((cb.x, cb.y, rcb, f"counterbore[{idx}]"))
+            bot_footprints.append((cb.x, cb.y, rth, f"counterbore[{idx}]"))
+
+        for group in (top_footprints, bot_footprints):
+            for i in range(len(group)):
+                x1, y1, r1, n1 = group[i]
+                for j in range(i + 1, len(group)):
+                    x2, y2, r2, n2 = group[j]
+                    if hypot(x1 - x2, y1 - y2) <= r1 + r2 + 0.8:
+                        raise ValueError(f"compound_3d features {n1} and {n2} overlap on base face")
+        return self
+
+
 Body3D: TypeAlias = Annotated[
     Box3D
     | Cylinder3D
     | ExtrudePolygon3D
     | Flange3D
     | SteppedShaft3D
-    | SlottedBracket3D,
+    | SlottedBracket3D
+    | CompoundSolid3D,
     Field(discriminator="kind"),
 ]
 
