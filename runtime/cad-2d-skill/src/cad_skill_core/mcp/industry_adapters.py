@@ -45,6 +45,7 @@ def build_auto_style_font_map(dxf_path: Path) -> dict[str, str]:
         win_fonts / "msyh.ttc",
         win_fonts / "NotoSansSC-VF.ttf",
         win_fonts / "Deng.ttf",
+        win_fonts / "cad-ci-unifont-16.0.04.otf",
     ]
     default_cjk = next((p for p in cjk_candidates if p.is_file()), None)
     default_latin = Path(findfont("DejaVu Sans")).resolve()
