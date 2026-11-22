@@ -38,7 +38,9 @@ class MCPWorkspaceSandbox:
         workspace_root: Path | None = None,
         *,
         allowed_read_roots: Sequence[Path] | None = None,
+        max_dxf_entities: int = 100_000,
     ) -> None:
+        self.max_dxf_entities = int(max_dxf_entities)
         env_ws = os.environ.get("CAD_MCP_WORKSPACE")
         raw_root = (
             Path(workspace_root)
@@ -119,6 +121,10 @@ class MCPWorkspaceSandbox:
                 size = resolved.stat().st_size
                 if size > _MAX_INPUT_BYTES:
                     raise MCPSandboxError(f"input file exceeds {_MAX_INPUT_BYTES} byte limit: {raw}")
+                if resolved.suffix.casefold() == ".dxf":
+                    from .security import inspect_dxf_safety_limits
+
+                    inspect_dxf_safety_limits(resolved, max_entities=self.max_dxf_entities)
                 return resolved
         raise MCPSandboxError(
             f"path {raw!r} escapes allowed sandbox roots {[str(r) for r in self.allowed_read_roots]}"
