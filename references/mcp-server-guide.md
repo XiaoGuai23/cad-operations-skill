@@ -66,7 +66,7 @@ D:\Python312\python.exe -B -m cad_skill_core.cli mcp-http --host 127.0.0.1 --por
 
 ---
 
-## 3. 已暴露的 14 个 MCP Tools（二维 + 三维 + 多版本/国产 CAD 驱动全闭环）
+## 3. 已暴露的 15 个 MCP Tools（二维 + 三维 + 多特征组合 + 国产 CAD 驱动全闭环）
 
 1. `cad_doctor`：诊断 Python 渲染栈、本机中文字体覆盖率、三维内核能力与多厂商 CAD 驱动状态。
 2. `cad_compile_spec`：解析项目书/手册/CSV/DOCX/PDF，编译 `DrawingSpec` 并拦截缺失尺寸与冲突参数。
@@ -82,6 +82,7 @@ D:\Python312\python.exe -B -m cad_skill_core.cli mcp-http --host 127.0.0.1 --por
 12. `cad_project_3d_to_2d`：将三维规约 `Model3DSpec` 正交/剖视投影为多视图二维 `DrawingSpec`。
 13. `cad_list_drivers`：只读探测本机安装的 AutoCAD（2021–2026）、中望 CAD（ZWCAD）、浩辰 CAD（GstarCAD）、CAXA 电子图板及 ODA 转换器矩阵。
 14. `cad_verify_roundtrip`：核验 DWG ↔ DXF 双向往返前后的图层、块、布局、样式、图元数与总包围盒结构无损性。
+15. `cad_compile_3d_spec`：将中英文口语化描述或项目书文档（`.md`/`.docx`/`.pdf`/`.csv`）编译为三维 `Model3DSpec`，并自动提示缺失或冲突参数。
 
 ## 4. MCP Resources 与 Prompts
 

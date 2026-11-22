@@ -48,12 +48,12 @@ def test_mcp_initialize_negotiates_supported_versions_and_ignores_notifications(
     }
 
 
-def test_mcp_lists_all_fourteen_2d_3d_and_driver_tools_with_strict_json_schemas(tmp_path):
+def test_mcp_lists_all_fifteen_2d_3d_and_driver_tools_with_strict_json_schemas(tmp_path):
     dispatcher = MCPDispatcher(MCPWorkspaceSandbox(tmp_path / "ws"))
     resp = dispatcher.handle_payload({"jsonrpc": "2.0", "id": 10, "method": "tools/list"})
     tools = resp["result"]["tools"]
     names = [t["name"] for t in tools]
-    assert len(names) == 14
+    assert len(names) == 15
     assert names == [
         "cad_doctor",
         "cad_compile_spec",
@@ -69,6 +69,7 @@ def test_mcp_lists_all_fourteen_2d_3d_and_driver_tools_with_strict_json_schemas(
         "cad_project_3d_to_2d",
         "cad_list_drivers",
         "cad_verify_roundtrip",
+        "cad_compile_3d_spec",
     ]
     for tool in tools:
         schema = tool["inputSchema"]
@@ -99,6 +100,7 @@ def test_mcp_resources_and_prompts_round_trip(tmp_path):
     assert {p["name"] for p in prompts_resp["result"]["prompts"]} == {
         "draft-from-brief",
         "safe-dxf-revision",
+        "visual-self-check-and-revise",
     }
 
     draft_prompt = dispatcher.handle_payload(

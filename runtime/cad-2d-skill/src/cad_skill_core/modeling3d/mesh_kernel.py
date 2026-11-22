@@ -11,7 +11,11 @@ import numpy as np
 from .models import (
     Body3D,
     Box3D,
+    BoxBoss3D,
+    CompoundSolid3D,
+    CounterboreHole3D,
     Cylinder3D,
+    CylinderBoss3D,
     ExtrudePolygon3D,
     Flange3D,
     Model3DSpec,
@@ -158,6 +162,9 @@ def build_solid_mesh(spec: Model3DSpec | Body3D, *, circle_segments: int = 64) -
     if isinstance(body, Flange3D):
         return _build_flange_3d_mesh(body, n_seg)
 
+    if isinstance(body, CompoundSolid3D):
+        return _build_compound_3d_mesh(body, n_seg)
+
     raise TypeError(f"unsupported 3D body kind: {type(body)!r}")
 
 
@@ -257,6 +264,164 @@ def _build_flange_3d_mesh(body: Flange3D, n_seg: int) -> SolidMesh3D:
         vertices=np.asarray(verts_3d, dtype=np.float64),
         faces=np.asarray(faces, dtype=np.int32),
         expected_volume_mm3=vol,
+        expected_bbox_mm=bbox,
+    )
+
+
+def _build_compound_3d_mesh(body: CompoundSolid3D, n_seg: int) -> SolidMesh3D:
+    """Stitch base + arbitrary top bosses + through-holes + counterbores into one watertight manifold shell."""
+
+    h_base = body.base_height
+    c_steps = max(20, n_seg // 2)
+
+    if body.base_shape == "box":
+        hw, hd = body.width / 2.0, body.depth / 2.0
+        if body.corner_radius > 0:
+            base_outer_ccw = _rounded_rect_loop(body.width, body.depth, body.corner_radius, arc_steps=max(8, n_seg // 6))
+            base_area = body.width * body.depth - (4.0 - pi) * body.corner_radius**2
+        else:
+            base_outer_ccw = [(-hw, -hd), (hw, -hd), (hw, hd), (-hw, hd)]
+            base_area = body.width * body.depth
+        min_x, min_y, max_x, max_y = -hw, -hd, hw, hd
+    else:
+        r_base = body.outer_diameter / 2.0
+        base_outer_ccw = _circle_loop(0.0, 0.0, r_base, n_seg, ccw=True)
+        base_area = pi * r_base * r_base
+        min_x, min_y, max_x, max_y = -r_base, -r_base, r_base, r_base
+
+    verts_3d: list[tuple[float, float, float]] = []
+    faces: list[tuple[int, int, int]] = []
+
+    def add_ring(pts_2d: Sequence[tuple[float, float]], z_val: float) -> list[int]:
+        start = len(verts_3d)
+        for x, y in pts_2d:
+            verts_3d.append((x, y, z_val))
+        return list(range(start, start + len(pts_2d)))
+
+    bot_outer_idx = add_ring(base_outer_ccw, 0.0)
+    top_outer_idx = add_ring(base_outer_ccw, h_base)
+    _stitch_rings(faces, bot_outer_idx, top_outer_idx)
+
+    bot_holes_pts: list[list[tuple[float, float]]] = []
+    bot_holes_idx: list[list[int]] = []
+    top_holes_pts: list[list[tuple[float, float]]] = []
+    top_holes_idx: list[list[int]] = []
+
+    net_vol = base_area * h_base
+    max_z = h_base
+
+    # 1. Through-holes (z=0 -> z=h_base)
+    for hx, hy, hd_i in body.through_holes:
+        rh = hd_i / 2.0
+        h_cw = _circle_loop(hx, hy, rh, c_steps, ccw=False)
+        b_idx = add_ring(h_cw, 0.0)
+        t_idx = add_ring(h_cw, h_base)
+        _stitch_rings(faces, b_idx, t_idx)
+        bot_holes_pts.append(h_cw)
+        bot_holes_idx.append(b_idx)
+        top_holes_pts.append(h_cw)
+        top_holes_idx.append(t_idx)
+        net_vol -= pi * rh * rh * h_base
+
+    # 2. Counterbore holes (through shaft z=0..z_step, shoulder at z_step, cbore z_step..h_base)
+    for cb in body.counterbores:
+        assert isinstance(cb, CounterboreHole3D)
+        r_th = cb.through_diameter / 2.0
+        r_cb = cb.cbore_diameter / 2.0
+        z_step = h_base - cb.cbore_depth
+
+        th_cw = _circle_loop(cb.x, cb.y, r_th, c_steps, ccw=False)
+        cb_cw = _circle_loop(cb.x, cb.y, r_cb, c_steps, ccw=False)
+        cb_ccw = list(reversed(cb_cw))
+
+        b_th_idx = add_ring(th_cw, 0.0)
+        m_th_idx = add_ring(th_cw, z_step)
+        m_cb_ccw_idx = add_ring(cb_ccw, z_step)
+        m_cb_cw_idx = list(reversed(m_cb_ccw_idx))
+        t_cb_cw_idx = add_ring(cb_cw, h_base)
+
+        _stitch_rings(faces, b_th_idx, m_th_idx)
+        shoulder_map = m_cb_ccw_idx + m_th_idx
+        for i0, i1, i2 in _triangulate_polygon_with_holes(cb_ccw, [th_cw]):
+            faces.append((shoulder_map[i0], shoulder_map[i1], shoulder_map[i2]))
+        _stitch_rings(faces, m_cb_cw_idx, t_cb_cw_idx)
+
+        bot_holes_pts.append(th_cw)
+        bot_holes_idx.append(b_th_idx)
+        top_holes_pts.append(cb_cw)
+        top_holes_idx.append(t_cb_cw_idx)
+        net_vol -= pi * r_th * r_th * z_step + pi * r_cb * r_cb * cb.cbore_depth
+
+    # 3. Additive top bosses (z=h_base -> z=h_base + boss.height)
+    for boss in body.bosses:
+        z_boss_top = h_base + boss.height
+        max_z = max(max_z, z_boss_top)
+        if isinstance(boss, CylinderBoss3D):
+            rb = boss.diameter / 2.0
+            boss_cw = _circle_loop(boss.x, boss.y, rb, c_steps, ccw=False)
+            boss_ccw = list(reversed(boss_cw))
+            base_boss_cw_idx = add_ring(boss_cw, h_base)
+            base_boss_ccw_idx = list(reversed(base_boss_cw_idx))
+            top_boss_ccw_idx = add_ring(boss_ccw, z_boss_top)
+
+            _stitch_rings(faces, base_boss_ccw_idx, top_boss_ccw_idx)
+            top_holes_pts.append(boss_cw)
+            top_holes_idx.append(base_boss_cw_idx)
+
+            if boss.bore_diameter > 0:
+                r_bore = boss.bore_diameter / 2.0
+                bore_cw = _circle_loop(boss.x, boss.y, r_bore, c_steps, ccw=False)
+                bot_bore_cw_idx = add_ring(bore_cw, 0.0)
+                top_bore_cw_idx = add_ring(bore_cw, z_boss_top)
+                _stitch_rings(faces, bot_bore_cw_idx, top_bore_cw_idx)
+
+                boss_cap_map = top_boss_ccw_idx + top_bore_cw_idx
+                for i0, i1, i2 in _triangulate_polygon_with_holes(boss_ccw, [bore_cw]):
+                    faces.append((boss_cap_map[i0], boss_cap_map[i1], boss_cap_map[i2]))
+
+                bot_holes_pts.append(bore_cw)
+                bot_holes_idx.append(bot_bore_cw_idx)
+                net_vol += pi * rb * rb * boss.height - pi * r_bore * r_bore * z_boss_top
+            else:
+                for i0, i1, i2 in _triangulate_polygon_with_holes(boss_ccw, []):
+                    faces.append((top_boss_ccw_idx[i0], top_boss_ccw_idx[i1], top_boss_ccw_idx[i2]))
+                net_vol += pi * rb * rb * boss.height
+        else:
+            assert isinstance(boss, BoxBoss3D)
+            bhw, bhd = boss.width / 2.0, boss.depth / 2.0
+            boss_ccw = [
+                (boss.x - bhw, boss.y - bhd),
+                (boss.x + bhw, boss.y - bhd),
+                (boss.x + bhw, boss.y + bhd),
+                (boss.x - bhw, boss.y + bhd),
+            ]
+            boss_cw = list(reversed(boss_ccw))
+            base_boss_cw_idx = add_ring(boss_cw, h_base)
+            base_boss_ccw_idx = list(reversed(base_boss_cw_idx))
+            top_boss_ccw_idx = add_ring(boss_ccw, z_boss_top)
+
+            _stitch_rings(faces, base_boss_ccw_idx, top_boss_ccw_idx)
+            for i0, i1, i2 in _triangulate_polygon_with_holes(boss_ccw, []):
+                faces.append((top_boss_ccw_idx[i0], top_boss_ccw_idx[i1], top_boss_ccw_idx[i2]))
+
+            top_holes_pts.append(boss_cw)
+            top_holes_idx.append(base_boss_cw_idx)
+            net_vol += boss.width * boss.depth * boss.height
+
+    # 4. Cap bottom face (z=0, -Z normal) and base top face (z=h_base, +Z normal)
+    bot_map = bot_outer_idx + [idx for ring in bot_holes_idx for idx in ring]
+    for i0, i1, i2 in _triangulate_polygon_with_holes(base_outer_ccw, bot_holes_pts):
+        faces.append((bot_map[i0], bot_map[i2], bot_map[i1]))
+
+    top_map = top_outer_idx + [idx for ring in top_holes_idx for idx in ring]
+    for i0, i1, i2 in _triangulate_polygon_with_holes(base_outer_ccw, top_holes_pts):
+        faces.append((top_map[i0], top_map[i1], top_map[i2]))
+
+    bbox = (min_x, min_y, 0.0, max_x, max_y, max_z)
+    return SolidMesh3D(
+        vertices=np.asarray(verts_3d, dtype=np.float64),
+        faces=np.asarray(faces, dtype=np.int32),
+        expected_volume_mm3=net_vol,
         expected_bbox_mm=bbox,
     )
 

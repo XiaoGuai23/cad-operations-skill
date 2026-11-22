@@ -10,7 +10,10 @@ from typing import Any
 
 from .models import (
     Box3D,
+    BoxBoss3D,
+    CompoundSolid3D,
     Cylinder3D,
+    CylinderBoss3D,
     Flange3D,
     Model3DSpec,
     SteppedShaft3D,
@@ -135,6 +138,38 @@ def generate_autocad_3d_script(spec_3d: Model3DSpec, output_dwg_path: Path) -> s
             z += length
         if body.bore_diameter > 0:
             lines.append(f"_CYLINDER 0,0,0 {body.bore_diameter/2.0:.4f} {z:.4f}")
+            lines.append("_SUBTRACT _P  _L ")
+
+    elif isinstance(body, CompoundSolid3D):
+        h_b = body.base_height
+        if body.base_shape == "box":
+            hw, hd = body.width / 2.0, body.depth / 2.0
+            lines.append(f"_BOX {-hw:.4f},{-hd:.4f},0 {hw:.4f},{hd:.4f},{h_b:.4f}")
+        else:
+            lines.append(f"_CYLINDER 0,0,0 {body.outer_diameter/2.0:.4f} {h_b:.4f}")
+        for boss in body.bosses:
+            if isinstance(boss, CylinderBoss3D):
+                lines.append(f"_CYLINDER {boss.x:.4f},{boss.y:.4f},{h_b:.4f} {boss.diameter/2.0:.4f} {boss.height:.4f}")
+                lines.append("_UNION _ALL ")
+                if boss.bore_diameter > 0:
+                    lines.append(f"_CYLINDER {boss.x:.4f},{boss.y:.4f},0 {boss.bore_diameter/2.0:.4f} {h_b + boss.height:.4f}")
+                    lines.append("_SUBTRACT _P  _L ")
+            else:
+                assert isinstance(boss, BoxBoss3D)
+                bhw, bhd = boss.width / 2.0, boss.depth / 2.0
+                lines.append(
+                    f"_BOX {boss.x - bhw:.4f},{boss.y - bhd:.4f},{h_b:.4f} "
+                    f"{boss.x + bhw:.4f},{boss.y + bhd:.4f},{h_b + boss.height:.4f}"
+                )
+                lines.append("_UNION _ALL ")
+        for hx, hy, hd_i in body.through_holes:
+            lines.append(f"_CYLINDER {hx:.4f},{hy:.4f},0 {hd_i/2.0:.4f} {h_b:.4f}")
+            lines.append("_SUBTRACT _P  _L ")
+        for cb in body.counterbores:
+            z_step = h_b - cb.cbore_depth
+            lines.append(f"_CYLINDER {cb.x:.4f},{cb.y:.4f},0 {cb.through_diameter/2.0:.4f} {h_b:.4f}")
+            lines.append("_SUBTRACT _P  _L ")
+            lines.append(f"_CYLINDER {cb.x:.4f},{cb.y:.4f},{z_step:.4f} {cb.cbore_diameter/2.0:.4f} {cb.cbore_depth:.4f}")
             lines.append("_SUBTRACT _P  _L ")
 
     else:

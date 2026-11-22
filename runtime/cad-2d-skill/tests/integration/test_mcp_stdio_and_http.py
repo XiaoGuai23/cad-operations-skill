@@ -167,7 +167,7 @@ def test_mcp_http_and_web_api_generate_mechanical_sld_pavement_and_download_arti
     # 1. Health check
     health = client.get("/api/v1/health")
     assert health.status_code == 200
-    assert health.json()["tool_count"] == 14
+    assert health.json()["tool_count"] == 15
 
     # 2. Streamable HTTP /mcp JSON-RPC initialize + notification
     mcp_init = client.post(
