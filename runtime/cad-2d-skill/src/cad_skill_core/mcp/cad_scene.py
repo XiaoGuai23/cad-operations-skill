@@ -110,29 +110,37 @@ def _extract_primitive_items(
         for sub in ent.virtual_entities():
             _extract_primitive_items(sub, root_handle, layer, out, depth + 1)
     elif dxftype in {"TEXT", "MTEXT"}:
+        align_mode = ""
         if dxftype == "TEXT":
             txt = str(ent.dxf.get("text", ""))
             ins = ent.get_placement()[1] or ent.dxf.insert
             height = float(ent.dxf.get("height", 3.5))
             rot = float(ent.dxf.get("rotation", 0.0))
+            halign = int(ent.dxf.get("halign", 0))
+            valign = int(ent.dxf.get("valign", 0))
+            if halign in {1, 4} and valign == 2:
+                align_mode = "mc"
+            elif halign in {1, 4}:
+                align_mode = "c"
         else:
             txt = ent.plain_text()
             ins = ent.dxf.insert
             height = float(ent.dxf.get("char_height", 3.5))
             rot = float(ent.dxf.get("rotation", 0.0))
         if txt.strip():
-            out.append(
-                {
-                    "k": "text",
-                    "h": root_handle,
-                    "l": layer,
-                    "x": round(float(ins.x), 3),
-                    "y": round(float(ins.y), 3),
-                    "s": round(max(height, 1.2), 3),
-                    "r": round(rot, 2),
-                    "t": txt,
-                }
-            )
+            item_dict: dict[str, Any] = {
+                "k": "text",
+                "h": root_handle,
+                "l": layer,
+                "x": round(float(ins.x), 3),
+                "y": round(float(ins.y), 3),
+                "s": round(max(height, 1.2), 3),
+                "r": round(rot, 2),
+                "t": txt,
+            }
+            if align_mode:
+                item_dict["a"] = align_mode
+            out.append(item_dict)
     elif dxftype in {"DIMENSION", "INSERT", "LEADER", "MULTILEADER"}:
         try:
             for sub in ent.virtual_entities():

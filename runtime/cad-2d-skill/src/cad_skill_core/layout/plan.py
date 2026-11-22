@@ -69,25 +69,42 @@ def _fixed_constraint_issue(
     width, height = (sheet.height_mm, sheet.width_mm) if spec.sheet.orientation == "portrait" else (sheet.width_mm, sheet.height_mm)
     printable = Bounds(_PRINT_MARGIN_MM, _PRINT_MARGIN_MM, width - _PRINT_MARGIN_MM, height - _PRINT_MARGIN_MM)
     title = _protected_bounds(printable, standard.protected_zones["title_block"])
+    rows = _parts_rows(spec)
     zones = _side_zones(
         printable,
         title,
-        len(_parts_rows(spec)),
+        len(rows),
         len(spec.requirements.technical_notes) + len(spec.annotations),
     )
     if zones is None:
         return "larger-sheet-required"
     parts_bounds, notes_bounds = zones
+    del parts_bounds
     text_height = standard.text_styles["normal"].height_mm
     width_factor = standard.text_styles["normal"].width_factor
-    title_values = tuple(text for _, text, _ in _title_block_entries(spec, title))
-    fixed_widths = (
-        *((value, title.width - 10.0) for value in title_values),
+    has_mat_cell = _use_part_material_cell(spec, title, text_height, width_factor)
+    title_avail = (title.width - 22.0 - 48.0 - 8.0) if has_mat_cell else (title.width - 22.0 - 8.0)
+    is_zh = spec.sheet.title_block_language == "zh"
+    dwg_text = (
+        f"图号  {spec.project.drawing_number or '—'}"
+        if is_zh
+        else f"DWG NO.  {spec.project.drawing_number or '-'}"
+    )
+    scale_text = (
+        f"比例 {spec.sheet.scale}   {spec.sheet.size}   毫米"
+        if is_zh
+        else f"SCALE {spec.sheet.scale}   {spec.sheet.size}   MM"
+    )
+    fixed_widths = [
+        (spec.project.name, title_avail),
+        (dwg_text, 78.0),
+        (scale_text, 90.0),
         *((note.text, notes_bounds.width - 5.0) for note in spec.requirements.technical_notes),
         *((annotation.text, notes_bounds.width - 5.0) for annotation in spec.annotations),
-        *((row.item, parts_bounds.width - 55.0) for row in _parts_rows(spec)),
-        *((str(row.quantity), 20.0) for row in _parts_rows(spec)),
-    )
+        *((row.item, 78.0) for row in rows),
+        *((str(row.quantity), 20.0) for row in rows),
+        *((row.material, 44.0) for row in rows if row.material),
+    ]
     if any(
         max(text_height, measure_text_width_mm(value, text_height, width_factor=width_factor)) > available
         for value, available in fixed_widths
@@ -147,16 +164,25 @@ def _protected_bounds(printable: Bounds, zone: ProtectedZone) -> Bounds:
 
 
 def _side_zones(printable: Bounds, title: Bounds, row_count: int, note_count: int) -> tuple[Bounds, Bounds] | None:
-    bottom = title.max_y + _PRINT_MARGIN_MM
-    parts_height = 16.0 + (row_count + 2) * _TABLE_ROW_HEIGHT_MM
-    notes_height = 8.0 + (note_count + 1) * _TEXT_LINE_HEIGHT_MM
-    notes_min_y = bottom + parts_height + _PRINT_MARGIN_MM
-    if notes_min_y + notes_height > printable.max_y:
-        return None
-    return (
-        Bounds(title.min_x, bottom, printable.max_x, bottom + parts_height),
-        Bounds(title.min_x, notes_min_y, printable.max_x, notes_min_y + notes_height),
-    )
+    if row_count > 0:
+        parts_height = (row_count + 1) * _TABLE_ROW_HEIGHT_MM
+        parts_bounds = Bounds(title.min_x, title.max_y, printable.max_x, title.max_y + parts_height)
+        stack_top = parts_bounds.max_y
+    else:
+        parts_bounds = Bounds(title.min_x, title.max_y - 0.1, printable.max_x, title.max_y)
+        stack_top = title.max_y
+
+    if note_count > 0:
+        notes_min_y = stack_top + 6.0
+        notes_height = 8.0 + (note_count + 1) * _TEXT_LINE_HEIGHT_MM
+        if notes_min_y + notes_height > printable.max_y:
+            return None
+        notes_bounds = Bounds(title.min_x, notes_min_y, printable.max_x, notes_min_y + notes_height)
+    else:
+        if stack_top > printable.max_y:
+            return None
+        notes_bounds = Bounds(title.min_x, stack_top - 0.1, printable.max_x, stack_top)
+    return parts_bounds, notes_bounds
 
 
 def _parts_rows(spec: DrawingSpec) -> tuple[PartListRow, ...]:
@@ -168,7 +194,7 @@ def _parts_rows(spec: DrawingSpec) -> tuple[PartListRow, ...]:
         if item.item.casefold() in seen:
             raise ValueError(f"assembly parts list item is not unique: {item.item}")
         seen.add(item.item.casefold())
-        rows.append(PartListRow(item_no, item.item, item.quantity))
+        rows.append(PartListRow(item_no, item.item, item.quantity, item.material))
     return tuple(rows)
 
 
@@ -436,47 +462,293 @@ def _label_bounds(view: Bounds) -> Bounds:
     return Bounds(view.min_x, view.max_y + 2.0, view.max_x, view.max_y + 7.0)
 
 
-def _title_block_entries(spec: DrawingSpec, title: Bounds) -> tuple[tuple[str, str, float], ...]:
-    if spec.sheet.title_block_language == "zh":
-        proj_zh = "第一角投影" if spec.standard.projection == "first-angle" else spec.standard.projection
-        return (
-            ("title-label", "图名", title.max_y - 8),
-            ("title", spec.project.name, title.max_y - 18),
-            ("drawing-number", f"图号: {spec.project.drawing_number or '-'}", title.max_y - 28),
-            ("scale", f"比例: {spec.sheet.scale}", title.max_y - 38),
-            ("projection", f"投影: {proj_zh}", title.max_y - 48),
-        )
-    return (
-        ("title-label", "TITLE", title.max_y - 8),
-        ("title", spec.project.name, title.max_y - 18),
-        ("drawing-number", f"DRAWING: {spec.project.drawing_number or '-'}", title.max_y - 28),
-        ("scale", f"SCALE: {spec.sheet.scale}", title.max_y - 38),
-        ("projection", f"PROJECTION: {spec.standard.projection.upper()}", title.max_y - 48),
+def _use_part_material_cell(
+    spec: DrawingSpec,
+    title: Bounds,
+    text_height: float,
+    width_factor: float,
+) -> bool:
+    if spec.project.drawing_type != "part" or spec.requirements.material is None:
+        return False
+    mat_text = spec.requirements.material.text.strip()
+    if not mat_text:
+        return False
+    mat_w = max(text_height, measure_text_width_mm(mat_text, text_height, width_factor=width_factor))
+    title_w = max(text_height, measure_text_width_mm(spec.project.name, text_height, width_factor=width_factor))
+    return mat_w <= 42.0 and title_w <= (title.width - 22.0 - 48.0 - 8.0)
+
+
+def _grid_line(
+    x0: float,
+    y0: float,
+    x1: float,
+    y1: float,
+    *,
+    annotation_id: str,
+    owner_zone: str,
+    layer: str = "THIN",
+) -> AnnotationLayout:
+    eps = 1e-4
+    min_x, max_x = sorted((x0, x1))
+    min_y, max_y = sorted((y0, y1))
+    if max_x - min_x < eps:
+        min_x -= eps
+        max_x += eps
+    if max_y - min_y < eps:
+        min_y -= eps
+        max_y += eps
+    return AnnotationLayout(
+        "table-grid",
+        "",
+        Bounds(min_x, min_y, max_x, max_y),
+        layer,
+        points=((x0, y0), (x1, y1)),
+        annotation_id=annotation_id,
+        group_id=f"grid-{owner_zone}",
+        owner_zone=owner_zone,
+    )
+
+
+def _cell_text(
+    kind: str,
+    text: str,
+    cell_min_x: float,
+    cell_min_y: float,
+    cell_max_x: float,
+    cell_max_y: float,
+    height: float,
+    *,
+    style: str = "normal",
+    width_factor: float = 1.0,
+    annotation_id: str = "",
+    owner_zone: str = "title",
+) -> AnnotationLayout:
+    identifier = annotation_id or kind
+    width_mm = max(height, measure_text_width_mm(text, height, width_factor=width_factor))
+    cx = (cell_min_x + cell_max_x) / 2.0
+    cy = (cell_min_y + cell_max_y) / 2.0
+    ins_x = cx - width_mm / 2.0
+    ins_y = cy - height / 2.0
+    return AnnotationLayout(
+        kind,
+        text,
+        Bounds(ins_x, ins_y, ins_x + width_mm, ins_y + height),
+        "TEXT",
+        style=style,
+        points=((ins_x, ins_y), (cx, cy)),
+        annotation_id=identifier,
+        group_id=identifier,
+        owner_zone=owner_zone,
     )
 
 
 def _annotation_layouts(spec: DrawingSpec, views: tuple[ViewLayout, ...], printable: Bounds, title: Bounds, notes: Bounds, parts: PartsListLayout, standard: DrawingStandard) -> tuple[AnnotationLayout, ...]:
     height = standard.text_styles["normal"].height_mm
     width_factor = standard.text_styles["normal"].width_factor
+    title_style_spec = standard.text_styles.get("title", standard.text_styles["normal"])
+    title_h = title_style_spec.height_mm
+    title_wf = title_style_spec.width_factor
     is_zh = spec.sheet.title_block_language == "zh"
-    result = [
+    inset = 0.02
+
+    # 1. Outer frames: printable border, flush title block, and (only when assembly BOM non-empty) flush BOM frame
+    frame_zones: list[tuple[Bounds, str]] = [(printable, "printable"), (title, "title")]
+    if parts.rows:
+        frame_zones.append((parts.bounds, "parts"))
+    result: list[AnnotationLayout] = [
         AnnotationLayout("frame", "", bounds, "FRAME", annotation_id=f"frame-{zone}", group_id=f"frame-{zone}", owner_zone=zone)
-        for bounds, zone in ((printable, "printable"), (title, "title"), (notes, "technical"), (parts.bounds, "parts"))
+        for bounds, zone in frame_zones
     ]
-    title_values = _title_block_entries(spec, title)
-    result += [_text(kind, text, title.min_x + 5, y, height, width_factor=width_factor, annotation_id=kind, owner_zone="title") for kind, text, y in title_values]
-    result += [
-        _text("notes-header", "技术要求" if is_zh else "TECHNICAL NOTES", notes.min_x + 5, notes.max_y - 8, height, width_factor=width_factor, annotation_id="notes-header", owner_zone="technical"),
-        _text("parts-header", "明细栏" if is_zh else "PARTS LIST", parts.bounds.min_x + 5, parts.bounds.max_y - 8, height, width_factor=width_factor, annotation_id="parts-header", owner_zone="parts"),
-        _text("parts-column", "序号" if is_zh else "ITEM", parts.bounds.min_x + 5, parts.bounds.max_y - 16, height, width_factor=width_factor, annotation_id="parts-column-item", owner_zone="parts"),
-        _text("parts-column", "名称" if is_zh else "DESCRIPTION", parts.bounds.min_x + 30, parts.bounds.max_y - 16, height, width_factor=width_factor, annotation_id="parts-column-description", owner_zone="parts"),
-        _text("parts-column", "数量" if is_zh else "QTY", parts.bounds.max_x - 25, parts.bounds.max_y - 16, height, width_factor=width_factor, annotation_id="parts-column-qty", owner_zone="parts"),
-    ]
+
+    # 2. GB/T Gridded Title Block (180 x 55 mm docked flush at bottom-right)
+    tx0, ty0, tx1, ty1 = title.min_x, title.min_y, title.max_x, title.max_y
+    y_mid = ty0 + 24.0
+    x_lbl = tx0 + 22.0
+    x_lower_split = tx0 + 84.0
+    result.append(_grid_line(tx0 + inset, y_mid, tx1 - inset, y_mid, annotation_id="title-grid-h1", owner_zone="title"))
+    result.append(_grid_line(x_lbl, y_mid, x_lbl, ty1 - inset, annotation_id="title-grid-v-lbl", owner_zone="title"))
+    result.append(_grid_line(x_lower_split, ty0 + inset, x_lower_split, y_mid, annotation_id="title-grid-v-lower", owner_zone="title"))
+    result.append(
+        _cell_text(
+            "title-label",
+            "图名" if is_zh else "TITLE",
+            tx0,
+            y_mid,
+            x_lbl,
+            ty1,
+            height,
+            width_factor=width_factor,
+            annotation_id="title-label",
+            owner_zone="title",
+        )
+    )
+
+    has_mat_cell = _use_part_material_cell(spec, title, height, width_factor)
+    if has_mat_cell and spec.requirements.material is not None:
+        x_mat = tx1 - 48.0
+        y_mat_hdr = ty0 + 42.0
+        result.append(_grid_line(x_mat, y_mid, x_mat, ty1 - inset, annotation_id="title-grid-v-mat", owner_zone="title"))
+        result.append(_grid_line(x_mat, y_mat_hdr, tx1 - inset, y_mat_hdr, annotation_id="title-grid-h-mat", owner_zone="title"))
+        result.append(
+            _cell_text(
+                "title-material",
+                "材料" if is_zh else "MATL",
+                x_mat,
+                y_mat_hdr,
+                tx1,
+                ty1,
+                height,
+                width_factor=width_factor,
+                annotation_id="title-material-label",
+                owner_zone="title",
+            )
+        )
+        result.append(
+            _cell_text(
+                "title-material",
+                spec.requirements.material.text.strip(),
+                x_mat,
+                y_mid,
+                tx1,
+                y_mat_hdr,
+                height,
+                width_factor=width_factor,
+                annotation_id="title-material",
+                owner_zone="title",
+            )
+        )
+        title_cell_min_x = x_lbl
+        title_cell_max_x = x_mat
+    else:
+        title_cell_min_x = x_lbl
+        title_cell_max_x = tx1
+
+    title_cell_avail = (title_cell_max_x - title_cell_min_x) - 10.0
+    use_large_title = max(title_h, measure_text_width_mm(spec.project.name, title_h, width_factor=title_wf)) <= title_cell_avail
+    chosen_title_style = "title" if (use_large_title and "title" in standard.text_styles) else "normal"
+    chosen_title_h = title_h if chosen_title_style == "title" else height
+    chosen_title_wf = title_wf if chosen_title_style == "title" else width_factor
+
+    result.append(
+        _cell_text(
+            "title",
+            spec.project.name,
+            title_cell_min_x,
+            y_mid,
+            title_cell_max_x,
+            ty1,
+            chosen_title_h,
+            style=chosen_title_style,
+            width_factor=chosen_title_wf,
+            annotation_id="title",
+            owner_zone="title",
+        )
+    )
+    dwg_text = (
+        f"图号  {spec.project.drawing_number or '—'}"
+        if is_zh
+        else f"DWG NO.  {spec.project.drawing_number or '-'}"
+    )
+    scale_text = (
+        f"比例 {spec.sheet.scale}   {spec.sheet.size}   毫米"
+        if is_zh
+        else f"SCALE {spec.sheet.scale}   {spec.sheet.size}   MM"
+    )
+    result.append(
+        _cell_text(
+            "drawing-number",
+            dwg_text,
+            tx0,
+            ty0,
+            x_lower_split,
+            y_mid,
+            height,
+            width_factor=width_factor,
+            annotation_id="drawing-number",
+            owner_zone="title",
+        )
+    )
+    result.append(
+        _cell_text(
+            "scale",
+            scale_text,
+            x_lower_split,
+            ty0,
+            tx1,
+            y_mid,
+            height,
+            width_factor=width_factor,
+            annotation_id="scale",
+            owner_zone="title",
+        )
+    )
+
+    # 3. GB/T Bottom-Up 4-Column BOM Table (only emitted when parts.rows is non-empty, docked flush on title.max_y)
+    if parts.rows:
+        px0, py0, px1, py1 = parts.bounds.min_x, parts.bounds.min_y, parts.bounds.max_x, parts.bounds.max_y
+        col_x1 = px0 + 18.0
+        col_x2 = px0 + 104.0
+        col_x3 = px0 + 130.0
+        for v_idx, vx in enumerate((col_x1, col_x2, col_x3), start=1):
+            result.append(_grid_line(vx, py0 + inset, vx, py1 - inset, annotation_id=f"parts-grid-v{v_idx}", owner_zone="parts"))
+        for r_idx in range(1, len(parts.rows) + 1):
+            hy = py0 + r_idx * _TABLE_ROW_HEIGHT_MM
+            result.append(_grid_line(px0 + inset, hy, px1 - inset, hy, annotation_id=f"parts-grid-h{r_idx}", owner_zone="parts"))
+
+        # Top row = Header (序号 | 名称 | 件数 | 材料)
+        hdr_y0 = py1 - _TABLE_ROW_HEIGHT_MM
+        result += [
+            _cell_text("parts-column", "序号" if is_zh else "ITEM", px0, hdr_y0, col_x1, py1, height, width_factor=width_factor, annotation_id="parts-column-item", owner_zone="parts"),
+            _cell_text("parts-column", "名称" if is_zh else "DESCRIPTION", col_x1, hdr_y0, col_x2, py1, height, width_factor=width_factor, annotation_id="parts-column-description", owner_zone="parts"),
+            _cell_text("parts-column", "件数" if is_zh else "QTY", col_x2, hdr_y0, col_x3, py1, height, width_factor=width_factor, annotation_id="parts-column-qty", owner_zone="parts"),
+            _cell_text("parts-column", "材料" if is_zh else "MATL", col_x3, hdr_y0, px1, py1, height, width_factor=width_factor, annotation_id="parts-column-material", owner_zone="parts"),
+        ]
+
+        # Data rows grow bottom-up (row 1 directly above title block, row N below header)
+        default_part_mat = spec.requirements.material.text.strip() if spec.requirements.material is not None else None
+        for row in parts.rows:
+            ry0 = py0 + (row.item_no - 1) * _TABLE_ROW_HEIGHT_MM
+            ry1 = ry0 + _TABLE_ROW_HEIGHT_MM
+            mat_label = row.material or default_part_mat or ("—" if is_zh else "-")
+            if max(height, measure_text_width_mm(mat_label, height, width_factor=width_factor)) > 44.0:
+                mat_label = "—" if is_zh else "-"
+            result += [
+                _cell_text("parts-row", str(row.item_no), px0, ry0, col_x1, ry1, height, width_factor=width_factor, annotation_id=f"parts-{row.item_no}-item", owner_zone="parts"),
+                _cell_text("parts-row", row.item, col_x1, ry0, col_x2, ry1, height, width_factor=width_factor, annotation_id=f"parts-{row.item_no}-description", owner_zone="parts"),
+                _cell_text("parts-row", str(row.quantity), col_x2, ry0, col_x3, ry1, height, width_factor=width_factor, annotation_id=f"parts-{row.item_no}-qty", owner_zone="parts"),
+                _cell_text("parts-row", mat_label, col_x3, ry0, px1, ry1, height, width_factor=width_factor, annotation_id=f"parts-{row.item_no}-material", owner_zone="parts"),
+            ]
+
+    # 4. Borderless Technical Notes (only emitted when notes or free annotations exist)
+    if spec.requirements.technical_notes or spec.annotations:
+        result.append(
+            _text(
+                "notes-header",
+                "技术要求" if is_zh else "TECHNICAL NOTES",
+                notes.min_x + 2,
+                notes.max_y - 8,
+                height,
+                width_factor=width_factor,
+                annotation_id="notes-header",
+                owner_zone="technical",
+            )
+        )
+        result += [
+            _text(
+                "technical-note",
+                note.text,
+                notes.min_x + 2,
+                notes.max_y - 8 - index * _TEXT_LINE_HEIGHT_MM,
+                height,
+                width_factor=width_factor,
+                annotation_id=f"technical-note-{index}",
+                owner_zone="technical",
+            )
+            for index, note in enumerate(spec.requirements.technical_notes, 1)
+        ]
+
+    # 5. Orthographic View Labels, Dimensions, Free Annotations & Assembly Balloons
     result += [_text("view-label", view.label, view.bounds.center[0], view.bounds.max_y + 2, height, width_factor=width_factor, annotation_id=f"view-label-{view.name}", owner_view=view.name) for view in views]
-    result += [_text("technical-note", note.text, notes.min_x + 5, notes.max_y - 8 - index * _TEXT_LINE_HEIGHT_MM, height, width_factor=width_factor, annotation_id=f"technical-note-{index}", owner_zone="technical") for index, note in enumerate(spec.requirements.technical_notes, 1)]
-    for row in parts.rows:
-        y = parts.bounds.max_y - 16 - row.item_no * _TABLE_ROW_HEIGHT_MM
-        result += [_text("parts-row", str(row.item_no), parts.bounds.min_x + 5, y, height, width_factor=width_factor, annotation_id=f"parts-{row.item_no}-item", owner_zone="parts"), _text("parts-row", row.item, parts.bounds.min_x + 30, y, height, width_factor=width_factor, annotation_id=f"parts-{row.item_no}-description", owner_zone="parts"), _text("parts-row", str(row.quantity), parts.bounds.max_x - 20, y, height, width_factor=width_factor, annotation_id=f"parts-{row.item_no}-qty", owner_zone="parts")]
     if views:
         front = views[0]
         views_by_name = {v.name: v for v in views}
@@ -486,7 +758,7 @@ def _annotation_layouts(spec: DrawingSpec, views: tuple[ViewLayout, ...], printa
         for index, annotation in enumerate(spec.annotations):
             group = f"free-{index + 1}"
             y = notes.min_y + 2 + index * _TEXT_LINE_HEIGHT_MM
-            result += [_text("annotation", annotation.text, notes.min_x + 5, y, height, width_factor=width_factor, annotation_id=f"{group}-text", group_id=group, owner_zone="technical"), AnnotationLayout("leader", "", Bounds(notes.min_x + 2, y, notes.min_x + 12, y + 4), "DIM", points=((notes.min_x + 2, y), (notes.min_x + 12, y + 4)), annotation_id=f"{group}-leader", group_id=group, owner_zone="technical")]
+            result += [_text("annotation", annotation.text, notes.min_x + 2, y, height, width_factor=width_factor, annotation_id=f"{group}-text", group_id=group, owner_zone="technical"), AnnotationLayout("leader", "", Bounds(notes.min_x + 2, y, notes.min_x + 12, y + 4), "DIM", points=((notes.min_x + 2, y), (notes.min_x + 12, y + 4)), annotation_id=f"{group}-leader", group_id=group, owner_zone="technical")]
         for row in parts.rows:
             group = f"balloon-{row.item_no}"
             center = (front.bounds.min_x - 8 - (row.item_no - 1) * 8, front.bounds.max_y - 8)

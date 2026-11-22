@@ -100,6 +100,7 @@ class PartListRow:
     item_no: int
     item: str
     quantity: int
+    material: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

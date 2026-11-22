@@ -167,7 +167,30 @@ def test_mcp_http_and_web_api_generate_mechanical_sld_pavement_and_download_arti
     # 1. Health check
     health = client.get("/api/v1/health")
     assert health.status_code == 200
-    assert health.json()["tool_count"] == 15
+    assert health.json()["tool_count"] == 17
+
+    # 1b. MCP App (ui://cad-operations/viewer.html, aux_pane entrypoint, app-only scene loader)
+    tools_resp = client.post(
+        "/mcp",
+        json={"jsonrpc": "2.0", "id": "tools-list-1", "method": "tools/list", "params": {}},
+    ).json()["result"]["tools"]
+    tools_by_name = {t["name"]: t for t in tools_resp}
+    assert tools_by_name["cad_generate_mechanical_2d"]["_meta"]["ui"]["resourceUri"] == "ui://cad-operations/viewer.html"
+    assert tools_by_name["cad_open_viewer"]["_meta"]["com.google.antigravity/ui"]["entrypoints"][0]["type"] == "aux_pane"
+    assert tools_by_name["cad_app_load_scene"]["_meta"]["ui"]["visibility"] == ["app"]
+
+    ui_read = client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": "res-ui-1",
+            "method": "resources/read",
+            "params": {"uri": "ui://cad-operations/viewer.html"},
+        },
+    ).json()["result"]["contents"][0]
+    assert ui_read["mimeType"] == "text/html;profile=mcp-app"
+    assert "ui/update-model-context" in ui_read["text"]
+    assert "框选提问/改图" in ui_read["text"]
 
     # 2. Streamable HTTP /mcp JSON-RPC initialize + notification
     mcp_init = client.post(
@@ -193,6 +216,18 @@ def test_mcp_http_and_web_api_generate_mechanical_sld_pavement_and_download_arti
     sld_body = sld_resp.json()
     assert sld_body["status"] == "passed"
     sld_task_id = sld_body["task_id"]
+
+    app_scene = client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": "scene-1",
+            "method": "tools/call",
+            "params": {"name": "cad_app_load_scene", "arguments": {"task_id": sld_task_id}},
+        },
+    ).json()["result"]["structuredContent"]
+    assert app_scene["status"] == "ok"
+    assert app_scene["cad_scene"]["primitive_count"] > 10
 
     status_resp = client.get(f"/api/v1/tasks/{sld_task_id}")
     assert status_resp.status_code == 200

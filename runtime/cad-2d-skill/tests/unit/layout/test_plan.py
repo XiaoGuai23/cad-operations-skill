@@ -1013,3 +1013,52 @@ def resolved_font_map() -> dict[str, ResolvedFont]:
         )
         for role in ("TEXT", "DIM")
     }
+
+
+def test_gbt_gridded_title_block_omits_empty_bom_on_part_and_grows_bom_bottom_up_on_assembly():
+    standard = gb_profile()
+
+    # 1. Single-part drawing: gridded title block with material cell, NO empty BOM frame, NO technical outer box
+    part = assembly_spec(parts=0)
+    part.project.drawing_type = "part"
+    part.sheet.title_block_language = "zh"
+    part.requirements.material = SourcedText(text="45钢", source_id="source")
+    part.requirements.technical_notes = [SourcedText(text="材料：45钢", source_id="source")]
+    part.annotations = []
+
+    part_plan = plan_layout(part, standard)
+    part_doc = ezdxf.new("R2018")
+    part_final = apply_annotations(part_doc, part_plan, part, standard, resolved_font_map())
+
+    part_ids = {a.annotation_id for a in part_final.annotations}
+    assert "frame-title" in part_ids
+    assert "frame-parts" not in part_ids
+    assert "frame-technical" not in part_ids
+    assert "title-material" in part_ids
+    assert any(a.kind == "table-grid" and a.owner_zone == "title" for a in part_final.annotations)
+
+    # 2. Assembly drawing: 4-column gridded BOM docked FLUSH on title.max_y, numbered bottom-up (1 -> 2 -> 3 -> header)
+    asm_dict = assembly_spec(parts=0).model_dump(mode="python")
+    asm_dict["sheet"]["title_block_language"] = "zh"
+    asm_dict["parts_list"] = [
+        {"item": "夹具体", "quantity": 1, "material": "45钢", "source_id": "source"},
+        {"item": "定位套", "quantity": 1, "material": "40Cr", "source_id": "source"},
+        {"item": "导向支架", "quantity": 2, "material": "HT150", "source_id": "source"},
+    ]
+    asm = DrawingSpec.model_validate(asm_dict)
+    asm_plan = plan_layout(asm, standard)
+    assert asm_plan.parts_list.bounds.min_y == pytest.approx(asm_plan.title_block_bounds.max_y)
+
+    asm_doc = ezdxf.new("R2018")
+    asm_final = apply_annotations(asm_doc, asm_plan, asm, standard, resolved_font_map())
+    by_id = {a.annotation_id: a for a in asm_final.annotations}
+
+    assert "frame-parts" in by_id
+    assert "parts-column-material" in by_id
+    assert by_id["parts-3-material"].text == "HT150"
+    # Verify bottom-up vertical ordering: row 1 < row 2 < row 3 < header
+    y1 = by_id["parts-1-item"].bounds.center[1]
+    y2 = by_id["parts-2-item"].bounds.center[1]
+    y3 = by_id["parts-3-item"].bounds.center[1]
+    y_hdr = by_id["parts-column-item"].bounds.center[1]
+    assert y1 < y2 < y3 < y_hdr

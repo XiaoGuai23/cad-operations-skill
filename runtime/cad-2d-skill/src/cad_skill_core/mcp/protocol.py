@@ -17,7 +17,7 @@ from .sandbox import MCPWorkspaceSandbox
 
 SUPPORTED_PROTOCOL_VERSIONS = ("2025-03-26", "2024-11-05")
 DEFAULT_PROTOCOL_VERSION = "2024-11-05"
-SERVER_INFO = {"name": "cad-operations-skill-mcp", "version": "1.2.0"}
+SERVER_INFO = {"name": "cad-operations-skill-mcp", "version": "2.1.0"}
 
 
 class MCPDispatcher:
@@ -102,6 +102,11 @@ class MCPDispatcher:
                     "tools": {"listChanged": False},
                     "resources": {"subscribe": False, "listChanged": False},
                     "prompts": {"listChanged": False},
+                    "extensions": {
+                        "io.modelcontextprotocol/ui": {
+                            "mimeTypes": ["text/html;profile=mcp-app"]
+                        }
+                    },
                 },
                 "serverInfo": SERVER_INFO,
             }
