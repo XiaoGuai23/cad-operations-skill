@@ -48,12 +48,12 @@ def test_mcp_initialize_negotiates_supported_versions_and_ignores_notifications(
     }
 
 
-def test_mcp_lists_all_ten_2d_tools_with_strict_json_schemas(tmp_path):
+def test_mcp_lists_all_twelve_2d_and_3d_tools_with_strict_json_schemas(tmp_path):
     dispatcher = MCPDispatcher(MCPWorkspaceSandbox(tmp_path / "ws"))
     resp = dispatcher.handle_payload({"jsonrpc": "2.0", "id": 10, "method": "tools/list"})
     tools = resp["result"]["tools"]
     names = [t["name"] for t in tools]
-    assert len(names) == 10
+    assert len(names) == 12
     assert names == [
         "cad_doctor",
         "cad_compile_spec",
@@ -65,6 +65,8 @@ def test_mcp_lists_all_ten_2d_tools_with_strict_json_schemas(tmp_path):
         "cad_inventory_dxf",
         "cad_revise_dxf",
         "cad_preview_and_diff",
+        "cad_generate_3d",
+        "cad_project_3d_to_2d",
     ]
     for tool in tools:
         schema = tool["inputSchema"]
@@ -80,6 +82,7 @@ def test_mcp_resources_and_prompts_round_trip(tmp_path):
     assert uris == {
         "cad://standards/gb-mechanical",
         "cad://schemas/drawing-spec",
+        "cad://schemas/model-3d-spec",
         "cad://revision/operations",
     }
 

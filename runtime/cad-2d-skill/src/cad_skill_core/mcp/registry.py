@@ -15,6 +15,13 @@ from cad_skill_core.documents.spec_compiler import (
     compile_spec_from_files,
 )
 from cad_skill_core.environment import check_environment
+from cad_skill_core.modeling3d import (
+    Model3DSpec,
+    load_model3d_spec,
+    probe_3d_capabilities,
+    project_model3d_to_drawing_spec,
+    run_3d_task,
+)
 from cad_skill_core.pipeline import PipelineOptions, run_task
 from cad_skill_core.revision.common import sha256_file
 from cad_skill_core.revision.local_review import review_files
@@ -141,6 +148,27 @@ class PreviewAndDiffArgs(StrictInputModel):
     include_image_base64: bool = Field(default=False)
 
 
+class Generate3DArgs(StrictInputModel):
+    spec: dict[str, Any] | None = Field(default=None, description="Validated Model3DSpec JSON object.")
+    spec_path: str | None = Field(default=None, description="Path to a Model3DSpec JSON file.")
+    with_2d_sheet: bool = Field(
+        default=False,
+        description="Also project and render an audited multi-view GB/T 2D engineering drawing alongside 3D outputs.",
+    )
+    circle_segments: int = Field(default=64, ge=24, le=256)
+    include_image_base64: bool = Field(
+        default=False,
+        description="Attach shaded isometric iso.png as an MCP ImageContent block.",
+    )
+
+
+class Project3DTo2DArgs(StrictInputModel):
+    spec: dict[str, Any] | None = Field(default=None, description="Model3DSpec JSON object.")
+    spec_path: str | None = Field(default=None, description="Path to a Model3DSpec JSON file.")
+    sheet_size: Literal["A0", "A1", "A2", "A3", "A4"] = Field(default="A3")
+    scale: str = Field(default="auto")
+
+
 @dataclass(frozen=True, slots=True)
 class ToolDefinition:
     name: str
@@ -172,6 +200,7 @@ def _handle_doctor(
         skip_native=args.skip_native,
     )
     report["mcp_workspace"] = str(sandbox.workspace_root)
+    report["capabilities_3d"] = probe_3d_capabilities()
     return report, None, False
 
 
@@ -528,6 +557,78 @@ def _handle_preview_and_diff(
     )
 
 
+def _resolve_model3d_spec(
+    sandbox: MCPWorkspaceSandbox, spec: dict[str, Any] | None, spec_path: str | None
+) -> Model3DSpec:
+    if (spec is None) == (spec_path is None):
+        raise ValueError("provide exactly one of spec or spec_path")
+    if spec is not None:
+        return Model3DSpec.model_validate(spec)
+    assert spec_path is not None
+    return load_model3d_spec(sandbox.resolve_readable_file(spec_path))
+
+
+def _handle_generate_3d(
+    sandbox: MCPWorkspaceSandbox, args: Generate3DArgs
+) -> tuple[dict[str, Any], Path | None, bool]:
+    spec_3d = _resolve_model3d_spec(sandbox, args.spec, args.spec_path)
+    task_id, task_dir = sandbox.allocate_task_dir("model3d")
+    out_dir = task_dir / "output"
+    bundle = run_3d_task(
+        spec_3d,
+        out_dir,
+        with_2d_sheet=args.with_2d_sheet,
+        circle_segments=args.circle_segments,
+        render_lock=sandbox.render_lock,
+    )
+    iso_png: Path | None = bundle.pop("iso_png_path", None)
+    payload = {
+        "task_id": task_id,
+        "domain": "model_3d",
+        **bundle,
+    }
+    sandbox.write_task_metadata(task_id, payload)
+    return (
+        payload,
+        (iso_png if args.include_image_base64 and iso_png and iso_png.is_file() else None),
+        bundle["status"] == "failed",
+    )
+
+
+def _handle_project_3d_to_2d(
+    sandbox: MCPWorkspaceSandbox, args: Project3DTo2DArgs
+) -> tuple[dict[str, Any], Path | None, bool]:
+    spec_3d = _resolve_model3d_spec(sandbox, args.spec, args.spec_path)
+    task_id, task_dir = sandbox.allocate_task_dir("proj3d2d")
+    out_dir = task_dir / "output"
+    out_dir.mkdir()
+    spec_2d = project_model3d_to_drawing_spec(
+        spec_3d,
+        sheet_size=args.sheet_size,
+        scale=args.scale,
+    )
+    spec_out = out_dir / "drawing-spec.json"
+    save_spec(spec_2d, spec_out)
+    payload = {
+        "task_id": task_id,
+        "domain": "project_3d_to_2d",
+        "status": "projected",
+        "views": spec_2d.requirements.views,
+        "scale": spec_2d.sheet.scale,
+        "artifacts": [
+            {
+                "name": spec_out.name,
+                "path": str(spec_out.resolve()),
+                "size": spec_out.stat().st_size,
+                "sha256": sha256_file(spec_out),
+            }
+        ],
+        "drawing_spec": spec_2d.model_dump(mode="json"),
+    }
+    sandbox.write_task_metadata(task_id, payload)
+    return payload, None, False
+
+
 TOOLS: tuple[ToolDefinition, ...] = (
     ToolDefinition(
         "cad_doctor",
@@ -588,6 +689,18 @@ TOOLS: tuple[ToolDefinition, ...] = (
         "Render high-DPI PNG/PDF crops of a DXF or matched before/after local revision diff views.",
         PreviewAndDiffArgs,
         _handle_preview_and_diff,
+    ),
+    ToolDefinition(
+        "cad_generate_3d",
+        "Generate and verify watertight 3D CAD models (.stl, .obj, .glb, model3d.dxf, iso.png, audit-3d.json) and optional 3D->2D GB/T sheet.",
+        Generate3DArgs,
+        _handle_generate_3d,
+    ),
+    ToolDefinition(
+        "cad_project_3d_to_2d",
+        "Project a Model3DSpec into an orthographic/sectional multi-view 2D DrawingSpec ready for 2D drafting.",
+        Project3DTo2DArgs,
+        _handle_project_3d_to_2d,
     ),
 )
 
@@ -663,6 +776,12 @@ def list_mcp_resources() -> list[dict[str, Any]]:
             "mimeType": "application/schema+json",
         },
         {
+            "uri": "cad://schemas/model-3d-spec",
+            "name": "Model3DSpec JSON Schema",
+            "description": "Strict JSON Schema for parametric 3D mechanical Model3DSpec v1.0.",
+            "mimeType": "application/schema+json",
+        },
+        {
             "uri": "cad://revision/operations",
             "name": "Supported Incremental Revision Operations",
             "description": "Discoverable catalog of verified DXF revision primitives and required fields.",
@@ -685,6 +804,17 @@ def read_mcp_resource(sandbox: MCPWorkspaceSandbox, uri: str) -> dict[str, Any]:
         }
     if uri == "cad://schemas/drawing-spec":
         schema_text = json.dumps(DrawingSpec.model_json_schema(), ensure_ascii=False, indent=2)
+        return {
+            "contents": [
+                {
+                    "uri": uri,
+                    "mimeType": "application/schema+json",
+                    "text": schema_text,
+                }
+            ]
+        }
+    if uri == "cad://schemas/model-3d-spec":
+        schema_text = json.dumps(Model3DSpec.model_json_schema(), ensure_ascii=False, indent=2)
         return {
             "contents": [
                 {

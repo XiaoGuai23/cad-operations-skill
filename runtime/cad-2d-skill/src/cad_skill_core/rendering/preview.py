@@ -703,8 +703,8 @@ def _publish_pair(
     try:
         for source, destination in zip(staged, destinations, strict=True):
             descriptor, name = tempfile.mkstemp(
-                prefix=f".{destination.name}.",
-                suffix=".partial",
+                prefix=".pv-",
+                suffix=".tmp",
                 dir=destination.parent,
             )
             os.close(descriptor)
@@ -720,8 +720,8 @@ def _publish_pair(
                 backups.append(None)
                 continue
             descriptor, name = tempfile.mkstemp(
-                prefix=f".{destination.name}.",
-                suffix=".backup",
+                prefix=".pb-",
+                suffix=".bak",
                 dir=destination.parent,
             )
             os.close(descriptor)

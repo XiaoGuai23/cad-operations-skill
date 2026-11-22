@@ -47,6 +47,14 @@ def resolve_font(text: str, inventory: FontInventory, policy: FontPolicy) -> Res
     if missing:
         raise MissingGlyphError(tuple(missing), tuple(attempted))
 
+    if len(selected) > 1:
+        required_chars = frozenset(ch for ch in text if not ch.isspace())
+        if not (selected[0].is_shx or required_chars <= selected[0].cmap):
+            for idx, candidate_face in enumerate(selected[1:], start=1):
+                if candidate_face.is_shx or required_chars <= candidate_face.cmap:
+                    selected = [candidate_face, *selected[:idx], *selected[idx + 1 :]]
+                    break
+
     _assign_whitespace_fonts(selections)
     runs = _resolved_runs(text, selections, scripts)
 

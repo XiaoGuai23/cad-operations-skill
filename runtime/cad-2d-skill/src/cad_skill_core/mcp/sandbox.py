@@ -66,9 +66,9 @@ class MCPWorkspaceSandbox:
         self.render_lock = _FONT_RENDER_LOCK
 
     def allocate_task_dir(self, prefix: str = "task") -> tuple[str, Path]:
-        clean_prefix = re.sub(r"[^A-Za-z0-9_-]", "", prefix)[:20] or "task"
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        task_id = f"{clean_prefix}-{stamp}-{uuid.uuid4().hex[:8]}"
+        clean_prefix = re.sub(r"[^A-Za-z0-9_-]", "", prefix)[:8] or "t"
+        stamp = datetime.now(timezone.utc).strftime("%y%m%d%H%M%S")
+        task_id = f"{clean_prefix}-{stamp}-{uuid.uuid4().hex[:6]}"
         task_dir = (self.tasks_root / task_id).resolve()
         self._assert_within(task_dir, self.tasks_root)
         task_dir.mkdir(parents=True, exist_ok=False)
