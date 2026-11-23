@@ -431,13 +431,16 @@ def _evaluate_single_custom_criterion(
 
     if check_type == "expected_dimension_values" or (not check_type and "expected_dimension_values" in rule):
         expected_vals = [float(x) for x in rule.get("expected_dimension_values", [])]
+        tol = float(rule.get("tolerance", 0.05))
+        if tol < 0.0:
+            return ("unevaluated", f"expected_dimension_values 规则容差不能为负数: {tol}")
         dim_values: list[float] = []
         for ent in entities:
             if ent.dxftype() == "DIMENSION":
                 dim_values.extend(_extract_nominal_dimension_numbers(ent))
         unmatched: list[float] = []
         for ev in expected_vals:
-            if not any(isclose(dv, ev, rel_tol=1e-3, abs_tol=0.05) for dv in dim_values):
+            if not any(abs(dv - ev) <= tol + 1e-9 for dv in dim_values):
                 unmatched.append(ev)
         return ("passed" if not unmatched else "failed", "关键尺寸全部匹配" if not unmatched else f"未检出尺寸标注 {unmatched}")
 
@@ -446,13 +449,21 @@ def _evaluate_single_custom_criterion(
         ok = spans[0] >= float(min_w) and spans[1] >= float(min_h)
         return ("passed" if ok else "failed", f"实际包络 {spans[0]:.1f}×{spans[1]:.1f} mm")
 
-    if check_type == "bbox_span" or (not check_type and "bbox_span" in rule):
+    if check_type == "bbox_span" or (
+        not check_type
+        and any(k in rule for k in ("bbox_span", "expected_width", "expected_height", "width", "height"))
+    ):
         tol = float(rule.get("tolerance", 1.0))
+        if tol < 0.0:
+            return ("unevaluated", f"bbox_span 规则容差不能为负数: {tol}")
         raw_span = rule.get("bbox_span")
         if isinstance(raw_span, (list, tuple)) and len(raw_span) >= 2:
             exp_w, exp_h = float(raw_span[0]), float(raw_span[1])
-            ok = isclose(spans[0], exp_w, rel_tol=0.03, abs_tol=tol) and isclose(spans[1], exp_h, rel_tol=0.03, abs_tol=tol)
-            return ("passed" if ok else "failed", f"实际包络 {spans[0]:.1f}×{spans[1]:.1f} mm（期望 {exp_w:g}×{exp_h:g} mm）")
+            ok = abs(spans[0] - exp_w) <= tol + 1e-9 and abs(spans[1] - exp_h) <= tol + 1e-9
+            return (
+                "passed" if ok else "failed",
+                f"实际包络 {spans[0]:.2f}×{spans[1]:.2f} mm（期望 {exp_w:g}×{exp_h:g} ± {tol:g} mm）",
+            )
         exp_w_opt = rule.get(
             "width",
             rule.get(
@@ -463,8 +474,11 @@ def _evaluate_single_custom_criterion(
         exp_h_opt = rule.get("height", rule.get("expected_height"))
         if exp_w_opt is None and exp_h_opt is None:
             return ("unevaluated", "bbox_span 规则缺少 width/expected_width/height 目标值")
-        ok_w = True if exp_w_opt is None else isclose(spans[0], float(exp_w_opt), rel_tol=0.03, abs_tol=tol)
-        ok_h = True if exp_h_opt is None else isclose(spans[1], float(exp_h_opt), rel_tol=0.03, abs_tol=tol)
-        return ("passed" if (ok_w and ok_h) else "failed", f"实际包络 {spans[0]:.1f}×{spans[1]:.1f} mm")
+        ok_w = True if exp_w_opt is None else abs(spans[0] - float(exp_w_opt)) <= tol + 1e-9
+        ok_h = True if exp_h_opt is None else abs(spans[1] - float(exp_h_opt)) <= tol + 1e-9
+        return (
+            "passed" if (ok_w and ok_h) else "failed",
+            f"实际包络 {spans[0]:.2f}×{spans[1]:.2f} mm（容差 ±{tol:g} mm）",
+        )
 
     return ("unevaluated", f"未实现的评分规则类型: {check_type or sorted(rule.keys())!r}")

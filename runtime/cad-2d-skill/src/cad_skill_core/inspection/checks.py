@@ -488,6 +488,45 @@ def _semantic_issues(
 
     if spec.project.drawing_type == "assembly":
         issues.extend(_assembly_issues(spec, plan, annotation_entities))
+
+    # Verify every declared surface roughness, datum symbol, and GD&T frame in DrawingSpec was actually emitted!
+    emitted_ids = {a.annotation_id for a in plan.annotations if a.entity_handles}
+    for idx in range(1, len(spec.surface_finishes) + 1):
+        if f"roughness-{idx}" not in emitted_ids:
+            issues.append(
+                AuditIssue(
+                    "SEMANTIC_MISSING_SURFACE_ROUGHNESS",
+                    "error",
+                    "semantic",
+                    f"surface_finishes[{idx - 1}] ({spec.surface_finishes[idx - 1].value}) was not emitted onto the drawing",
+                    (),
+                    True,
+                )
+            )
+    for idx in range(1, len(spec.datums) + 1):
+        if f"datum-{idx}" not in emitted_ids:
+            issues.append(
+                AuditIssue(
+                    "SEMANTIC_MISSING_DATUM_SYMBOL",
+                    "error",
+                    "semantic",
+                    f"datums[{idx - 1}] ([{spec.datums[idx - 1].letter}]) was not emitted onto the drawing",
+                    (),
+                    True,
+                )
+            )
+    for idx in range(1, len(spec.gdt_frames) + 1):
+        if f"gdt-{idx}" not in emitted_ids:
+            issues.append(
+                AuditIssue(
+                    "SEMANTIC_MISSING_GDT_FRAME",
+                    "error",
+                    "semantic",
+                    f"gdt_frames[{idx - 1}] ({spec.gdt_frames[idx - 1].symbol} {spec.gdt_frames[idx - 1].tolerance}) was not emitted onto the drawing",
+                    (),
+                    True,
+                )
+            )
     if spec.geometry.parameters.get("orthographic_check", True) is not False:
         ortho_violations = verify_orthographic_consistency(
             spec.geometry.entities,

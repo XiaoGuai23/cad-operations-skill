@@ -204,6 +204,7 @@ def generate_autocad_3d_script(spec_3d: Model3DSpec, output_dwg_path: Path) -> s
                     lines.append("_SUBTRACT _P  _L ")
 
     elif isinstance(body, ExtrudePolygon3D):
+        lines.append("_SETVAR DELOBJ 1")
         outer_pts = " ".join(f"{x:.4f},{y:.4f}" for x, y in body.outer_loop)
         lines.append(f"_.PLINE {outer_pts} _C")
         lines.append(f"_.EXTRUDE _L  {body.height:.4f}")
@@ -211,7 +212,7 @@ def generate_autocad_3d_script(spec_3d: Model3DSpec, output_dwg_path: Path) -> s
             inner_pts = " ".join(f"{x:.4f},{y:.4f}" for x, y in inner)
             lines.append(f"_.PLINE {inner_pts} _C")
             lines.append(f"_.EXTRUDE _L  {body.height:.4f}")
-            lines.append("_SUBTRACT _P  _L ")
+            lines.append("_SUBTRACT _ALL _R _L  _L ")
 
     elif isinstance(body, BearingCap3D):
         rf = body.flange_diameter / 2.0
@@ -237,24 +238,81 @@ def generate_autocad_3d_script(spec_3d: Model3DSpec, output_dwg_path: Path) -> s
                 lines.append("_SUBTRACT _P  _L ")
 
     elif isinstance(body, RibbedBracket3D):
-        hw = body.base_width / 2.0
-        lines.append(f"_BOX 0,{-hw:.4f},0 {body.base_length:.4f},{hw:.4f},{body.base_thickness:.4f}")
-        lines.append(f"_BOX 0,{-hw:.4f},{body.base_thickness:.4f} {body.wall_thickness:.4f},{hw:.4f},{body.total_height:.4f}")
+        L = body.base_length
+        W = body.base_width
+        H = body.total_height
+        t1 = body.base_thickness
+        t2 = body.wall_thickness
+        tr = body.rib_thickness
+        r_boss = body.boss_hole_diameter / 2.0
+        r_mnt = body.mount_hole_diameter / 2.0
+        hw = W / 2.0
+        hr = tr / 2.0
+        z_hole = round(H - max(r_boss + 12.0, H * 0.30), 2)
+        x_rib_end = round(L - max(22.0, r_mnt * 3.0), 2)
+        z_rib_top = round(
+            min(H - 8.0, z_hole - r_boss - 2.5)
+            if z_hole - r_boss - 2.5 > t1 + 10.0
+            else t1 + (H - t1) * 0.45,
+            2,
+        )
+        lines.append(f"_BOX 0,{-hw:.4f},0 {L:.4f},{hw:.4f},{t1:.4f}")
+        lines.append(f"_BOX 0,{-hw:.4f},{t1:.4f} {t2:.4f},{hw:.4f},{H:.4f}")
+        if x_rib_end > t2 + 1.0 and z_rib_top > t1 + 1.0 and tr > 0.0:
+            lines.append(f"_WEDGE {t2:.4f},{-hr:.4f},{t1:.4f} {x_rib_end:.4f},{hr:.4f},{z_rib_top:.4f}")
         lines.append("_UNION _ALL ")
-        if body.mount_hole_diameter > 0:
-            rm = body.mount_hole_diameter / 2.0
-            xm = body.base_length - max(18.0, rm * 2.2)
-            ym = hw - max(15.0, rm * 1.8)
+        if r_boss > 0.0:
+            lines.append(f"_CYLINDER 0,0,{z_hole:.4f} {r_boss:.4f} _A {t2:.4f},0,{z_hole:.4f}")
+            lines.append("_SUBTRACT _P  _L ")
+        if r_mnt > 0.0:
+            xm = L - max(18.0, r_mnt * 2.2)
+            ym = hw - max(15.0, r_mnt * 1.8)
             for sy in (-1.0, 1.0):
-                lines.append(f"_CYLINDER {xm:.4f},{sy * ym:.4f},0 {rm:.4f} {body.base_thickness:.4f}")
+                lines.append(f"_CYLINDER {xm:.4f},{sy * ym:.4f},0 {r_mnt:.4f} {t1:.4f}")
                 lines.append("_SUBTRACT _P  _L ")
 
     elif isinstance(body, SpurGear3D):
-        tip_r = body.module_mm * (body.teeth + 2.0) / 2.0
-        bore_r = body.bore_diameter / 2.0
-        lines.append(f"_CYLINDER 0,0,0 {tip_r:.4f} {body.face_width:.4f}")
-        lines.append(f"_CYLINDER 0,0,0 {bore_r:.4f} {body.face_width:.4f}")
-        lines.append("_SUBTRACT _P  _L ")
+        m = body.module_mm
+        z = body.teeth
+        b = body.face_width
+        r_p = m * z / 2.0
+        r_a = m * (z + 2.0) / 2.0
+        r_f = m * (z - 2.5) / 2.0
+        r_bore = body.bore_diameter / 2.0
+        dtheta = 2.0 * pi / z
+
+        outer_ccw: list[tuple[float, float]] = []
+        for k in range(z):
+            tc = k * dtheta
+            profile_steps = (
+                (tc - 0.36 * dtheta, r_f),
+                (tc - 0.25 * dtheta, r_p),
+                (tc - 0.13 * dtheta, r_a),
+                (tc, r_a),
+                (tc + 0.13 * dtheta, r_a),
+                (tc + 0.25 * dtheta, r_p),
+                (tc + 0.36 * dtheta, r_f),
+                (tc + 0.50 * dtheta, r_f),
+            )
+            for ang, rad in profile_steps:
+                outer_ccw.append((rad * cos(ang), rad * sin(ang)))
+
+        lines.append("_SETVAR DELOBJ 1")
+        r_core = max(r_bore + 0.5, r_f * 0.92) if r_bore < r_f * 0.92 else r_f * 0.95
+        lines.append(f"_CYLINDER 0,0,0 {r_core:.4f} {b:.4f}")
+        outer_pts = " ".join(f"{x:.4f},{y:.4f}" for x, y in outer_ccw)
+        lines.append(f"_.PLINE {outer_pts} _C")
+        lines.append(f"_.EXTRUDE _L  {b:.4f}")
+        lines.append("_UNION _ALL ")
+        if r_bore > 0.0:
+            lines.append(f"_CYLINDER 0,0,0 {r_bore:.4f} {b:.4f}")
+            lines.append("_SUBTRACT _P  _L ")
+            kw = body.keyway_width if body.keyway_width is not None else round(max(4.0, body.bore_diameter * 0.28), 1)
+            kd = body.keyway_depth if body.keyway_depth is not None else round(max(1.8, kw * 0.42), 1)
+            x_back = min(r_f - 1.5, r_bore + kd)
+            if kw > 0.0 and x_back > r_bore:
+                lines.append(f"_BOX 0,{-kw / 2.0:.4f},0 {x_back:.4f},{kw / 2.0:.4f},{b:.4f}")
+                lines.append("_SUBTRACT _P  _L ")
 
     else:
         raise ValueError(f"unsupported 3D body kind for native 3DSOLID script: {type(body).__name__}")

@@ -802,14 +802,20 @@ def _emit_datum_symbol(
     ax, ay = annotation.points[0]
     box_s = 6.2
     lyr = annotation.layer
+    side = 1.0 if annotation.dim_kind == "right" else -1.0
     # GB/T 1182 solid-filled datum triangle flush (0.00 mm gap) on OUTLINE vertical surface at (ax, ay)
-    tri = [(ax, ay - 2.0), (ax, ay + 2.0), (ax - 3.4, ay)]
+    tri = [(ax, ay - 2.0), (ax, ay + 2.0), (ax + side * 3.4, ay)]
     modelspace.add_solid(tri, dxfattribs={"layer": lyr})
     modelspace.add_lwpolyline(tri, close=True, dxfattribs={"layer": lyr})
     # Stem + boxed datum letter
-    bx1 = ax - 6.2
-    bx0 = bx1 - box_s
-    modelspace.add_line((ax - 3.4, ay), (bx1, ay), dxfattribs={"layer": lyr})
+    if side > 0:
+        bx0 = ax + 6.2
+        bx1 = bx0 + box_s
+        modelspace.add_line((ax + 3.4, ay), (bx0, ay), dxfattribs={"layer": lyr})
+    else:
+        bx1 = ax - 6.2
+        bx0 = bx1 - box_s
+        modelspace.add_line((ax - 3.4, ay), (bx1, ay), dxfattribs={"layer": lyr})
     modelspace.add_lwpolyline(
         [(bx0, ay - box_s / 2.0), (bx1, ay - box_s / 2.0), (bx1, ay + box_s / 2.0), (bx0, ay + box_s / 2.0)],
         close=True,

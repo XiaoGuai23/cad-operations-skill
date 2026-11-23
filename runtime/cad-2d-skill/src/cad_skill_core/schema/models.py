@@ -130,6 +130,7 @@ class SurfaceFinish(SchemaModel):
     is_general: bool = False
     owner_view: str | None = None
     placement: Literal["top-left", "top-right", "left-upper", "right-upper"] = "top-left"
+    target_surface: str | None = None
 
 
 class DatumSymbol(SchemaModel):
@@ -139,6 +140,7 @@ class DatumSymbol(SchemaModel):
     source_id: NonBlankText
     owner_view: str = "front"
     placement: Literal["left-center", "bottom-left", "top-right"] = "left-center"
+    target_feature: str | None = None
 
 
 class GDTFrame(SchemaModel):
@@ -156,6 +158,7 @@ class GDTFrame(SchemaModel):
     source_id: NonBlankText
     owner_view: str = "front"
     placement: Literal["top-right", "above-label", "right-upper"] = "above-label"
+    target_feature: str | None = None
 
 
 class Provenance(SchemaModel):

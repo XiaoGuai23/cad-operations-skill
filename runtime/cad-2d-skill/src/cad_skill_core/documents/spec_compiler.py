@@ -654,8 +654,11 @@ def compile_spec_from_fragments(
         drawing_type=drawing_type,
         requested_views=requested_views,
         source_id=first_source_id,
-        enabled=include_pro_symbols and not missing and not conflicts,
+        enabled=include_pro_symbols,
+        missing_out=missing,
     )
+    if missing or conflicts:
+        surface_finishes_dump, datums_dump, gdt_frames_dump = [], [], []
 
     spec_dict: dict[str, Any] = {
         "schema_version": "1.0",
@@ -827,6 +830,28 @@ def _attach_tolerances(
     return enriched
 
 
+_GENERAL_SURFACE_RE = re.compile(
+    r"(?:其余(?:表面)?|未注(?:表面)?|非加工(?:表面)?|\b(?:rest|general|other\s*surfaces?)\b)",
+    re.IGNORECASE,
+)
+_RA_TOKEN_RE = re.compile(r"Ra\s*(?P<val>\d+(?:\.\d+)?)", re.IGNORECASE)
+_GDT_CLAUSE_SPECS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("coaxiality", re.compile(r"(?:同轴度|同心度|\bcoaxiality\b|\bconcentricity\b)", re.IGNORECASE)),
+    ("perpendicularity", re.compile(r"(?:垂直度|\bperpendicularity\b)", re.IGNORECASE)),
+    ("parallelism", re.compile(r"(?:平行度|\bparallelism\b)", re.IGNORECASE)),
+    ("runout", re.compile(r"(?:全跳动|圆跳动|跳动|\brunout\b)", re.IGNORECASE)),
+    ("flatness", re.compile(r"(?:平面度|\bflatness\b)", re.IGNORECASE)),
+)
+_DATUM_REF_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"(?:相对(?:于)?|对|以)?\s*基准\s*(?P<refs>[A-Z](?:\s*[-、,/]\s*[A-Z])*)", re.IGNORECASE),
+    re.compile(r"(?:相对(?:于)?|对)\s*(?P<refs>[A-Z])(?![A-Za-z0-9])\s*(?:基准|面|轴)?"),
+    re.compile(r"\bdatum\s*(?P<refs>[A-Z](?:\s*[-,/]\s*[A-Z])*)\b", re.IGNORECASE),
+)
+_STANDALONE_DATUM_DECL_RE = re.compile(
+    r"以\s*(?P<feat>[^，,；;。!\n]{1,18}?)\s*为基准\s*(?P<let>[A-Z])(?![A-Za-z0-9])"
+)
+
+
 def _build_pro_engineering_symbols(
     *,
     all_text: str,
@@ -835,90 +860,235 @@ def _build_pro_engineering_symbols(
     requested_views: list[str],
     source_id: str,
     enabled: bool,
+    missing_out: list[str] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
-    """Extract or synthesize GB/T 131 surface roughness, datum [A], and GD&T feature control frames."""
+    """Extract per-surface GB/T 131 roughness, per-letter datum symbols, and multi-clause GD&T frames."""
     if not enabled or not requested_views:
         return [], [], []
     if re.search(r"关闭工程符号|不标粗糙度|pro_symbols\s*[:：=]\s*false", all_text, re.IGNORECASE):
         return [], [], []
-    if family == "generic":
-        return [], [], []
 
-    # Parse user-specified Ra values if mentioned in text
-    m_gen_ra = re.search(r"其余\s*(?:表面)?(?:粗糙度)?\s*Ra\s*(\d+(?:\.\d+)?)", all_text, re.IGNORECASE)
-    gen_ra = f"Ra {m_gen_ra.group(1)}" if m_gen_ra else ("Ra 12.5" if family in {"bearing-cap", "ribbed-bracket"} else "Ra 6.3")
+    clauses = [c.strip() for c in re.split(r"[，,；;。!！\n]+", all_text) if c.strip()]
+    primary_view = "front" if "front" in requested_views else requested_views[0]
 
-    all_ras = [m.group(1) for m in re.finditer(r"(?<!其余)Ra\s*(\d+(?:\.\d+)?)", all_text, re.IGNORECASE)]
-    if all_ras:
-        mating_ra = f"Ra {all_ras[0]}"
-    else:
-        mating_ra = "Ra 1.6" if family in {"spur-gear", "stepped-shaft", "bearing-cap"} else "Ra 3.2"
+    # ------------------------------------------------------------------
+    # 1. Clause-by-clause Surface Roughness Parsing (prevents general Ra from overwriting mating Ra!)
+    # ------------------------------------------------------------------
+    explicit_gen_ra: str | None = None
+    explicit_gen_machined: bool | None = None
+    local_finishes: list[dict[str, Any]] = []
+    local_slots: list[tuple[str, str]] = [
+        (primary_view, "top-left"),
+        (primary_view, "left-upper"),
+        *(
+            [(v, "top-left") for v in requested_views if v != primary_view]
+            + [(v, "left-upper") for v in requested_views if v != primary_view]
+        ),
+    ]
+
+    for cl in clauses:
+        ra_matches = list(_RA_TOKEN_RE.finditer(cl))
+        if not ra_matches:
+            if re.search(r"粗糙度", cl) and not re.search(r"不标|关闭|符合|按", cl):
+                if missing_out is not None:
+                    missing_out.append(f"missing numeric Ra value for surface roughness clause: {cl}")
+            continue
+        if _GENERAL_SURFACE_RE.search(cl) and len(ra_matches) == 1:
+            explicit_gen_ra = f"Ra {ra_matches[0].group('val')}"
+            explicit_gen_machined = not bool(re.search(r"不去除|非加工|毛坯|铸造", cl))
+            continue
+
+        # Clause may have one or more specific surface Ra bindings
+        for rm in ra_matches:
+            prefix_txt = cl[: rm.start()].strip(" ：:=的为是")
+            if _GENERAL_SURFACE_RE.search(prefix_txt):
+                explicit_gen_ra = f"Ra {rm.group('val')}"
+                explicit_gen_machined = not bool(re.search(r"不去除|非加工|毛坯|铸造", prefix_txt))
+                continue
+            surf_name = re.sub(r"(?:表面)?粗糙度$", "", prefix_txt).strip() or "配合面"
+            slot_view, slot_place = local_slots[min(len(local_finishes), len(local_slots) - 1)]
+            local_finishes.append(
+                {
+                    "value": f"Ra {rm.group('val')}",
+                    "source_id": source_id,
+                    "machining_required": not bool(re.search(r"不去除|非加工", prefix_txt)),
+                    "is_general": False,
+                    "owner_view": slot_view,
+                    "placement": slot_place,
+                    "target_surface": surf_name,
+                }
+            )
+
+    if family == "generic" and explicit_gen_ra is None and not local_finishes:
+        has_any_gdt_kw = any(pat.search(all_text) for _, pat in _GDT_CLAUSE_SPECS)
+        if not has_any_gdt_kw:
+            return [], [], []
+
+    gen_ra = explicit_gen_ra or ("Ra 12.5" if family in {"bearing-cap", "ribbed-bracket"} else "Ra 6.3")
+    gen_mach = explicit_gen_machined if explicit_gen_machined is not None else (family not in {"bearing-cap"})
 
     finishes: list[dict[str, Any]] = [
         {
             "value": gen_ra,
             "source_id": source_id,
-            "machining_required": family not in {"bearing-cap"},
+            "machining_required": gen_mach,
             "is_general": True,
+            "target_surface": "其余表面",
         }
     ]
-    if "front" in requested_views:
+    if local_finishes:
+        finishes.extend(local_finishes)
+    elif "front" in requested_views and family != "generic":
+        default_mating = "Ra 1.6" if family in {"spur-gear", "stepped-shaft", "bearing-cap"} else "Ra 3.2"
         finishes.append(
             {
-                "value": mating_ra,
+                "value": default_mating,
                 "source_id": source_id,
                 "machining_required": True,
                 "is_general": False,
                 "owner_view": "front",
                 "placement": "top-left",
+                "target_surface": "配合面",
             }
         )
 
     if drawing_type == "assembly":
         return finishes, [], []
 
+    # ------------------------------------------------------------------
+    # 2. Clause-by-clause GD&T & Datum Feature Parsing (preserves ALL clauses, features & datum letters!)
+    # ------------------------------------------------------------------
+    explicit_gdt_frames: list[dict[str, Any]] = []
+    datum_feature_by_letter: dict[str, str] = {}
+    ordered_datum_letters: list[str] = []
+
+    def _register_datum(letter: str, feat: str | None = None) -> None:
+        lu = letter.strip().upper()
+        if not lu:
+            return
+        if lu not in ordered_datum_letters:
+            ordered_datum_letters.append(lu)
+        if feat and lu not in datum_feature_by_letter:
+            datum_feature_by_letter[lu] = feat
+
+    for m_decl in _STANDALONE_DATUM_DECL_RE.finditer(all_text):
+        _register_datum(m_decl.group("let"), m_decl.group("feat").strip())
+
+    gdt_view_order: list[str] = []
+    if "left" in requested_views:
+        gdt_view_order.append("left")
+    if primary_view not in gdt_view_order:
+        gdt_view_order.append(primary_view)
+    for rv in requested_views:
+        if rv not in gdt_view_order:
+            gdt_view_order.append(rv)
+
+    for cl in clauses:
+        matched_specs = [(sym, m_kw) for sym, pat in _GDT_CLAUSE_SPECS if (m_kw := pat.search(cl)) is not None]
+        if not matched_specs:
+            continue
+        # Sort by appearance order inside the clause
+        matched_specs.sort(key=lambda item: item[1].start())
+        for sym_name, m_kw in matched_specs:
+            tail_after_kw = cl[m_kw.end() :]
+            m_tol_after = re.search(
+                rf"(?:公差)?\s*(?:为|是|<=|≤|:|：)?\s*(?P<dia>{_DIA_SYM})?\s*(?P<val>\d+(?:\.\d+)?)",
+                tail_after_kw,
+            )
+            m_tol_before = (
+                re.search(rf"(?P<dia>{_DIA_SYM})?\s*(?P<val>\d+(?:\.\d+)?)\s*(?:mm|毫米)?\s*的?$", cl[: m_kw.start()].strip())
+                if m_tol_after is None
+                else None
+            )
+            m_tol = m_tol_after or m_tol_before
+            if m_tol is None:
+                if missing_out is not None:
+                    missing_out.append(f"missing numeric tolerance value for {sym_name} requirement: {cl}")
+                continue
+
+            raw_tol_num = m_tol.group("val")
+            has_dia_tok = bool(m_tol.group("dia")) or sym_name == "coaxiality"
+            tol_str = f"⌀{raw_tol_num}" if has_dia_tok else raw_tol_num
+
+            # Extract datum letter(s) specifically referenced in THIS clause
+            clause_refs: list[str] = []
+            for dpat in _DATUM_REF_PATTERNS:
+                md = dpat.search(cl)
+                if md:
+                    for tok in re.split(r"[-、,/\s]+", md.group("refs")):
+                        tu = tok.strip().upper()
+                        if re.fullmatch(r"[A-Z]", tu) and tu not in clause_refs:
+                            clause_refs.append(tu)
+                    if clause_refs:
+                        break
+            if not clause_refs and sym_name != "flatness":
+                clause_refs = ["A"]
+
+            for cref in clause_refs:
+                _register_datum(cref)
+
+            # Extract controlled feature phrase (e.g. "端面", "另一端面", "内孔")
+            raw_head = cl[: m_kw.start()].strip()
+            feat_clean = re.sub(
+                r"(?:相对(?:于)?|对|以)?\s*基准\s*[A-Z](?:\s*[-、,/]\s*[A-Z])*\s*的?$",
+                "",
+                raw_head,
+                flags=re.IGNORECASE,
+            )
+            feat_clean = re.sub(r"(?:相对(?:于)?|对)\s*[A-Z]\s*(?:基准|面|轴)?\s*的?$", "", feat_clean).strip(" ：:=的")
+            target_feat = feat_clean or None
+
+            chosen_view = gdt_view_order[len(explicit_gdt_frames) % len(gdt_view_order)]
+            explicit_gdt_frames.append(
+                {
+                    "symbol": sym_name,
+                    "tolerance": tol_str,
+                    "datum_refs": clause_refs,
+                    "source_id": source_id,
+                    "owner_view": chosen_view,
+                    "placement": "above-label",
+                    "target_feature": target_feat,
+                }
+            )
+
     datums: list[dict[str, Any]] = []
     gdt_frames: list[dict[str, Any]] = []
-    primary_view = "front" if "front" in requested_views else requested_views[0]
-    gdt_view = "left" if "left" in requested_views else primary_view
 
-    datums.append(
-        {
-            "letter": "A",
-            "source_id": source_id,
-            "owner_view": primary_view,
-            "placement": "left-center",
-        }
-    )
+    if explicit_gdt_frames:
+        gdt_frames.extend(explicit_gdt_frames)
+        datum_view_pool = [v for v in requested_views if v != "top"] or list(requested_views)
+        for d_idx, d_let in enumerate(ordered_datum_letters):
+            d_view = datum_view_pool[d_idx % len(datum_view_pool)] if len(ordered_datum_letters) > 1 else primary_view
+            datums.append(
+                {
+                    "letter": d_let,
+                    "source_id": source_id,
+                    "owner_view": d_view,
+                    "placement": "left-center",
+                    "target_feature": datum_feature_by_letter.get(d_let),
+                }
+            )
+    elif family != "generic":
+        gdt_view = "left" if "left" in requested_views else primary_view
+        datums.append(
+            {
+                "letter": "A",
+                "source_id": source_id,
+                "owner_view": primary_view,
+                "placement": "left-center",
+            }
+        )
+        gdt_sym = "coaxiality" if family in {"spur-gear", "bearing-cap", "stepped-shaft"} else "perpendicularity"
+        gdt_tol = "⌀0.02" if gdt_sym == "coaxiality" else "0.03"
+        gdt_frames.append(
+            {
+                "symbol": gdt_sym,
+                "tolerance": gdt_tol,
+                "datum_refs": ["A"],
+                "source_id": source_id,
+                "owner_view": gdt_view,
+                "placement": "above-label",
+            }
+        )
 
-    # Check if user explicitly specified a geometric tolerance in text
-    gdt_sym: str
-    gdt_tol: str
-    m_coax = re.search(r"(?:同轴度|同心度|coaxiality)\s*[⌀∅Φφ]?\s*(\d+(?:\.\d+)?)", all_text, re.IGNORECASE)
-    m_perp = re.search(r"(?:垂直度|perpendicularity)\s*[⌀∅Φφ]?\s*(\d+(?:\.\d+)?)", all_text, re.IGNORECASE)
-    m_para = re.search(r"(?:平行度|parallelism)\s*(\d+(?:\.\d+)?)", all_text, re.IGNORECASE)
-    m_run = re.search(r"(?:圆?跳动|runout)\s*(\d+(?:\.\d+)?)", all_text, re.IGNORECASE)
-    if m_coax:
-        gdt_sym, gdt_tol = "coaxiality", f"⌀{m_coax.group(1)}"
-    elif m_perp:
-        gdt_sym, gdt_tol = "perpendicularity", m_perp.group(1)
-    elif m_para:
-        gdt_sym, gdt_tol = "parallelism", m_para.group(1)
-    elif m_run:
-        gdt_sym, gdt_tol = "runout", m_run.group(1)
-    elif family in {"spur-gear", "bearing-cap", "stepped-shaft"}:
-        gdt_sym, gdt_tol = "coaxiality", "⌀0.02"
-    else:
-        gdt_sym, gdt_tol = "perpendicularity", "0.03"
-
-    gdt_frames.append(
-        {
-            "symbol": gdt_sym,
-            "tolerance": gdt_tol,
-            "datum_refs": ["A"],
-            "source_id": source_id,
-            "owner_view": gdt_view,
-            "placement": "above-label",
-        }
-    )
     return finishes, datums, gdt_frames

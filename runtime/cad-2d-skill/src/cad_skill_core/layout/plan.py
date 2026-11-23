@@ -298,7 +298,10 @@ def _balance_placed_views(
         return placed
 
     has_pro_symbols = bool(spec.surface_finishes or spec.datums or spec.gdt_frames)
-    top_label_pad = 25.0 if has_pro_symbols else 9.5
+    max_gdt_per_view = max(
+        [sum(1 for g in spec.gdt_frames if g.owner_view == vn) for vn in placed] or [0]
+    )
+    top_label_pad = max(25.0, 15.0 + 8.2 * max_gdt_per_view) if has_pro_symbols else 9.5
     max_view_y = max(b.max_y for b in placed.values())
     min_view_y = min(b.min_y for b in placed.values())
     bottom_extra = 12.0 * max(
@@ -889,20 +892,23 @@ def _annotation_layouts(spec: DrawingSpec, views: tuple[ViewLayout, ...], printa
         ]
 
     # 5. Orthographic View Labels, Dimensions, Free Annotations & Assembly Balloons
-    gdt_views_above: set[str] = set()
+    gdt_counts_above: dict[str, int] = {}
     if views and spec.gdt_frames:
         views_lookup = {v.name: v for v in views}
         for gdt in spec.gdt_frames:
             gv = views_lookup.get(gdt.owner_view, views[0])
-            if gv.bounds.max_y + 18.0 < printable.max_y - 1.0:
-                gdt_views_above.add(gv.name)
+            next_cnt = gdt_counts_above.get(gv.name, 0) + 1
+            if gv.bounds.max_y + 10.0 + next_cnt * 8.0 < printable.max_y - 1.0:
+                gdt_counts_above[gv.name] = next_cnt
 
     result += [
         _text(
             "view-label",
             view.label,
             view.bounds.center[0],
-            (view.bounds.max_y + 13.0) if view.name in gdt_views_above else (view.bounds.max_y + 4.0),
+            (view.bounds.max_y + 5.0 + gdt_counts_above[view.name] * 8.0)
+            if view.name in gdt_counts_above
+            else (view.bounds.max_y + 4.0),
             height,
             width_factor=width_factor,
             annotation_id=f"view-label-{view.name}",
@@ -924,7 +930,16 @@ def _annotation_layouts(spec: DrawingSpec, views: tuple[ViewLayout, ...], printa
             group = f"balloon-{row.item_no}"
             center = (front.bounds.min_x - 8 - (row.item_no - 1) * 8, front.bounds.max_y - 8)
             result += [AnnotationLayout("balloon", str(row.item_no), Bounds(center[0] - 3.5, center[1] - 3.5, center[0] + 3.5, center[1] + 3.5), "DIM", points=(center,), radius=3.5, annotation_id=f"{group}-circle", group_id=group, owner_view=front.name, allowed_contact=("own-balloon-text", "own-leader")), _text("balloon-text", str(row.item_no), center[0] - 1, center[1] - 1.5, height, width_factor=width_factor, annotation_id=f"{group}-text", group_id=group, owner_view=front.name, allowed_contact=("own-balloon",)), AnnotationLayout("leader", "", Bounds(min(center[0], front.bounds.min_x), center[1] - 0.001, max(center[0], front.bounds.min_x), center[1] + 0.001), "DIM", points=(center, (front.bounds.min_x, center[1])), annotation_id=f"{group}-leader", group_id=group, owner_view=front.name, allowed_contact=("own-balloon", "own-view-endpoint"))]
-        result += _engineering_symbol_layouts(spec, views_by_name, front, printable, height, width_factor, is_zh=is_zh)
+        result += _engineering_symbol_layouts(
+            spec,
+            views_by_name,
+            front,
+            printable,
+            height,
+            width_factor,
+            is_zh=is_zh,
+            existing_annotations=result,
+        )
     return tuple(result)
 
 
@@ -991,9 +1006,11 @@ def _engineering_symbol_layouts(
     width_factor: float,
     *,
     is_zh: bool,
+    existing_annotations: Iterable[AnnotationLayout] = (),
 ) -> list[AnnotationLayout]:
     """Plan collision-free GB/T 131-2006 surface roughness, GB/T 1182 datum, and leader-equipped GD&T frames."""
     out: list[AnnotationLayout] = []
+    prior = [a for a in existing_annotations if a.kind != "frame"]
     s30 = 0.5773502691896257
     sym_h = min(2.6, text_h * 0.80)
     gdt_owner_views = {g.owner_view for g in spec.gdt_frames}
@@ -1086,50 +1103,99 @@ def _engineering_symbol_layouts(
                 )
             )
 
-    # 2. Datum feature symbols ([A]) flush on exact left OUTLINE contour edge of owner_view
+    # 2. Datum feature symbols ([A], [B], [C]) flush on OUTLINE edges without mutual collision
+    used_left_datum_ys: dict[str, list[float]] = {}
+    view_list_ordered = list(views_by_name.values()) or [default_view]
     for idx, dat in enumerate(spec.datums, start=1):
-        v = views_by_name.get(dat.owner_view, default_view)
-        ob, _, horiz_cy = _view_outline_sheet_bounds(spec, v)
-        ax = ob.min_x
-        raw_ay = ob.min_y + ob.height * (0.26 if idx == 1 else 0.14)
-        ay = raw_ay + 2.8 if any(abs(raw_ay - cy) < 2.2 for cy in horiz_cy) else raw_ay
+        cand_views = [views_by_name.get(dat.owner_view, default_view), *[vv for vv in view_list_ordered if vv.name != dat.owner_view]]
+        placed_datum = False
         box_size = 6.2
-        total_left = 6.2 + box_size
-        if ax - total_left > printable.min_x + 1.5:
-            out.append(
-                AnnotationLayout(
-                    "datum-symbol",
-                    dat.letter.strip()[:2],
-                    Bounds(ax - total_left - 0.2, ay - box_size / 2.0 - 0.1, ax + 0.05, ay + box_size / 2.0 + 0.1),
-                    "DIM",
-                    points=((ax, ay),),
-                    annotation_id=f"datum-{idx}",
-                    group_id=f"datum-{idx}",
-                    owner_view=v.name,
-                    allowed_contact=("own-view-endpoint",),
-                )
-            )
+        total_span = 6.2 + box_size
+        for cv in cand_views:
+            ob, _, horiz_cy = _view_outline_sheet_bounds(spec, cv)
+            prev_ys = used_left_datum_ys.setdefault(cv.name, [])
+            ax_left = ob.min_x
+            if ax_left - total_span > printable.min_x + 1.5:
+                for frac in (0.25, 0.56, 0.14, 0.82):
+                    cand_ay = ob.min_y + ob.height * frac
+                    if any(abs(cand_ay - cy) < 2.2 for cy in horiz_cy):
+                        cand_ay += 2.6
+                    if (
+                        ob.min_y + 1.5 <= cand_ay <= ob.max_y - 1.5
+                        and all(abs(cand_ay - py) >= box_size + 1.8 for py in prev_ys)
+                        and all(
+                            not Bounds(ax_left - total_span - 0.2, cand_ay - box_size / 2.0 - 0.1, ax_left + 0.05, cand_ay + box_size / 2.0 + 0.1).intersects(existing.bounds)
+                            for existing in (*prior, *out)
+                        )
+                    ):
+                        prev_ys.append(cand_ay)
+                        out.append(
+                            AnnotationLayout(
+                                "datum-symbol",
+                                dat.letter.strip()[:2],
+                                Bounds(ax_left - total_span - 0.2, cand_ay - box_size / 2.0 - 0.1, ax_left + 0.05, cand_ay + box_size / 2.0 + 0.1),
+                                "DIM",
+                                points=((ax_left, cand_ay),),
+                                annotation_id=f"datum-{idx}",
+                                group_id=f"datum-{idx}",
+                                owner_view=cv.name,
+                                allowed_contact=("own-view-endpoint",),
+                                dim_kind="left",
+                            )
+                        )
+                        placed_datum = True
+                        break
+            if placed_datum:
+                break
+            # Try right OUTLINE contour edge of cv if left edge is occupied or narrow
+            ax_right = ob.max_x
+            if ax_right + total_span < printable.max_x - 1.5:
+                for r_frac in (0.28, 0.62, 0.16, 0.78):
+                    cand_ay = ob.min_y + ob.height * r_frac
+                    if not (ob.min_y + 1.5 <= cand_ay <= ob.max_y - 1.5):
+                        continue
+                    cand_b = Bounds(ax_right - 0.05, cand_ay - box_size / 2.0 - 0.1, ax_right + total_span + 0.2, cand_ay + box_size / 2.0 + 0.1)
+                    if all(not cand_b.intersects(existing.bounds) for existing in (*prior, *out)):
+                        out.append(
+                            AnnotationLayout(
+                                "datum-symbol",
+                                dat.letter.strip()[:2],
+                                cand_b,
+                                "DIM",
+                                points=((ax_right, cand_ay),),
+                                annotation_id=f"datum-{idx}",
+                                group_id=f"datum-{idx}",
+                                owner_view=cv.name,
+                                allowed_contact=("own-view-endpoint",),
+                                dim_kind="right",
+                            )
+                        )
+                        placed_datum = True
+                        break
+                if placed_datum:
+                    break
 
-    # 3. GD&T Feature Control Frames ([◎ | ⌀0.02 | A]) BELOW view-label, with orthogonal leader + arrowhead touching OUTLINE!
+    # 3. GD&T Feature Control Frames ([◎ | ⌀0.02 | A]) BELOW view-label, with non-crossing orthogonal leaders + arrowheads!
+    per_view_gdt_idx: dict[str, int] = {}
     for idx, gdt in enumerate(spec.gdt_frames, start=1):
         v = views_by_name.get(gdt.owner_view, default_view)
+        v_stack_idx = per_view_gdt_idx.get(v.name, 0)
+        per_view_gdt_idx[v.name] = v_stack_idx + 1
         ob, vert_cx, _ = _view_outline_sheet_bounds(spec, v)
         box_h = 5.8
         tol_w = max(11.2, measure_text_width_mm(gdt.tolerance, sym_h, width_factor=width_factor) + 3.6)
         ref_count = len(gdt.datum_refs)
         frame_w = box_h + tol_w + ref_count * box_h
-        fy0 = max(v.bounds.max_y, ob.max_y) + 4.0 + (idx - 1) * (box_h + 2.2)
-        # Shift frame slightly right of view center so orthogonal leader exits cleanly from left side down to top OUTLINE
-        pref_fx0 = v.bounds.center[0] - frame_w * 0.30
+        fy0 = max(v.bounds.max_y, ob.max_y) + 4.0 + v_stack_idx * (box_h + 2.2)
+        pref_fx0 = v.bounds.center[0] - frame_w * 0.25 + v_stack_idx * 2.0
         fx0 = max(printable.min_x + 8.0, min(pref_fx0, printable.max_x - frame_w - 3.0))
-        elbow_pref = max(ob.min_x + 2.5, min(ob.max_x - 2.5, fx0 - 4.2))
+        elbow_pref = max(ob.min_x + 2.5, min(ob.max_x - 2.5, fx0 - 4.2 - v_stack_idx * 4.5))
         if elbow_pref > fx0 - 2.0:
-            # Frame is near left edge; exit leader from right side instead
             leader_side = 1.0
             x_target = _pick_clear_x(
-                max(ob.min_x + 2.5, fx0 + frame_w + 2.2),
-                max(ob.max_x - 2.5, fx0 + frame_w + 3.5),
-                min(ob.max_x - 3.0, fx0 + frame_w + 4.2),
+                max(ob.min_x + 2.5, fx0 + frame_w + 2.2 + v_stack_idx * 4.0),
+                max(ob.max_x - 2.5, fx0 + frame_w + 4.5 + v_stack_idx * 4.0),
+                min(ob.max_x - 3.0, fx0 + frame_w + 4.2 + v_stack_idx * 4.0),
                 vert_cx,
                 clearance=2.2,
             )
@@ -1137,7 +1203,7 @@ def _engineering_symbol_layouts(
             leader_side = -1.0
             x_target = _pick_clear_x(
                 ob.min_x + 2.2,
-                min(ob.max_x - 2.2, fx0 - 2.2),
+                min(ob.max_x - 2.2, fx0 - 2.2 - v_stack_idx * 3.5),
                 elbow_pref,
                 vert_cx,
                 clearance=2.2,

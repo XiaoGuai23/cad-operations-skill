@@ -41,6 +41,8 @@ _SOLID3D_ALLOWED_HEADS = frozenset(
         "_.PLINE",
         "_BOX",
         "_.BOX",
+        "_WEDGE",
+        "_.WEDGE",
         "_CYLINDER",
         "_.CYLINDER",
         "_EXTRUDE",
@@ -72,6 +74,8 @@ _SOLID3D_CREATOR_HEADS = frozenset(
     {
         "_BOX",
         "_.BOX",
+        "_WEDGE",
+        "_.WEDGE",
         "_CYLINDER",
         "_.CYLINDER",
         "_EXTRUDE",
