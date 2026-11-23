@@ -1,6 +1,12 @@
 """Public four-layer mechanical drawing inspection API."""
 
 from .checks import inspect_drawing
+from .legacy_audit import (
+    LegacyAuditIssue,
+    LegacyAuditReport,
+    audit_legacy_dxf,
+    clean_legacy_dxf,
+)
 from .models import (
     AuditIssue,
     AuditReport,
@@ -18,9 +24,13 @@ __all__ = [
     "Category",
     "EngineeringPayloadMutationError",
     "GenerationContext",
+    "LegacyAuditIssue",
+    "LegacyAuditReport",
     "RepairAction",
     "RepairResult",
     "Severity",
+    "audit_legacy_dxf",
+    "clean_legacy_dxf",
     "inspect_drawing",
     "plan_repairs",
     "run_repair_loop",

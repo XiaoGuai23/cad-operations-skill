@@ -25,6 +25,7 @@ from ezdxf.math import Matrix44
 
 from .common import RevisionError, compare_untouched, sha256_file, snapshot_modelspace
 from .edits import _DELETE
+from .ir_engine import compile_nl_to_feature_ir, execute_revision_ir
 from .transaction import DocumentCheckpoint
 from .workflow import apply_revision, inventory_drawing
 
@@ -123,7 +124,9 @@ def _extract_affirmative_prompt(prompt: str) -> tuple[str, bool]:
     return "，".join(kept), had_neg
 
 
-def _is_question_only(prompt: str) -> bool:
+def _is_question_only(prompt: str, *, has_structured_ir: bool = False) -> bool:
+    if has_structured_ir:
+        return False
     txt = prompt.strip()
     if not txt:
         return True
@@ -131,7 +134,10 @@ def _is_question_only(prompt: str) -> bool:
         return True
     edit_verbs = (
         "删", "去掉", "移除", "清除", "改", "变", "设为", "设置", "调整", "放大", "缩小",
-        "移", "偏", "替换", "delete", "remove", "change", "set", "resize", "move", "shift",
+        "移", "偏", "替换", "新增", "添加", "增加", "新开", "加一", "打一", "倒角", "倒圆",
+        "圆角", "导圆", "倒斜角", "斜角", "镜像", "对称复制",
+        "delete", "remove", "change", "set", "resize", "move", "shift",
+        "add", "chamfer", "fillet", "mirror",
     )
     return not any(v in txt.lower() for v in edit_verbs)
 
@@ -268,6 +274,7 @@ def execute_nl_region_revision(
     region_box: Sequence[float] | None = None,
     candidate_handles: Sequence[str] | None = None,
     expected_sha256: str | None = None,
+    structured_ir: dict[str, Any] | None = None,
     dry_run: bool = False,
 ) -> dict[str, Any]:
     """Compile and execute a natural-language marquee-box revision atomically."""
@@ -315,7 +322,7 @@ def execute_nl_region_revision(
     # ------------------------------------------------------------------
     # 0. Question / Inspection Pin Mode (no mutation)
     # ------------------------------------------------------------------
-    if _is_question_only(prompt_clean):
+    if _is_question_only(prompt_clean, has_structured_ir=(structured_ir is not None)):
         type_summary: dict[str, int] = {}
         radii: list[float] = []
         texts_found: list[str] = []
@@ -343,13 +350,36 @@ def execute_nl_region_revision(
             "summary_zh": f"框选区域共命中 {len(working_handles)} 个图元（{', '.join(parts_desc) or '空'}）{extra}",
         }
 
-    if not working_handles:
-        raise RevisionError("框选区域内未命中可修改的 CAD 图元，请重新拉取蓝色虚线框覆盖目标特征。")
-
     # Strip negated / preservation-only clauses ("不要删除这个孔，把它的直径改为 18")
     active_prompt, had_negation = _extract_affirmative_prompt(prompt_clean)
-    if not active_prompt:
+    if not active_prompt and structured_ir is None:
         raise RevisionError(f"指令「{prompt_clean}」仅包含否定/保留说明，未指定需要执行的修改动作。")
+
+    # Structured IR / Feature Primitives (add hole, bolt circle, chamfer, fillet, mirror)
+    compiled_ir = (
+        structured_ir
+        if structured_ir is not None
+        else compile_nl_to_feature_ir(
+            active_prompt,
+            candidate_handles=working_handles,
+            region_box=box_tuple,
+        )
+    )
+    if compiled_ir is not None:
+        ir_res = execute_revision_ir(
+            src_path,
+            output_dir,
+            compiled_ir,
+            region_box=box_tuple,
+            candidate_handles=working_handles,
+            expected_sha256=expected_sha256,
+            dry_run=dry_run,
+        )
+        ir_res["prompt"] = prompt_clean
+        return ir_res
+
+    if not working_handles:
+        raise RevisionError("框选区域内未命中可修改的 CAD 图元，请重新拉取蓝色虚线框覆盖目标特征。")
 
     out_dir = Path(output_dir).resolve()
     out_dir.parent.mkdir(parents=True, exist_ok=True)

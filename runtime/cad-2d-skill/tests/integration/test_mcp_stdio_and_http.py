@@ -167,7 +167,7 @@ def test_mcp_http_and_web_api_generate_mechanical_sld_pavement_and_download_arti
     # 1. Health check
     health = client.get("/api/v1/health")
     assert health.status_code == 200
-    assert health.json()["tool_count"] == 20
+    assert health.json()["tool_count"] == 23
 
     # 1b. MCP App (ui://cad-operations/viewer.html, aux_pane entrypoint, app-only scene loader)
     tools_resp = client.post(

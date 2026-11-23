@@ -98,7 +98,40 @@ class WebNLReviseRequest(BaseModel):
     region_box: list[float] | None = None
     candidate_handles: list[str] | None = None
     expected_sha256: str | None = None
+    structured_ir: dict[str, Any] | None = None
     dry_run: bool = False
+
+
+class WebRevisionIRRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    task_id: str | None = None
+    dxf_path: str | None = None
+    artifact_name: str = "drawing.dxf"
+    ir: dict[str, Any]
+    region_box: list[float] | None = None
+    candidate_handles: list[str] | None = None
+    expected_sha256: str | None = None
+    dry_run: bool = False
+
+
+class WebLegacyAuditRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    task_id: str | None = None
+    dxf_path: str | None = None
+    artifact_name: str = "drawing.dxf"
+    gap_tolerance_mm: float = 2.0
+    auto_clean: bool = False
+    close_micro_gaps_tol: float = 0.8
+
+
+class WebVectorDiffRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    before_dxf_path: str
+    after_dxf_path: str
+    tolerance: float = 1e-4
 
 
 class WebInventoryRequest(BaseModel):
@@ -298,6 +331,9 @@ def create_mcp_http_app(
             score_res = call_mcp_tool(sandbox, "cad_score_drawing", {"dxf_path": str(validated_path)})
             if not score_res["isError"]:
                 payload["rubric_score"] = score_res["structuredContent"]
+            leg_res = call_mcp_tool(sandbox, "cad_audit_legacy_drawing", {"dxf_path": str(validated_path)})
+            if not leg_res["isError"]:
+                payload["legacy_audit"] = leg_res["structuredContent"]
             try:
                 payload["scene"] = extract_dxf_vector_scene(validated_path)
             except Exception:
@@ -399,6 +435,26 @@ def create_mcp_http_app(
         structured = _attach_download_urls(res["structuredContent"])
         status_code = 400 if res["isError"] else 200
         return JSONResponse(status_code=status_code, content=structured)
+
+    @app.post("/api/v1/tasks/revise-ir")
+    def web_revise_ir(req: WebRevisionIRRequest) -> JSONResponse:
+        res = call_mcp_tool(sandbox, "cad_apply_revision_ir", req.model_dump())
+        structured = _attach_download_urls(res["structuredContent"])
+        status_code = 400 if res["isError"] else 200
+        return JSONResponse(status_code=status_code, content=structured)
+
+    @app.post("/api/v1/tasks/legacy-audit")
+    def web_legacy_audit(req: WebLegacyAuditRequest) -> JSONResponse:
+        res = call_mcp_tool(sandbox, "cad_audit_legacy_drawing", req.model_dump())
+        structured = _attach_download_urls(res["structuredContent"])
+        status_code = 400 if res["isError"] else 200
+        return JSONResponse(status_code=status_code, content=structured)
+
+    @app.post("/api/v1/tasks/vector-diff")
+    def web_vector_diff(req: WebVectorDiffRequest) -> JSONResponse:
+        res = call_mcp_tool(sandbox, "cad_vector_diff", req.model_dump())
+        status_code = 400 if res["isError"] else 200
+        return JSONResponse(status_code=status_code, content=res["structuredContent"])
 
     @app.post("/api/v1/tasks/score")
     def web_score_drawing(req: WebScoreRequest) -> JSONResponse:

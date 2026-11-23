@@ -16,6 +16,7 @@ from cad_skill_core.documents.spec_compiler import (
     compile_spec_from_files,
 )
 from cad_skill_core.environment import check_environment
+from cad_skill_core.inspection.legacy_audit import audit_legacy_dxf, clean_legacy_dxf
 from cad_skill_core.inspection.rubric_scorer import score_dxf_drawing
 from cad_skill_core.modeling3d import (
     Model3DSpec,
@@ -29,6 +30,7 @@ from cad_skill_core.modeling3d import (
 )
 from cad_skill_core.pipeline import PipelineOptions, run_task
 from cad_skill_core.revision.common import sha256_file
+from cad_skill_core.revision.ir_engine import StructuredRevisionIR, execute_revision_ir
 from cad_skill_core.revision.local_review import review_files
 from cad_skill_core.revision.nl_revise import execute_nl_region_revision
 from cad_skill_core.revision.operations import operation_catalog
@@ -42,7 +44,7 @@ from cad_skill_core.standards.sample_learner import (
     save_standard_yaml,
 )
 
-from .cad_scene import extract_dxf_vector_scene
+from .cad_scene import compute_dxf_vector_diff, extract_dxf_vector_scene
 from .industry_adapters import (
     build_auto_style_font_map,
     generate_electrical_sld_bundle,
@@ -288,7 +290,55 @@ class ReviseByNLArgs(StrictInputModel):
         default=None,
         description="Optional baseline SHA-256 fingerprint guard.",
     )
+    structured_ir: dict[str, Any] | None = Field(
+        default=None,
+        description="Optional pre-compiled StructuredRevisionIR ('cad-revision-ir/v2') JSON object from an LLM/Agent.",
+    )
     dry_run: bool = Field(default=False, description="Simulate without writing revised DXF.")
+
+
+class AuditLegacyDrawingArgs(StrictInputModel):
+    dxf_path: str | None = Field(default=None, description="Path to an external/legacy DXF file inside allowed roots.")
+    task_id: str | None = Field(default=None, description="Existing MCP task_id containing a DXF artifact.")
+    artifact_name: str = Field(default="drawing.dxf", description="Artifact filename inside task_id.")
+    gap_tolerance_mm: float = Field(
+        default=2.0,
+        gt=0.0,
+        le=25.0,
+        description="Maximum endpoint micro-gap distance (mm) flagged as an unclosed contour gap.",
+    )
+    auto_clean: bool = Field(
+        default=False,
+        description="When true, also write a cleaned DXF copy removing zero-length entities, duplicates, and micro-gaps.",
+    )
+    close_micro_gaps_tol: float = Field(
+        default=0.8,
+        ge=0.0,
+        le=5.0,
+        description="Endpoint micro-gap snap threshold (mm) used when auto_clean=true.",
+    )
+
+
+class ApplyRevisionIRArgs(StrictInputModel):
+    dxf_path: str | None = Field(default=None, description="Source DXF path inside allowed roots.")
+    task_id: str | None = Field(default=None, description="Existing MCP task_id containing source DXF.")
+    artifact_name: str = Field(default="drawing.dxf", description="Artifact filename inside task_id.")
+    ir: dict[str, Any] = Field(
+        description=(
+            "Typed StructuredRevisionIR ('cad-revision-ir/v2') JSON object supporting "
+            "add_circle_hole, add_bolt_circle, chamfer_corner, fillet_corner, and mirror_entities."
+        )
+    )
+    region_box: list[float] | None = Field(default=None, description="Optional [xmin, ymin, xmax, ymax] marquee box.")
+    candidate_handles: list[str] | None = Field(default=None, description="Optional target entity handles.")
+    expected_sha256: str | None = Field(default=None, description="Optional baseline SHA-256 guard.")
+    dry_run: bool = Field(default=False, description="Validate and simulate without writing output DXF.")
+
+
+class VectorDiffArgs(StrictInputModel):
+    before_dxf_path: str = Field(description="Baseline ('before') DXF path inside allowed roots.")
+    after_dxf_path: str = Field(description="Revised ('after') DXF path inside allowed roots.")
+    tolerance: float = Field(default=1e-4, gt=0.0, le=1.0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1015,6 +1065,7 @@ def _handle_revise_by_nl(
         region_box=args.region_box,
         candidate_handles=args.candidate_handles,
         expected_sha256=args.expected_sha256,
+        structured_ir=args.structured_ir,
         dry_run=args.dry_run,
     )
 
@@ -1032,6 +1083,7 @@ def _handle_revise_by_nl(
     out_dxf = Path(nl_res["output_path"])
     rubric_dict = score_dxf_drawing(out_dxf).to_dict()
     scene_data = extract_dxf_vector_scene(out_dxf)
+    vec_diff = compute_dxf_vector_diff(source_dxf, out_dxf)
     inv_after = inventory_drawing(out_dxf)
     font_map = build_auto_style_font_map(out_dxf)
     with sandbox.render_lock:
@@ -1056,6 +1108,7 @@ def _handle_revise_by_nl(
         "source_dxf_path": str(source_dxf),
         **nl_res,
         "rubric_score": rubric_dict,
+        "vector_diff": vec_diff,
         "artifacts": artifacts,
     }
     sandbox.write_task_metadata(task_id, meta_payload)
@@ -1068,6 +1121,106 @@ def _handle_revise_by_nl(
         None,
         False,
     )
+
+
+def _handle_audit_legacy_drawing(
+    sandbox: MCPWorkspaceSandbox, args: AuditLegacyDrawingArgs
+) -> tuple[dict[str, Any], Path | None, bool]:
+    source_dxf = _resolve_dxf_source(sandbox, args.dxf_path, args.task_id, args.artifact_name)
+    report = audit_legacy_dxf(source_dxf, gap_tolerance_mm=args.gap_tolerance_mm)
+    if not args.auto_clean:
+        return report.to_dict(), None, False
+
+    task_id, task_dir = sandbox.allocate_task_dir("legclean")
+    out_dir = task_dir / "output"
+    out_dxf = out_dir / "cleaned.dxf"
+    clean_res = clean_legacy_dxf(
+        source_dxf,
+        out_dxf,
+        close_micro_gaps_tol=args.close_micro_gaps_tol,
+    )
+    scene_data = extract_dxf_vector_scene(out_dxf)
+    vec_diff = compute_dxf_vector_diff(source_dxf, out_dxf)
+    inv_after = inventory_drawing(out_dxf)
+    artifacts = [
+        {
+            "name": out_dxf.name,
+            "path": str(out_dxf.resolve()),
+            "size": out_dxf.stat().st_size,
+            "sha256": sha256_file(out_dxf),
+        }
+    ]
+    meta_payload = {
+        "task_id": task_id,
+        "domain": "legacy_clean",
+        "source_dxf_path": str(source_dxf),
+        "before_audit": report.to_dict(),
+        **clean_res,
+        "vector_diff": vec_diff,
+        "artifacts": artifacts,
+    }
+    sandbox.write_task_metadata(task_id, meta_payload)
+    return {**meta_payload, "scene": scene_data, "inventory": inv_after}, None, False
+
+
+def _handle_apply_revision_ir(
+    sandbox: MCPWorkspaceSandbox, args: ApplyRevisionIRArgs
+) -> tuple[dict[str, Any], Path | None, bool]:
+    source_dxf = _resolve_dxf_source(sandbox, args.dxf_path, args.task_id, args.artifact_name)
+    task_id, task_dir = sandbox.allocate_task_dir("irrev")
+    out_dir = task_dir / "output"
+    ir_res = execute_revision_ir(
+        source_dxf,
+        out_dir,
+        args.ir,
+        region_box=args.region_box,
+        candidate_handles=args.candidate_handles,
+        expected_sha256=args.expected_sha256,
+        dry_run=args.dry_run,
+    )
+    if args.dry_run or not ir_res.get("output_path"):
+        payload = {
+            "task_id": task_id,
+            "domain": "ir_revision",
+            "source_dxf_path": str(source_dxf),
+            **ir_res,
+            "artifacts": [],
+        }
+        sandbox.write_task_metadata(task_id, payload)
+        return payload, None, False
+
+    out_dxf = Path(ir_res["output_path"])
+    scene_data = extract_dxf_vector_scene(out_dxf)
+    vec_diff = compute_dxf_vector_diff(source_dxf, out_dxf)
+    inv_after = inventory_drawing(out_dxf)
+    rubric_dict = score_dxf_drawing(out_dxf).to_dict()
+    artifacts = [
+        {
+            "name": out_dxf.name,
+            "path": str(out_dxf.resolve()),
+            "size": out_dxf.stat().st_size,
+            "sha256": sha256_file(out_dxf),
+        }
+    ]
+    meta_payload = {
+        "task_id": task_id,
+        "domain": "ir_revision",
+        "source_dxf_path": str(source_dxf),
+        **ir_res,
+        "rubric_score": rubric_dict,
+        "vector_diff": vec_diff,
+        "artifacts": artifacts,
+    }
+    sandbox.write_task_metadata(task_id, meta_payload)
+    return {**meta_payload, "scene": scene_data, "inventory": inv_after}, None, False
+
+
+def _handle_vector_diff(
+    sandbox: MCPWorkspaceSandbox, args: VectorDiffArgs
+) -> tuple[dict[str, Any], Path | None, bool]:
+    before_p = sandbox.resolve_readable_file(args.before_dxf_path)
+    after_p = sandbox.resolve_readable_file(args.after_dxf_path)
+    return compute_dxf_vector_diff(before_p, after_p, tolerance=args.tolerance), None, False
 
 
 TOOLS: tuple[ToolDefinition, ...] = (
@@ -1207,6 +1360,25 @@ TOOLS: tuple[ToolDefinition, ...] = (
         _handle_revise_by_nl,
         meta={"ui": {"resourceUri": MCP_APP_RESOURCE_URI}},
     ),
+    ToolDefinition(
+        "cad_audit_legacy_drawing",
+        "Audit any arbitrary external/legacy DXF drawing for tampered dimensions, exploded fake dimensions, open contour gaps, duplicates, degenerate entities, and text collisions (with optional auto_clean).",
+        AuditLegacyDrawingArgs,
+        _handle_audit_legacy_drawing,
+    ),
+    ToolDefinition(
+        "cad_apply_revision_ir",
+        "Execute a typed StructuredRevisionIR ('cad-revision-ir/v2') supporting add_circle_hole, add_bolt_circle, chamfer_corner, fillet_corner, and mirror_entities under strict compare_untouched guardrails.",
+        ApplyRevisionIRArgs,
+        _handle_apply_revision_ir,
+        meta={"ui": {"resourceUri": MCP_APP_RESOURCE_URI}},
+    ),
+    ToolDefinition(
+        "cad_vector_diff",
+        "Compute handle-level red/green vector primitive overlay diff between before and after DXF drawings.",
+        VectorDiffArgs,
+        _handle_vector_diff,
+    ),
 )
 
 TOOL_BY_NAME: dict[str, ToolDefinition] = {tool.name: tool for tool in TOOLS}
@@ -1308,6 +1480,12 @@ def list_mcp_resources() -> list[dict[str, Any]]:
             "description": "Discoverable catalog of verified DXF revision primitives and required fields.",
             "mimeType": "application/json",
         },
+        {
+            "uri": "cad://schemas/revision-ir",
+            "name": "StructuredRevisionIR v2 JSON Schema",
+            "description": "Strict JSON Schema for LLM/Agent StructuredRevisionIR ('cad-revision-ir/v2') feature primitives.",
+            "mimeType": "application/schema+json",
+        },
     ]
 
 
@@ -1375,6 +1553,17 @@ def read_mcp_resource(sandbox: MCPWorkspaceSandbox, uri: str) -> dict[str, Any]:
                     "uri": uri,
                     "mimeType": "application/json",
                     "text": text,
+                }
+            ]
+        }
+    if uri == "cad://schemas/revision-ir":
+        schema_text = json.dumps(StructuredRevisionIR.model_json_schema(), ensure_ascii=False, indent=2)
+        return {
+            "contents": [
+                {
+                    "uri": uri,
+                    "mimeType": "application/schema+json",
+                    "text": schema_text,
                 }
             ]
         }

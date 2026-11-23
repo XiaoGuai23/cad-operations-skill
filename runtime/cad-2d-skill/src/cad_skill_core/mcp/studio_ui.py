@@ -419,9 +419,15 @@ def render_studio_html() -> str:
           <span class="badge">就绪 — 选择左侧参数点击“立即生成”，鼠标滚轮无级缩放图纸</span>
         </div>
         <div class="row">
-          <button class="ghost" id="btnQuickDiff2D" style="display:none;" title="一键对比框选口语改图前后的像素差异">🔍 改图前后对比</button>
+          <span class="badge" id="versionBadge2D" style="display:none;">v0 原图</span>
+          <button class="ghost" id="btnUndo2D" style="display:none;" title="回退到上一版 DXF (Undo)">↶ 撤销</button>
+          <button class="ghost" id="btnRedo2D" style="display:none;" title="前进到下一版 DXF (Redo)">↷ 重做</button>
+          <button class="ghost" id="btnVectorDiff2D" style="display:none;" title="在矢量画布原地叠加红(旧轮廓/已删)绿(新增/已改)对比">🔴🟢 红绿叠图 Diff</button>
+          <button class="ghost" id="btnQuickDiff2D" style="display:none;" title="一键对比框选口语改图前后的分屏差异">🔍 分屏对比</button>
+          <button class="ghost" id="btnLegacyAudit2D" title="独立检测篡改尺寸、炸开标注、轮廓微缝断口、重线与压线">🩺 存量体检</button>
+          <button class="ghost" id="btnLegacyClean2D" style="display:none;" title="一键自动清理零长退化图元、重叠图元并吸附闭合轮廓微缝">🧹 自动清洗</button>
           <button class="ghost" id="btnSendToRevise" style="display:none;">✏️ 送入局部改图台</button>
-          <button class="ghost active" id="btnMarquee2D" title="拉出蓝色虚线框，在胶囊里输入『把孔改成Φ18』『删掉虚线』即可原地改图！">🟦 框选一句话改图/提问</button>
+          <button class="ghost active" id="btnMarquee2D" title="单击图元直接点选，或拉出蓝色虚线框输入『倒角C5』『倒圆角R6』『新增6×Ø10均布螺栓孔 节圆80』原地改图！">🟦 点选/框选改图</button>
           <button class="ghost" id="btnFit2D">⛶ 适应窗口</button>
           <button class="ghost" id="btnTheme2D">☀️ 白纸蓝图</button>
           <button class="ghost" id="btnGrid2D"># 坐标网格</button>
@@ -497,6 +503,12 @@ def render_studio_html() -> str:
     let editingPinIndex2D = null; // index into savedRegionPins2D when re-editing an existing pin!
     let highlightedHandle = null;
     let highlightedHandleSet = null;
+    let hoverHandle2D = null;
+    let vectorDiffActive2D = false;
+    let currentVectorDiff2D = null;
+    let versionStack2D = [];
+    let versionCursor2D = -1;
+    let legacyAuditIssues2D = [];
 
     // 2D Camera (world mm -> screen px: sx = camPanX + wx * camScale, sy = camPanY - wy * camScale)
     let camScale = 1.8, camPanX = 60, camPanY = 420;
@@ -1177,26 +1189,11 @@ def render_studio_html() -> str:
       const lyrMap = {};
       for (const l of cadScene.layers) lyrMap[l.name] = l;
 
-      for (const p of cadScene.primitives) {
-        if (hiddenLayers.has(p.l)) continue;
-        const lInfo = lyrMap[p.l];
-        const isHi = (highlightedHandle && p.h === highlightedHandle) || (highlightedHandleSet && highlightedHandleSet.has(p.h));
-        let baseStroke;
-        if (darkCadTheme) {
-          baseStroke = lInfo?.hex_dark || "#f8fafc";
-        } else {
-          baseStroke = p.l === "CENTER" ? "#b91c1c" : "#111827";
-        }
-        const stroke = isHi ? "#1668dc" : baseStroke;
-        ctx.strokeStyle = stroke;
-        ctx.fillStyle = stroke;
-        ctx.lineWidth = isHi ? 2.4 : ((p.l === "OUTLINE" || p.l === "FRAME" || p.l === "BUS") ? 1.45 : 0.9);
+      const diffOn = vectorDiffActive2D && currentVectorDiff2D;
+      const diffAdded = diffOn ? new Set(currentVectorDiff2D.added_handles || []) : null;
+      const diffMod = diffOn ? new Set(currentVectorDiff2D.modified_handles || []) : null;
 
-        const lt = lInfo?.linetype || "CONTINUOUS";
-        if (!isHi && lt.includes("CENTER")) ctx.setLineDash([10, 4, 2, 4]);
-        else if (!isHi && lt.includes("HIDDEN")) ctx.setLineDash([6, 4]);
-        else ctx.setLineDash([]);
-
+      function renderPrimPath2D(p) {
         if (p.k === "seg") {
           const [x1, y1, x2, y2] = p.d;
           ctx.beginPath();
@@ -1246,6 +1243,110 @@ def render_studio_html() -> str:
             ctx.restore();
           }
         }
+      }
+
+      // 1. If Red/Green Vector Diff is active, render ghost pre-edit / deleted contours in Crimson Red Dashed
+      if (diffOn && Array.isArray(currentVectorDiff2D.ghost_before_primitives)) {
+        ctx.save();
+        ctx.globalAlpha = 0.88;
+        ctx.strokeStyle = "#ef4444";
+        ctx.fillStyle = "#ef4444";
+        ctx.lineWidth = 2.1;
+        ctx.setLineDash([6, 4]);
+        for (const gp of currentVectorDiff2D.ghost_before_primitives) {
+          if (hiddenLayers.has(gp.l)) continue;
+          renderPrimPath2D(gp);
+        }
+        ctx.restore();
+      }
+
+      // 2. Render current vector scene primitives (with diff coloring + hover highlight + selection highlight)
+      for (const p of cadScene.primitives) {
+        if (hiddenLayers.has(p.l)) continue;
+        const lInfo = lyrMap[p.l];
+        const isHi = (highlightedHandle && p.h === highlightedHandle) || (highlightedHandleSet && highlightedHandleSet.has(p.h));
+        const isHover = !isHi && hoverHandle2D && p.h === hoverHandle2D;
+        const isDiffGreen = diffOn && (diffAdded.has(p.h) || diffMod.has(p.h));
+
+        ctx.save();
+        let baseStroke;
+        if (darkCadTheme) {
+          baseStroke = lInfo?.hex_dark || "#f8fafc";
+        } else {
+          baseStroke = p.l === "CENTER" ? "#b91c1c" : "#111827";
+        }
+        let stroke = baseStroke;
+        let lw = (p.l === "OUTLINE" || p.l === "FRAME" || p.l === "BUS") ? 1.45 : 0.9;
+        if (diffOn && !isDiffGreen && !isHi && !isHover) {
+          ctx.globalAlpha = 0.24;
+        }
+        if (isDiffGreen) {
+          stroke = "#10b981";
+          lw = 2.4;
+        }
+        if (isHover) {
+          stroke = "#f59e0b";
+          lw = 2.5;
+        }
+        if (isHi) {
+          stroke = "#1668dc";
+          lw = 2.5;
+        }
+        ctx.strokeStyle = stroke;
+        ctx.fillStyle = stroke;
+        ctx.lineWidth = lw;
+
+        const lt = lInfo?.linetype || "CONTINUOUS";
+        if (!isHi && !isHover && !isDiffGreen && lt.includes("CENTER")) ctx.setLineDash([10, 4, 2, 4]);
+        else if (!isHi && !isHover && !isDiffGreen && lt.includes("HIDDEN")) ctx.setLineDash([6, 4]);
+        else ctx.setLineDash([]);
+
+        renderPrimPath2D(p);
+        ctx.restore();
+      }
+
+      // 3. Diff Legend Banner on Canvas
+      if (diffOn && currentVectorDiff2D.summary) {
+        const sm = currentVectorDiff2D.summary;
+        const banner = `🔴 旧轮廓/已删: ${sm.deleted + sm.modified}   🟢 新特征/已改: ${sm.added + sm.modified}   ⚪ 未动图元: ${sm.untouched}`;
+        ctx.save();
+        ctx.font = "bold 12px 'Microsoft YaHei', sans-serif";
+        const bw = ctx.measureText(banner).width + 24;
+        ctx.fillStyle = "rgba(15, 23, 42, 0.86)";
+        ctx.fillRect(W - bw - 14, 12, bw, 28);
+        ctx.fillStyle = "#f8fafc";
+        ctx.textBaseline = "middle";
+        ctx.fillText(banner, W - bw - 2, 26);
+        ctx.restore();
+      }
+
+      // 4. Legacy Audit Issue Markers (red/amber badges at exact CAD coordinates)
+      for (let i = 0; i < legacyAuditIssues2D.length; i++) {
+        const iss = legacyAuditIssues2D[i];
+        if (!iss.location_box) continue;
+        const [lx0, ly0, lx1, ly1] = iss.location_box;
+        const sx0 = camPanX + lx0 * camScale, sy1 = camPanY - ly0 * camScale;
+        const sx1 = camPanX + lx1 * camScale, sy0 = camPanY - ly1 * camScale;
+        const isErr = iss.severity === "error";
+        const col = isErr ? "#ef4444" : "#f59e0b";
+        ctx.save();
+        ctx.strokeStyle = col;
+        ctx.fillStyle = isErr ? "rgba(239,68,68,0.09)" : "rgba(245,158,11,0.09)";
+        ctx.lineWidth = 1.6;
+        ctx.setLineDash([4, 3]);
+        ctx.fillRect(sx0, sy0, sx1 - sx0, sy1 - sy0);
+        ctx.strokeRect(sx0, sy0, sx1 - sx0, sy1 - sy0);
+        ctx.setLineDash([]);
+        ctx.fillStyle = col;
+        ctx.beginPath();
+        ctx.arc(sx1 + 9, sy0 - 9, 10.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = "#fff";
+        ctx.font = "bold 10.5px sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText("!" + (i + 1), sx1 + 9, sy0 - 8.5);
+        ctx.restore();
       }
 
       // Saved numbered region comment boxes & pins
@@ -1318,6 +1419,161 @@ def render_studio_html() -> str:
         if (hit) handles.add(p.h);
       }
       return Array.from(handles);
+    }
+
+    function distToSeg2D(px, py, x1, y1, x2, y2) {
+      const dx = x2 - x1, dy = y2 - y1;
+      const l2 = dx * dx + dy * dy;
+      if (l2 <= 1e-12) return Math.hypot(px - x1, py - y1);
+      const t = Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / l2));
+      return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
+    }
+
+    function hitTestPoint2D(wx, wy, tolMm) {
+      if (!cadScene) return null;
+      let bestHandle = null;
+      let bestDist = tolMm;
+      for (const p of cadScene.primitives) {
+        if (!p.h || p.l === "FRAME" || hiddenLayers.has(p.l)) continue;
+        let d = 1e9;
+        if (p.k === "seg") {
+          d = distToSeg2D(wx, wy, p.d[0], p.d[1], p.d[2], p.d[3]);
+        } else if (p.k === "circle") {
+          d = Math.abs(Math.hypot(wx - p.d[0], wy - p.d[1]) - p.d[2]);
+        } else if (p.k === "arc") {
+          const [cx, cy, r, sa, ea] = p.d;
+          const ang = ((Math.atan2(wy - cy, wx - cx) * 180) / Math.PI + 360) % 360;
+          const sweep = (ea - sa + 360) % 360;
+          const rel = (ang - sa + 360) % 360;
+          if (rel <= sweep + 2.0) d = Math.abs(Math.hypot(wx - cx, wy - cy) - r);
+        } else if (p.k === "poly" || p.k === "solid") {
+          const cnt = (p.c || p.k === "solid") ? p.pts.length : p.pts.length - 1;
+          for (let i = 0; i < cnt; i++) {
+            const [x1, y1] = p.pts[i], [x2, y2] = p.pts[(i + 1) % p.pts.length];
+            d = Math.min(d, distToSeg2D(wx, wy, x1, y1, x2, y2));
+          }
+        } else if (p.k === "text") {
+          const tw = Math.max(p.s, (p.t || "").length * p.s * 0.60);
+          const tx0 = (p.a === "mc" || p.a === "c") ? (p.x - tw / 2) : p.x;
+          const ty0 = p.a === "mc" ? (p.y - p.s / 2) : p.y;
+          if (wx >= tx0 - tolMm * 0.4 && wx <= tx0 + tw + tolMm * 0.4 && wy >= ty0 - tolMm * 0.4 && wy <= ty0 + p.s + tolMm * 0.4) {
+            d = 0.05;
+          }
+        }
+        if (d < bestDist) {
+          bestDist = d;
+          bestHandle = p.h;
+        }
+      }
+      return bestHandle;
+    }
+
+    function computeHandlesBounds2D(handles) {
+      if (!cadScene || !handles?.length) return null;
+      const hset = new Set(handles);
+      let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+      const acc = (x, y) => { if (x < x0) x0 = x; if (y < y0) y0 = y; if (x > x1) x1 = x; if (y > y1) y1 = y; };
+      for (const p of cadScene.primitives) {
+        if (!hset.has(p.h)) continue;
+        if (p.k === "seg") { acc(p.d[0], p.d[1]); acc(p.d[2], p.d[3]); }
+        else if (p.k === "circle" || p.k === "arc") { acc(p.d[0] - p.d[2], p.d[1] - p.d[2]); acc(p.d[0] + p.d[2], p.d[1] + p.d[2]); }
+        else if (p.k === "poly" || p.k === "solid") { p.pts.forEach(([x, y]) => acc(x, y)); }
+        else if (p.k === "text") { acc(p.x - 4, p.y - 2); acc(p.x + Math.max(p.s * 3, 10), p.y + p.s + 2); }
+      }
+      if (x0 > x1) return null;
+      return { wx0: x0 - 2.5, wy0: y0 - 2.5, wx1: x1 + 2.5, wy1: y1 + 2.5 };
+    }
+
+    function findClickedLegacyPin2D(mx, my) {
+      for (let i = legacyAuditIssues2D.length - 1; i >= 0; i--) {
+        const iss = legacyAuditIssues2D[i];
+        if (!iss.location_box) continue;
+        const sx1 = camPanX + iss.location_box[2] * camScale;
+        const sy0 = camPanY - iss.location_box[3] * camScale;
+        if (Math.hypot(mx - (sx1 + 9), my - (sy0 - 9)) <= 15) return i;
+      }
+      return -1;
+    }
+
+    function syncVersionButtons2D() {
+      const bVer = document.getElementById("versionBadge2D");
+      const bUndo = document.getElementById("btnUndo2D");
+      const bRedo = document.getElementById("btnRedo2D");
+      const bVDiff = document.getElementById("btnVectorDiff2D");
+      if (versionStack2D.length > 0 && versionCursor2D >= 0) {
+        const cur = versionStack2D[versionCursor2D];
+        bVer.style.display = "inline-block";
+        bVer.textContent = `${cur.label} (${versionCursor2D + 1}/${versionStack2D.length})`;
+        bUndo.style.display = versionStack2D.length > 1 ? "inline-block" : "none";
+        bRedo.style.display = versionStack2D.length > 1 ? "inline-block" : "none";
+        bUndo.disabled = versionCursor2D <= 0;
+        bRedo.disabled = versionCursor2D >= versionStack2D.length - 1;
+        bUndo.style.opacity = bUndo.disabled ? "0.4" : "1";
+        bRedo.style.opacity = bRedo.disabled ? "0.4" : "1";
+        bVDiff.style.display = cur.vectorDiff ? "inline-block" : "none";
+        bVDiff.classList.toggle("active", vectorDiffActive2D && !!cur.vectorDiff);
+      } else {
+        bVer.style.display = "none";
+        bUndo.style.display = "none";
+        bRedo.style.display = "none";
+        bVDiff.style.display = "none";
+      }
+    }
+
+    function initVersionStack2D(dxfPath, scene, sha256 = null, label = "v0 原图") {
+      if (!scene) return;
+      versionStack2D = [{
+        dxfPath: dxfPath || scene.dxf_path || null,
+        sha256: sha256 || scene.sha256 || null,
+        scene,
+        vectorDiff: null,
+        label
+      }];
+      versionCursor2D = 0;
+      currentVectorDiff2D = null;
+      vectorDiffActive2D = false;
+      legacyAuditIssues2D = [];
+      document.getElementById("btnLegacyClean2D").style.display = "none";
+      syncVersionButtons2D();
+    }
+
+    function pushVersionNode2D(dxfPath, scene, vectorDiff, labelSuffix = "") {
+      if (!scene) return;
+      if (versionCursor2D < versionStack2D.length - 1) {
+        versionStack2D = versionStack2D.slice(0, versionCursor2D + 1);
+      }
+      const nextNo = versionStack2D.length;
+      versionStack2D.push({
+        dxfPath: dxfPath || scene.dxf_path || null,
+        sha256: scene.sha256 || null,
+        scene,
+        vectorDiff: vectorDiff || null,
+        label: `v${nextNo}${labelSuffix ? "·" + labelSuffix : ""}`
+      });
+      versionCursor2D = versionStack2D.length - 1;
+      currentVectorDiff2D = vectorDiff || null;
+      if (currentVectorDiff2D) vectorDiffActive2D = true; // Auto-highlight red/green changes right after edit!
+      syncVersionButtons2D();
+    }
+
+    function applyVersionNode2D(idx) {
+      if (idx < 0 || idx >= versionStack2D.length) return;
+      versionCursor2D = idx;
+      const node = versionStack2D[idx];
+      cadScene = node.scene;
+      currentVectorDiff2D = node.vectorDiff;
+      if (!currentVectorDiff2D) vectorDiffActive2D = false;
+      if (node.dxfPath) {
+        revState.dxfPath = node.dxfPath;
+        revState.sha256 = node.sha256;
+      }
+      highlightedHandle = null;
+      highlightedHandleSet = null;
+      closePromptPill2D();
+      syncVersionButtons2D();
+      renderLayerPanel();
+      draw2DScene();
+      setAlert(`⏱️ 已切换至历史版本 ${node.label}`, "ok");
     }
 
     function findClickedPinIndex2D(mx, my) {
@@ -1489,6 +1745,7 @@ def render_studio_html() -> str:
           if (res.mode === "revision" && res.scene) {
             cadScene = res.scene;
             lastTaskData = res;
+            pushVersionNode2D(res.output_path, res.scene, res.vector_diff || null, res.action || "改图");
             if (res.inventory) {
               revState = {
                 dxfPath: res.output_path,
@@ -1639,7 +1896,7 @@ def render_studio_html() -> str:
       draw2DScene();
     });
 
-    window.addEventListener("mouseup", () => {
+    window.addEventListener("mouseup", (ev) => {
       isPanning2D = false;
       drag3D = false;
       if (isSelectingBox2D) {
@@ -1647,10 +1904,43 @@ def render_studio_html() -> str:
         if (activeMarquee2D) {
           const sx0 = camPanX + activeMarquee2D.wx0 * camScale, sy1 = camPanY - activeMarquee2D.wy0 * camScale;
           const sx1 = camPanX + activeMarquee2D.wx1 * camScale, sy0 = camPanY - activeMarquee2D.wy1 * camScale;
-          if (Math.abs(sx1 - sx0) < 10 || Math.abs(sy1 - sy0) < 10) {
-            closePromptPill2D();
+          if (Math.abs(sx1 - sx0) < 9 && Math.abs(sy1 - sy0) < 9) {
+            // Single-click entity point-selection mode!
+            const rect = cv2d.getBoundingClientRect();
+            const mx = ev.clientX - rect.left, my = ev.clientY - rect.top;
+            const hitLeg = findClickedLegacyPin2D(mx, my);
+            if (hitLeg >= 0) {
+              const iss = legacyAuditIssues2D[hitLeg];
+              highlightedHandleSet = new Set(iss.handles || []);
+              closePromptPill2D();
+              setAlert(`🩺 [${iss.issue_id} · ${iss.code}] ${iss.message_zh}\n💡 建议：${iss.suggestion_zh || "请核查高亮图元"}`, iss.severity === "error" ? "error" : "warn");
+              draw2DScene();
+              return;
+            }
+            const wx = (mx - camPanX) / camScale, wy = (camPanY - my) / camScale;
+            const clickedHandle = hitTestPoint2D(wx, wy, 7.5 / camScale);
+            if (clickedHandle) {
+              const prevHandles = (ev.ctrlKey || ev.altKey || ev.metaKey) && highlightedHandleSet ? Array.from(highlightedHandleSet) : [];
+              const nextSet = new Set(prevHandles);
+              if (nextSet.has(clickedHandle) && prevHandles.length > 1) nextSet.delete(clickedHandle);
+              else nextSet.add(clickedHandle);
+              const picked = Array.from(nextSet);
+              const hb = computeHandlesBounds2D(picked) || { wx0: wx - 5, wy0: wy - 5, wx1: wx + 5, wy1: wy + 5 };
+              activeMarquee2D = { ...hb, handles: picked };
+              highlightedHandleSet = new Set(picked);
+              draw2DScene();
+              openPromptPill2D();
+              const meta = cadScene.entities_meta?.[clickedHandle];
+              if (meta) {
+                document.getElementById("pillInput2D").placeholder = `已点选 #${picked.join(",#")} (${meta.desc})：如 改成Ø18 / 倒角C5 / 倒圆角R6`;
+              }
+            } else {
+              highlightedHandleSet = null;
+              closePromptPill2D();
+            }
           } else {
             activeMarquee2D.handles = hitTestMarquee2D(activeMarquee2D.wx0, activeMarquee2D.wy0, activeMarquee2D.wx1, activeMarquee2D.wy1);
+            highlightedHandleSet = new Set(activeMarquee2D.handles);
             draw2DScene();
             openPromptPill2D();
           }
@@ -1663,10 +1953,26 @@ def render_studio_html() -> str:
       const mx = e.clientX - rect.left, my = e.clientY - rect.top;
       const wx = (mx - camPanX) / camScale, wy = (camPanY - my) / camScale;
       const hoverPin = !isPanning2D && !isSelectingBox2D ? findClickedPinIndex2D(mx, my) : -1;
-      cv2d.style.cursor = hoverPin >= 0 ? "pointer" : "";
-      document.getElementById("coordReadout").textContent = hoverPin >= 0
-        ? `点击批注角标 #${savedRegionPins2D[hoverPin].idx} 可二次修改指令或删除批注`
-        : `光标坐标 X: ${wx.toFixed(2)} mm, Y: ${wy.toFixed(2)} mm  |  ${marqueeMode2D ? "拖拽拉出蓝色虚线框提问/改图（点击数字角标可二次修改，按住空格平移）" : "左键拖拽平移（按住 Shift 框选提问）"} · 滚轮缩放`;
+      const hoverLeg = (!isPanning2D && !isSelectingBox2D && hoverPin < 0) ? findClickedLegacyPin2D(mx, my) : -1;
+      const nextHoverH = (!isPanning2D && !isSelectingBox2D && hoverPin < 0 && hoverLeg < 0)
+        ? hitTestPoint2D(wx, wy, 7.0 / camScale)
+        : null;
+      if (nextHoverH !== hoverHandle2D) {
+        hoverHandle2D = nextHoverH;
+        if (!isPanning2D && !isSelectingBox2D) draw2DScene();
+      }
+      cv2d.style.cursor = (hoverPin >= 0 || hoverLeg >= 0 || hoverHandle2D) ? "pointer" : "";
+      if (hoverPin >= 0) {
+        document.getElementById("coordReadout").textContent = `点击批注角标 #${savedRegionPins2D[hoverPin].idx} 可二次修改指令或删除批注`;
+      } else if (hoverLeg >= 0) {
+        const iss = legacyAuditIssues2D[hoverLeg];
+        document.getElementById("coordReadout").textContent = `⚠️ [${iss.code}] ${iss.message_zh}`;
+      } else if (hoverHandle2D && cadScene?.entities_meta?.[hoverHandle2D]) {
+        const meta = cadScene.entities_meta[hoverHandle2D];
+        document.getElementById("coordReadout").textContent = `🎯 命中 #${hoverHandle2D} · ${meta.desc} [${meta.l}]  |  单击点选该图元（按住 Ctrl 可多选相邻边执行倒角/圆角）`;
+      } else {
+        document.getElementById("coordReadout").textContent = `光标坐标 X: ${wx.toFixed(2)} mm, Y: ${wy.toFixed(2)} mm  |  单击图元精准点选 · 拖拽拉框改图（按住空格平移） · 滚轮缩放`;
+      }
       if (isPanning2D) {
         camPanX = e.clientX - panStartX;
         camPanY = e.clientY - panStartY;
@@ -1709,6 +2015,66 @@ def render_studio_html() -> str:
       const p = document.getElementById("layerPanel");
       p.style.display = p.style.display === "none" ? "block" : "none";
       renderLayerPanel();
+    };
+    document.getElementById("btnUndo2D").onclick = () => {
+      if (versionCursor2D > 0) applyVersionNode2D(versionCursor2D - 1);
+    };
+    document.getElementById("btnRedo2D").onclick = () => {
+      if (versionCursor2D < versionStack2D.length - 1) applyVersionNode2D(versionCursor2D + 1);
+    };
+    document.getElementById("btnVectorDiff2D").onclick = () => {
+      if (!currentVectorDiff2D) return;
+      vectorDiffActive2D = !vectorDiffActive2D;
+      syncVersionButtons2D();
+      draw2DScene();
+    };
+    document.getElementById("btnLegacyAudit2D").onclick = async () => {
+      let dxfPath = revState.dxfPath || cadScene?.dxf_path || null;
+      let taskId = null, artName = "drawing.dxf";
+      if (!dxfPath && lastTaskData?.task_id) {
+        const dxfArt = (lastTaskData.artifacts || []).find(a => a.name.endsWith(".dxf") && a.name !== "model3d.dxf");
+        if (dxfArt) { taskId = lastTaskData.task_id; artName = dxfArt.name; }
+      }
+      if (!dxfPath && !taskId) { setAlert("请先生成或上传一份 2D DXF 图纸再执行存量体检", "warn"); return; }
+      setAlert("正在执行独立存量图纸健康度与防篡改体检...");
+      const r = await fetch("/api/v1/tasks/legacy-audit", {
+        method: "POST", headers: authHeaders(),
+        body: JSON.stringify({ dxf_path: dxfPath, task_id: dxfPath ? null : taskId, artifact_name: artName })
+      });
+      const rep = await r.json();
+      if (!r.ok) { setAlert(rep.error || rep.detail || JSON.stringify(rep), "error"); return; }
+      legacyAuditIssues2D = rep.issues || [];
+      const cleanable = (rep.summary?.degenerate_count || 0) + (rep.summary?.duplicate_count || 0) + (rep.summary?.topology_gap_count || 0);
+      document.getElementById("btnLegacyClean2D").style.display = cleanable > 0 ? "inline-block" : "none";
+      draw2DScene();
+      if (!legacyAuditIssues2D.length) {
+        setAlert(`✅ 存量体检通过：健康分 ${rep.health_score}/100 (${rep.grade}级)，未发现篡改尺寸、断口微缝或重线！`, "ok");
+      } else {
+        const topLines = legacyAuditIssues2D.slice(0, 4).map(x => `• [${x.code}] ${x.message_zh}`).join("\n");
+        setAlert(`🩺 存量体检报告：健康分 ${rep.health_score}/100 (${rep.grade}级) · 检出错误 ${rep.summary.errors} 项 / 警告 ${rep.summary.warnings} 项（已在画布标出 !1..!${legacyAuditIssues2D.length} 定位角标）：\n${topLines}`, rep.summary.errors > 0 ? "error" : "warn");
+      }
+    };
+    document.getElementById("btnLegacyClean2D").onclick = async () => {
+      let dxfPath = revState.dxfPath || cadScene?.dxf_path || null;
+      if (!dxfPath) return;
+      setAlert("正在自动清理退化图元、重叠图元并吸附闭合轮廓微缝...");
+      const r = await fetch("/api/v1/tasks/legacy-audit", {
+        method: "POST", headers: authHeaders(),
+        body: JSON.stringify({ dxf_path: dxfPath, auto_clean: true })
+      });
+      const res = await r.json();
+      if (!r.ok) { setAlert(res.error || res.detail || JSON.stringify(res), "error"); return; }
+      if (res.scene) {
+        cadScene = res.scene;
+        revState.dxfPath = res.output_path;
+        revState.sha256 = res.after_sha256;
+        legacyAuditIssues2D = res.after_audit?.issues || [];
+        document.getElementById("btnLegacyClean2D").style.display = "none";
+        pushVersionNode2D(res.output_path, res.scene, res.vector_diff || null, "清洗");
+        renderLayerPanel();
+        draw2DScene();
+        setAlert(`🧹 自动清洗完成：健康分 ${res.before_health_score} → ${res.after_health_score} (${res.after_grade}级) · 移除退化 ${res.removed_degenerate_handles.length} 项 / 重线 ${res.removed_duplicate_handles.length} 项 / 闭合微缝 ${res.snapped_gap_handles.length} 处！`, "ok");
+      }
     };
 
     // ===================== Industrial Crease-Edge 3D Viewer =====================
@@ -1965,6 +2331,7 @@ def render_studio_html() -> str:
         const sr = await fetch(`/api/v1/tasks/${data.task_id}/cad-scene`, { headers: authHeaders() });
         if (sr.ok) {
           cadScene = await sr.json();
+          initVersionStack2D(cadScene.dxf_path, cadScene, cadScene.sha256, "v0 原图");
           hiddenLayers.clear();
           renderLayerPanel();
           resizeCanvases();
@@ -2258,6 +2625,12 @@ def render_studio_html() -> str:
         };
         if (d.scene) {
           cadScene = d.scene;
+          initVersionStack2D(d.uploaded_path, d.scene, d.inventory.sha256, "v0 导入");
+          if (d.legacy_audit?.issues?.length) {
+            legacyAuditIssues2D = d.legacy_audit.issues;
+            const cleanable = (d.legacy_audit.summary?.degenerate_count || 0) + (d.legacy_audit.summary?.duplicate_count || 0) + (d.legacy_audit.summary?.topology_gap_count || 0);
+            document.getElementById("btnLegacyClean2D").style.display = cleanable > 0 ? "inline-block" : "none";
+          }
           hiddenLayers.clear();
           document.getElementById("vpDiff").style.display = "none";
           document.getElementById("vp3d").style.display = "none";
