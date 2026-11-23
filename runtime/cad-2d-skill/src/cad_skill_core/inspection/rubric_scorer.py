@@ -453,10 +453,16 @@ def _evaluate_single_custom_criterion(
             exp_w, exp_h = float(raw_span[0]), float(raw_span[1])
             ok = isclose(spans[0], exp_w, rel_tol=0.03, abs_tol=tol) and isclose(spans[1], exp_h, rel_tol=0.03, abs_tol=tol)
             return ("passed" if ok else "failed", f"实际包络 {spans[0]:.1f}×{spans[1]:.1f} mm（期望 {exp_w:g}×{exp_h:g} mm）")
-        exp_w_opt = rule.get("width", raw_span if isinstance(raw_span, (int, float)) else rule.get("value"))
-        exp_h_opt = rule.get("height")
+        exp_w_opt = rule.get(
+            "width",
+            rule.get(
+                "expected_width",
+                raw_span if isinstance(raw_span, (int, float)) else rule.get("value"),
+            ),
+        )
+        exp_h_opt = rule.get("height", rule.get("expected_height"))
         if exp_w_opt is None and exp_h_opt is None:
-            return ("unevaluated", "bbox_span 规则缺少 width/height/bbox_span 目标值")
+            return ("unevaluated", "bbox_span 规则缺少 width/expected_width/height 目标值")
         ok_w = True if exp_w_opt is None else isclose(spans[0], float(exp_w_opt), rel_tol=0.03, abs_tol=tol)
         ok_h = True if exp_h_opt is None else isclose(spans[1], float(exp_h_opt), rel_tol=0.03, abs_tol=tol)
         return ("passed" if (ok_w and ok_h) else "failed", f"实际包络 {spans[0]:.1f}×{spans[1]:.1f} mm")
