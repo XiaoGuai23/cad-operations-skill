@@ -82,6 +82,7 @@ class Dimension(SchemaModel):
     prefix: str | None = None
     tolerance_upper: float | None = None
     tolerance_lower: float | None = None
+    param_key: str | None = None
 
     def format_label(self) -> str:
         auto_prefix = self.prefix

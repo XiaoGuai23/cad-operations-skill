@@ -16,7 +16,11 @@ from .models import (
     NativeJobRequest,
     NativeJobResult,
 )
-from .native_ops import execute_native_cad_job, validate_3dsolid_script_allowlist
+from .native_ops import (
+    execute_native_cad_job,
+    validate_3dsolid_script_allowlist,
+    verify_3dsolid_dxf_entities,
+)
 from .registry import (
     discover_installed_cad_font_roots,
     probe_all_cad_drivers,

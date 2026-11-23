@@ -287,6 +287,7 @@ def build_flange_geometry(
                     "target_entity_index": pitch_span_idx,
                     "orientation": "horizontal",
                     "prefix": "⌀",
+                    "param_key": "bolt_circle_diameter",
                 }
             )
         else:
@@ -304,6 +305,7 @@ def build_flange_geometry(
                 "owner_view": "front",
                 "target_entity_index": sec_front_idx,
                 "orientation": "vertical",
+                "param_key": "thickness",
             }
         )
 
@@ -323,6 +325,7 @@ def build_flange_geometry(
                     "owner_view": "top",
                     "target_entity_index": bore_top_idx,
                     "orientation": "diameter",
+                    "param_key": "bore_diameter",
                 }
             )
         add_top(LineEntity(kind="line", layer="CENTER", start=(-ext, 0.0), end=(ext, 0.0), source_id=source_id))
@@ -355,6 +358,7 @@ def build_flange_geometry(
                         "target_entity_index": first_hole_idx,
                         "orientation": "diameter",
                         "prefix": hole_prefix,
+                        "param_key": "hole_diameter",
                     }
                 )
                 if params.hole_count == 1:
@@ -366,6 +370,7 @@ def build_flange_geometry(
                             "owner_view": "front",
                             "target_entity_index": sec_front_idx,
                             "orientation": "horizontal",
+                            "param_key": "bolt_circle_diameter",
                         }
                     )
 
@@ -378,6 +383,7 @@ def build_flange_geometry(
                 "target_entity_index": outer_top_idx,
                 "orientation": "horizontal",
                 "prefix": "⌀",
+                "param_key": "outer_diameter",
             }
         )
 
@@ -408,6 +414,7 @@ def build_flange_geometry(
                 "target_entity_index": left_box_idx,
                 "orientation": "horizontal",
                 "prefix": "⌀",
+                "param_key": "outer_diameter",
             }
         )
 
@@ -446,6 +453,7 @@ def build_flange_geometry(
             "target_entity_index": outer_idx,
             "orientation": "horizontal",
             "prefix": "⌀",
+            "param_key": "outer_diameter",
         }
     )
     if r_bore > 0:
@@ -460,6 +468,7 @@ def build_flange_geometry(
                 "owner_view": "front",
                 "target_entity_index": bore_idx,
                 "orientation": "diameter",
+                "param_key": "bore_diameter",
             }
         )
     add_front_legacy(LineEntity(kind="line", layer="CENTER", start=(-ext, 0.0), end=(ext, 0.0), source_id=source_id))
@@ -494,6 +503,7 @@ def build_flange_geometry(
                     "target_entity_index": first_h,
                     "orientation": "diameter",
                     "prefix": f"{params.hole_count}×⌀" if params.hole_count > 1 else "⌀",
+                    "param_key": "hole_diameter",
                 }
             )
 
@@ -535,6 +545,7 @@ def build_flange_geometry(
                 "owner_view": "right",
                 "target_entity_index": sec_idx,
                 "orientation": "horizontal",
+                "param_key": "thickness",
             }
         )
 
@@ -1021,6 +1032,7 @@ def build_slotted_bracket_geometry(
             "owner_view": "front",
             "target_entity_index": slot_idx,
             "orientation": "horizontal",
+            "param_key": "slot_length",
         }
     )
     dims.append(
@@ -1031,6 +1043,7 @@ def build_slotted_bracket_geometry(
             "owner_view": "front",
             "target_entity_index": plate_idx,
             "orientation": "vertical",
+            "param_key": "height",
         }
     )
     if top_right_hole_idx is not None and params.hole_diameter is not None:
@@ -1043,6 +1056,7 @@ def build_slotted_bracket_geometry(
                 "target_entity_index": top_right_hole_idx,
                 "orientation": "diameter",
                 "prefix": "4×⌀",
+                "param_key": "hole_diameter",
             }
         )
 
@@ -1088,6 +1102,7 @@ def build_slotted_bracket_geometry(
                 "owner_view": "top",
                 "target_entity_index": top_idx,
                 "orientation": "horizontal",
+                "param_key": "width",
             }
         )
 
@@ -1129,6 +1144,7 @@ def build_slotted_bracket_geometry(
                     "owner_view": "left",
                     "target_entity_index": left_box_idx,
                     "orientation": "horizontal",
+                    "param_key": "thickness",
                 }
             )
     else:
@@ -1141,6 +1157,7 @@ def build_slotted_bracket_geometry(
                 "owner_view": "front",
                 "target_entity_index": plate_idx,
                 "orientation": "horizontal",
+                "param_key": "width",
             },
         )
 
@@ -1400,11 +1417,11 @@ def build_spur_gear_geometry(
         add_l(LineEntity(kind="line", layer="HIDDEN", start=(sign * r_bore, 0.0), end=(sign * r_bore, b), source_id=source_id))
 
     dims: list[dict[str, Any]] = [
-        {"kind": "diameter", "value": pitch_d, "source_id": source_id, "owner_view": "front", "target_entity_index": pitch_span_idx, "orientation": "horizontal", "prefix": "⌀"},
-        {"kind": "linear", "value": b, "source_id": source_id, "owner_view": "front", "target_entity_index": f_box, "orientation": "vertical"},
-        {"kind": "diameter", "value": tip_d, "source_id": source_id, "owner_view": "top", "target_entity_index": tip_top_idx, "orientation": "horizontal", "prefix": "⌀"},
-        {"kind": "diameter", "value": params.bore_diameter, "source_id": source_id, "owner_view": "top", "target_entity_index": bore_top_idx, "orientation": "diameter"},
-        {"kind": "diameter", "value": tip_d, "source_id": source_id, "owner_view": "left", "target_entity_index": l_box, "orientation": "horizontal", "prefix": "⌀"},
+        {"kind": "diameter", "value": pitch_d, "source_id": source_id, "owner_view": "front", "target_entity_index": pitch_span_idx, "orientation": "horizontal", "prefix": "⌀", "param_key": "pitch_diameter"},
+        {"kind": "linear", "value": b, "source_id": source_id, "owner_view": "front", "target_entity_index": f_box, "orientation": "vertical", "param_key": "face_width"},
+        {"kind": "diameter", "value": tip_d, "source_id": source_id, "owner_view": "top", "target_entity_index": tip_top_idx, "orientation": "horizontal", "prefix": "⌀", "param_key": "tip_diameter"},
+        {"kind": "diameter", "value": params.bore_diameter, "source_id": source_id, "owner_view": "top", "target_entity_index": bore_top_idx, "orientation": "diameter", "param_key": "bore_diameter"},
+        {"kind": "diameter", "value": tip_d, "source_id": source_id, "owner_view": "left", "target_entity_index": l_box, "orientation": "horizontal", "prefix": "⌀", "param_key": "tip_diameter"},
     ]
     return ParametricPartResult(
         views=["front", "top", "left"],
@@ -1527,15 +1544,15 @@ def build_bearing_cap_geometry(
     spigot_line_idx = add_l(LineEntity(kind="line", layer="OUTLINE", start=(-rs, th), end=(rs, th), source_id=source_id))
 
     dims: list[dict[str, Any]] = [
-        {"kind": "diameter", "value": params.bolt_circle_diameter if params.hole_count >= 2 else params.flange_diameter, "source_id": source_id, "owner_view": "front", "target_entity_index": pitch_span_idx, "orientation": "horizontal", "prefix": "⌀"},
-        {"kind": "linear", "value": th, "source_id": source_id, "owner_view": "front", "target_entity_index": f_sec_idx, "orientation": "vertical"},
-        {"kind": "diameter", "value": params.flange_diameter, "source_id": source_id, "owner_view": "top", "target_entity_index": t_out_idx, "orientation": "horizontal", "prefix": "⌀"},
-        {"kind": "diameter", "value": params.bore_diameter, "source_id": source_id, "owner_view": "top", "target_entity_index": t_bore_idx, "orientation": "diameter"},
-        {"kind": "diameter", "value": params.spigot_diameter, "source_id": source_id, "owner_view": "left", "target_entity_index": spigot_line_idx, "orientation": "horizontal", "prefix": "⌀"},
+        {"kind": "diameter", "value": params.bolt_circle_diameter if params.hole_count >= 2 else params.flange_diameter, "source_id": source_id, "owner_view": "front", "target_entity_index": pitch_span_idx, "orientation": "horizontal", "prefix": "⌀", "param_key": "bolt_circle_diameter" if params.hole_count >= 2 else "outer_diameter"},
+        {"kind": "linear", "value": th, "source_id": source_id, "owner_view": "front", "target_entity_index": f_sec_idx, "orientation": "vertical", "param_key": "height"},
+        {"kind": "diameter", "value": params.flange_diameter, "source_id": source_id, "owner_view": "top", "target_entity_index": t_out_idx, "orientation": "horizontal", "prefix": "⌀", "param_key": "outer_diameter"},
+        {"kind": "diameter", "value": params.bore_diameter, "source_id": source_id, "owner_view": "top", "target_entity_index": t_bore_idx, "orientation": "diameter", "param_key": "bore_diameter"},
+        {"kind": "diameter", "value": params.spigot_diameter, "source_id": source_id, "owner_view": "left", "target_entity_index": spigot_line_idx, "orientation": "horizontal", "prefix": "⌀", "param_key": "spigot_diameter"},
     ]
     if first_h is not None and params.hole_count > 0:
         dims.append(
-            {"kind": "diameter", "value": params.hole_diameter, "source_id": source_id, "owner_view": "top", "target_entity_index": first_h, "orientation": "diameter", "prefix": f"{params.hole_count}×⌀" if params.hole_count > 1 else "⌀"}
+            {"kind": "diameter", "value": params.hole_diameter, "source_id": source_id, "owner_view": "top", "target_entity_index": first_h, "orientation": "diameter", "prefix": f"{params.hole_count}×⌀" if params.hole_count > 1 else "⌀", "param_key": "hole_diameter"}
         )
 
     return ParametricPartResult(
@@ -1652,12 +1669,12 @@ def build_ribbed_bracket_geometry(
             add_l(LineEntity(kind="line", layer="HIDDEN", start=(sy_m + dx_m, 0.0), end=(sy_m + dx_m, t1), source_id=source_id))
 
     dims: list[dict[str, Any]] = [
-        {"kind": "linear", "value": L, "source_id": source_id, "owner_view": "front", "target_entity_index": f_l_idx, "orientation": "horizontal"},
-        {"kind": "linear", "value": H, "source_id": source_id, "owner_view": "front", "target_entity_index": f_l_idx, "orientation": "vertical"},
-        {"kind": "linear", "value": W, "source_id": source_id, "owner_view": "top", "target_entity_index": t_box_idx, "orientation": "vertical"},
-        {"kind": "diameter", "value": params.mount_hole_diameter, "source_id": source_id, "owner_view": "top", "target_entity_index": top_mnt_idx, "orientation": "diameter", "prefix": "2×⌀"},
-        {"kind": "linear", "value": W, "source_id": source_id, "owner_view": "left", "target_entity_index": l_box_idx, "orientation": "horizontal"},
-        {"kind": "diameter", "value": params.boss_hole_diameter, "source_id": source_id, "owner_view": "left", "target_entity_index": boss_circle_idx, "orientation": "diameter"},
+        {"kind": "linear", "value": L, "source_id": source_id, "owner_view": "front", "target_entity_index": f_l_idx, "orientation": "horizontal", "param_key": "width"},
+        {"kind": "linear", "value": H, "source_id": source_id, "owner_view": "front", "target_entity_index": f_l_idx, "orientation": "vertical", "param_key": "height"},
+        {"kind": "linear", "value": W, "source_id": source_id, "owner_view": "top", "target_entity_index": t_box_idx, "orientation": "vertical", "param_key": "depth"},
+        {"kind": "diameter", "value": params.mount_hole_diameter, "source_id": source_id, "owner_view": "top", "target_entity_index": top_mnt_idx, "orientation": "diameter", "prefix": "2×⌀", "param_key": "hole_diameter"},
+        {"kind": "linear", "value": W, "source_id": source_id, "owner_view": "left", "target_entity_index": l_box_idx, "orientation": "horizontal", "param_key": "depth"},
+        {"kind": "diameter", "value": params.boss_hole_diameter, "source_id": source_id, "owner_view": "left", "target_entity_index": boss_circle_idx, "orientation": "diameter", "param_key": "boss_hole_diameter"},
     ]
     return ParametricPartResult(
         views=["front", "top", "left"],

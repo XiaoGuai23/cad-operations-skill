@@ -222,8 +222,9 @@ _MCP_APP_HTML = r"""<!DOCTYPE html>
       <div class="prompt-pill" id="promptPill">
         <input id="pillInput" type="text" placeholder="问题一" autocomplete="off" />
         <span class="hit-tag" id="pillHitCount">0 图元</span>
+        <button class="pill-cancel" id="pillDelete" style="display:none;color:#dc2626;" title="删除该条批注">🗑️</button>
         <button class="pill-cancel" id="pillCancel" title="取消选框">✕</button>
-        <button class="pill-submit" id="pillSubmit" title="发送框选区域与指令给 AI">
+        <button class="pill-submit" id="pillSubmit" title="发送框选区域与指令给 AI（支持二次修改）">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
             <polyline points="20 6 9 17 4 12"></polyline>
           </svg>
@@ -615,19 +616,32 @@ _MCP_APP_HTML = r"""<!DOCTYPE html>
       };
     }
 
-    function openPromptPill() {
+    let editingPinIdx = null;
+
+    function findClickedPin(mx, my) {
+      for (let i = savedPins.length - 1; i >= 0; i--) {
+        const p = savedPins[i];
+        const [sx1, sy0] = worldToScreen(p.wx1, p.wy1);
+        if (Math.hypot(mx - (sx1 + 11), my - (sy0 - 11)) <= 18) return i;
+      }
+      return -1;
+    }
+
+    function openPromptPill(prefill = null) {
       if (!activeSelection) return;
       const pill = document.getElementById("promptPill");
       const input = document.getElementById("pillInput");
+      const delBtn = document.getElementById("pillDelete");
       const cnNums = ["一", "二", "三", "四", "五", "六", "七", "八", "九", "十"];
-      const nextIdx = savedPins.length;
+      const nextIdx = editingPinIdx !== null ? editingPinIdx : savedPins.length;
       const label = "问题" + (cnNums[nextIdx] || (nextIdx + 1));
       input.placeholder = `${label}（输入提问或局部改图指令...）`;
-      input.value = "";
+      input.value = prefill !== null ? prefill : "";
+      if (delBtn) delBtn.style.display = editingPinIdx !== null ? "inline-flex" : "none";
       document.getElementById("pillHitCount").textContent = `${activeSelection.handles.length} 图元`;
       pill.style.display = "flex";
       updatePillPosition();
-      setTimeout(() => input.focus(), 20);
+      setTimeout(() => { input.focus(); if (prefill !== null) input.select(); }, 20);
     }
 
     function updatePillPosition() {
@@ -647,9 +661,19 @@ _MCP_APP_HTML = r"""<!DOCTYPE html>
 
     function closePromptPill() {
       activeSelection = null;
+      editingPinIdx = null;
       document.getElementById("promptPill").style.display = "none";
+      document.getElementById("pillDelete").style.display = "none";
       draw2D();
     }
+
+    document.getElementById("pillDelete").onclick = () => {
+      if (editingPinIdx !== null && editingPinIdx >= 0 && editingPinIdx < savedPins.length) {
+        savedPins.splice(editingPinIdx, 1);
+        savedPins.forEach((p, idx) => { p.idx = idx + 1; });
+      }
+      closePromptPill();
+    };
 
     async function submitRegionPrompt() {
       if (!activeSelection) return;
@@ -661,16 +685,23 @@ _MCP_APP_HTML = r"""<!DOCTYPE html>
         +activeSelection.wx1.toFixed(2),
         +activeSelection.wy1.toFixed(2)
       ];
-      const pinIdx = savedPins.length + 1;
-      savedPins.push({
-        idx: pinIdx,
-        wx0: activeSelection.wx0,
-        wy0: activeSelection.wy0,
-        wx1: activeSelection.wx1,
-        wy1: activeSelection.wy1,
-        text,
-        handles: activeSelection.handles
-      });
+      let pinIdx;
+      if (editingPinIdx !== null && editingPinIdx >= 0 && editingPinIdx < savedPins.length) {
+        savedPins[editingPinIdx].text = text;
+        savedPins[editingPinIdx].handles = activeSelection.handles;
+        pinIdx = savedPins[editingPinIdx].idx;
+      } else {
+        pinIdx = savedPins.length + 1;
+        savedPins.push({
+          idx: pinIdx,
+          wx0: activeSelection.wx0,
+          wy0: activeSelection.wy0,
+          wx1: activeSelection.wx1,
+          wy1: activeSelection.wy1,
+          text,
+          handles: activeSelection.handles
+        });
+      }
 
       const contextText = [
         `[CAD 图纸框选批注 #${pinIdx}]`,
@@ -752,12 +783,25 @@ _MCP_APP_HTML = r"""<!DOCTYPE html>
     cv2d.addEventListener("mousedown", e => {
       const rect = cv2d.getBoundingClientRect();
       const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+      if (e.button === 0 && !spacePressed) {
+        const hp = findClickedPin(mx, my);
+        if (hp >= 0) {
+          const pin = savedPins[hp];
+          editingPinIdx = hp;
+          const hit = hitTestRegion(pin.wx0, pin.wy0, pin.wx1, pin.wy1);
+          activeSelection = { wx0: pin.wx0, wy0: pin.wy0, wx1: pin.wx1, wy1: pin.wy1, handles: hit.handles, summary: hit.summary };
+          draw2D();
+          openPromptPill(pin.text);
+          return;
+        }
+      }
       if (interactionMode === "pan" || spacePressed || e.button === 1) {
         isPanning = true;
         panOriginX = e.clientX - camPanX;
         panOriginY = e.clientY - camPanY;
         return;
       }
+      editingPinIdx = null;
       isSelecting = true;
       document.getElementById("promptPill").style.display = "none";
       selStartScreen = [mx, my];

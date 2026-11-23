@@ -834,10 +834,11 @@ def _layout_issues(
                 if not _intersects(item.bounds, _bounds_tuple(view.bounds)):
                     continue
                 if (
-                    annotation.kind == "dimension"
+                    annotation.kind in {"dimension", "surface-roughness", "datum-symbol", "gdt-frame"}
                     and annotation.owner_view == view.name
                     and (
                         "own-view-feature" in annotation.allowed_contact
+                        or "own-view-endpoint" in annotation.allowed_contact
                         or _shallow_edge_overlap(
                             item.bounds,
                             _bounds_tuple(view.bounds),

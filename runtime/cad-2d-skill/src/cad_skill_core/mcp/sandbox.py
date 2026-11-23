@@ -11,15 +11,16 @@ import re
 import uuid
 from typing import Any
 
+from cad_skill_core.path_guard import (
+    MCPSandboxError,
+    resolve_safe_child_path,
+    validate_safe_single_name,
+)
 from cad_skill_core.rendering.preview import _FONT_RENDER_LOCK
 
 _TASK_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{2,80}$")
 _SAFE_FILENAME_RE = re.compile(r"^[\w\u4e00-\u9fff][\w\u4e00-\u9fff. ()_-]{0,120}$")
 _MAX_INPUT_BYTES = 32 * 1024 * 1024  # 32 MiB guard against oversized uploads
-
-
-class MCPSandboxError(ValueError):
-    """Raised when a path escapes allowed MCP workspace boundaries or limits."""
 
 
 def default_repo_root() -> Path:

@@ -14,15 +14,23 @@ from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 import json
 from pathlib import Path
+import re
 from typing import Any
 
 from cad_skill_core.documents.spec_compiler import compile_spec_from_files
 from cad_skill_core.inspection.rubric_scorer import score_dxf_drawing
+from cad_skill_core.path_guard import resolve_safe_child_path, validate_safe_single_name
 from cad_skill_core.pipeline import PipelineOptions, run_task
+from cad_skill_core.revision.common import RevisionError
+from cad_skill_core.revision.nl_revise import execute_nl_region_revision
 from cad_skill_core.revision.workflow import apply_revision, inventory_drawing
 
 _SKIPPED_HEAVY_FILES = {"clip.mp4", "events.json", "frame_events.json"}
 _SKIPPED_VIDEO_SUFFIXES = {".mp4", ".mov", ".mkv", ".avi", ".webm"}
+_UNSUPPORTED_CONSTRUCTIVE_REV_RE = re.compile(
+    r"(?:添加|新增|增加|插入|新建|绘制一个|画一个|\badd\b|\bcreate\b|\binsert\b)",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,6 +45,7 @@ class CAD1KTaskBundle:
     reference_outputs: tuple[Path, ...]
     skipped_heavy_assets: tuple[str, ...]
     mode: str = "generation"
+    is_builtin: bool = False
 
 
 BUILTIN_CAD1K_TASKS: tuple[dict[str, Any], ...] = (
@@ -183,7 +192,8 @@ def load_cad1k_task_bundle(bundle_dir: Path) -> CAD1KTaskBundle:
     input_files = tuple(sorted(p for p in in_dir.iterdir() if p.is_file())) if in_dir.is_dir() else ()
     ref_outputs = tuple(sorted(p for p in out_dir.iterdir() if p.is_file())) if out_dir.is_dir() else ()
 
-    task_id = str(desc_raw.get("task_id", desc_raw.get("id", root.name)))
+    raw_task_id = str(desc_raw.get("task_id", desc_raw.get("id", root.name)))
+    task_id = validate_safe_single_name(raw_task_id, label="task_id")
     title = str(desc_raw.get("title", desc_raw.get("name", task_id)))
     software = str(desc_raw.get("software", desc_raw.get("application", "AutoCAD")))
     prompt = str(desc_raw.get("prompt", desc_raw.get("description", desc_raw.get("instructions", ""))))
@@ -200,6 +210,7 @@ def load_cad1k_task_bundle(bundle_dir: Path) -> CAD1KTaskBundle:
         reference_outputs=ref_outputs,
         skipped_heavy_assets=tuple(skipped),
         mode=mode,
+        is_builtin=False,
     )
 
 
@@ -231,21 +242,23 @@ def run_cad1k_benchmark(
                     reference_outputs=(),
                     skipped_heavy_assets=("clip.mp4 (not needed)", "events.json (not needed)"),
                     mode=str(item.get("mode", "generation")),
+                    is_builtin=True,
                 )
             )
 
     task_results: list[dict[str, Any]] = []
     for bundle in bundles:
-        work_task_dir = out_base / bundle.task_id
+        work_task_dir = resolve_safe_child_path(out_base, bundle.task_id, label="task_id")
         (work_task_dir / "input").mkdir(parents=True, exist_ok=True)
         (work_task_dir / "work").mkdir(parents=True, exist_ok=True)
 
         if bundle.mode == "revision":
             in_dxfs = [p for p in bundle.input_files if p.suffix.lower() == ".dxf"]
+            explicit_plans = [p for p in bundle.input_files if p.name.lower().endswith("revision-plan.json")]
             if in_dxfs:
                 baseline_dxf = in_dxfs[0]
                 views_list = ["front", "top", "left"]
-            else:
+            elif bundle.is_builtin:
                 base_dir = work_task_dir / "baseline"
                 (base_dir / "input").mkdir(parents=True, exist_ok=True)
                 (base_dir / "work").mkdir(parents=True, exist_ok=True)
@@ -258,33 +271,119 @@ def run_cad1k_benchmark(
                 run_task(base_dir, PipelineOptions(run_autocad=False, standard_profile=standard_profile))
                 baseline_dxf = base_dir / "output" / "drawing.dxf"
                 views_list = list(base_spec.requirements.views)
-
-            inv = inventory_drawing(baseline_dxf)
-            bolt_circles = [
-                e for e in inv["entities"]
-                if e["type"] == "CIRCLE" and e["layer"] == "OUTLINE" and float(e["geometry"].get("radius", 999.0)) <= 12.0
-            ]
-            target_ent = bolt_circles[0] if bolt_circles else inv["entities"][0]
-            rev_plan = {
-                "schema": "cad-revision/v1",
-                "baseline_sha256": inv["sha256"],
-                "units": inv["units"],
-                "tolerance": 1e-4,
-                "operations": [
+            else:
+                task_results.append(
                     {
-                        "id": "rev-op-1",
-                        "type": "delete_entities",
-                        "targets": [{"handle": target_ent["handle"]}],
+                        "task_id": bundle.task_id,
+                        "title": bundle.title,
+                        "mode": bundle.mode,
+                        "pipeline_status": "failed",
+                        "error": "external revision task missing baseline .dxf in input_files",
+                        "views": [],
+                        "total_score": 0.0,
+                        "grade": "D",
+                        "grade_label_zh": "不合格",
+                        "skipped_heavy_assets": list(bundle.skipped_heavy_assets),
+                        "rubric_report": None,
                     }
-                ],
-            }
-            plan_file = work_task_dir / "work" / "revision-plan.json"
-            plan_file.write_text(json.dumps(rev_plan, ensure_ascii=False, indent=2), encoding="utf-8")
+                )
+                continue
+
             rev_out_dir = work_task_dir / "output"
-            rev_res = apply_revision(baseline_dxf, plan_file, rev_out_dir, dry_run=False)
-            dxf_out = Path(rev_res["output_path"])
-            pipe_status = str(rev_res["status"])
-            audit_out = None
+            if bundle.is_builtin:
+                inv = inventory_drawing(baseline_dxf)
+                bolt_circles = [
+                    e for e in inv["entities"]
+                    if e["type"] == "CIRCLE" and e["layer"] == "OUTLINE" and float(e["geometry"].get("radius", 999.0)) <= 12.0
+                ]
+                if not bolt_circles:
+                    raise RevisionError("built-in bolt-hole revision benchmark found no matching bolt circle")
+                rev_plan = {
+                    "schema": "cad-revision/v1",
+                    "baseline_sha256": inv["sha256"],
+                    "units": inv["units"],
+                    "tolerance": 1e-4,
+                    "operations": [
+                        {
+                            "id": "rev-op-1",
+                            "type": "delete_entities",
+                            "targets": [{"handle": bolt_circles[0]["handle"]}],
+                        }
+                    ],
+                }
+                plan_file = work_task_dir / "work" / "revision-plan.json"
+                plan_file.write_text(json.dumps(rev_plan, ensure_ascii=False, indent=2), encoding="utf-8")
+                rev_res = apply_revision(baseline_dxf, plan_file, rev_out_dir, dry_run=False)
+                dxf_out = Path(rev_res["output_path"])
+                pipe_status = str(rev_res["status"])
+                audit_out = None
+            elif explicit_plans:
+                try:
+                    rev_res = apply_revision(baseline_dxf, explicit_plans[0], rev_out_dir, dry_run=False)
+                    dxf_out = Path(rev_res["output_path"])
+                    pipe_status = str(rev_res["status"])
+                    audit_out = None
+                except Exception as exc:
+                    task_results.append(
+                        {
+                            "task_id": bundle.task_id,
+                            "title": bundle.title,
+                            "mode": bundle.mode,
+                            "pipeline_status": "failed",
+                            "error": str(exc),
+                            "views": views_list,
+                            "total_score": 0.0,
+                            "grade": "D",
+                            "grade_label_zh": "不合格",
+                            "skipped_heavy_assets": list(bundle.skipped_heavy_assets),
+                            "rubric_report": None,
+                        }
+                    )
+                    continue
+            else:
+                # External natural-language revision task: strictly require an explicit, supported revision operation
+                # and NEVER blindly delete entities[0] when instructions ask to add geometry or lack a target!
+                if not bundle.prompt.strip() or _UNSUPPORTED_CONSTRUCTIVE_REV_RE.search(bundle.prompt):
+                    task_results.append(
+                        {
+                            "task_id": bundle.task_id,
+                            "title": bundle.title,
+                            "mode": bundle.mode,
+                            "pipeline_status": "unsupported",
+                            "error": f"external revision task requires an explicit supported edit operation (got: {bundle.prompt!r})",
+                            "views": views_list,
+                            "total_score": 0.0,
+                            "grade": "D",
+                            "grade_label_zh": "未通过（不支持或缺少明确改图目标）",
+                            "skipped_heavy_assets": list(bundle.skipped_heavy_assets),
+                            "rubric_report": None,
+                        }
+                    )
+                    continue
+                try:
+                    nl_res = execute_nl_region_revision(baseline_dxf, rev_out_dir, bundle.prompt, dry_run=False)
+                    if nl_res.get("mode") != "revision" or not nl_res.get("output_path"):
+                        raise RevisionError(f"prompt did not produce a verified revision: {bundle.prompt!r}")
+                    dxf_out = Path(nl_res["output_path"])
+                    pipe_status = str(nl_res.get("status", "passed"))
+                    audit_out = None
+                except Exception as exc:
+                    task_results.append(
+                        {
+                            "task_id": bundle.task_id,
+                            "title": bundle.title,
+                            "mode": bundle.mode,
+                            "pipeline_status": "failed",
+                            "error": str(exc),
+                            "views": views_list,
+                            "total_score": 0.0,
+                            "grade": "D",
+                            "grade_label_zh": "不合格",
+                            "skipped_heavy_assets": list(bundle.skipped_heavy_assets),
+                            "rubric_report": None,
+                        }
+                    )
+                    continue
         else:
             brief_file = work_task_dir / "input" / "task_brief.md"
             brief_file.write_text(bundle.prompt, encoding="utf-8")
@@ -326,7 +425,12 @@ def run_cad1k_benchmark(
         sum(r["total_score"] for r in task_results) / max(len(task_results), 1),
         2,
     )
-    passed_count = sum(1 for r in task_results if r["total_score"] >= 85.0)
+    passed_count = sum(
+        1
+        for r in task_results
+        if r["pipeline_status"] in {"passed", "applied", "partial", "complete"}
+        and r["total_score"] >= 85.0
+    )
     summary = {
         "benchmark": "cad-1000-hours-lightweight-eval",
         "standard_profile": standard_profile,

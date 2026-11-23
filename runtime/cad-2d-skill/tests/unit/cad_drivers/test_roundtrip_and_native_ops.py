@@ -182,6 +182,16 @@ def test_execute_native_cad_job_supports_zwcad_console_across_all_four_job_kinds
             stdout_path.write_text("ok\nCAD_SKILL_DXFOUT_VERIFIED\n", encoding="utf-8")
         elif "CAD_SKILL_SOLID3D_VERIFIED" in scr_file:
             (cwd / "model3d.dwg").write_bytes(b"AC1032" + bytes(100))
+            vdoc = ezdxf.new("R2010")
+            solid = vdoc.modelspace().add_3dsolid()
+            solid.sat = [
+                "400 0 1 0",
+                "7 Unknown 12 ACIS 4.0 NT 24 Thu Jan 01 00:00:00 2026",
+                "1 1e-6 1e-10",
+                "-0 body $-1 $-1 $-1 $-1 #",
+                "End-of-ACIS-data",
+            ]
+            vdoc.saveas(cwd / "verify3d.dxf")
             stdout_path.write_text("ok\nCAD_SKILL_SOLID3D_VERIFIED\n", encoding="utf-8")
         else:
             stdout_path.write_text("ok\nCAD_SKILL_NATIVE_ASSOC_VERIFIED\n", encoding="utf-8")

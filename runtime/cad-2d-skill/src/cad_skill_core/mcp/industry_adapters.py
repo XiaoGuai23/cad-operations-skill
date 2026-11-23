@@ -15,7 +15,7 @@ from matplotlib.font_manager import findfont
 from cad_skill_core.revision.common import sha256_file
 from cad_skill_core.revision.preview import preview_file
 
-from .sandbox import default_repo_root
+from .sandbox import default_repo_root, resolve_safe_child_path, validate_safe_single_name
 
 
 def _load_script_module(script_name: str, module_alias: str):
@@ -80,18 +80,20 @@ def generate_electrical_sld_bundle(
     sld_mod = _load_script_module("make_main_sld.py", "_cad_mcp_make_main_sld")
     audit_mod = _load_script_module("audit_sld.py", "_cad_mcp_audit_sld")
 
-    output_dir.mkdir(parents=True, exist_ok=True)
+    clean_stem = validate_safe_single_name(stem, label="stem")
+    out_root = Path(output_dir).expanduser().resolve()
+    out_root.mkdir(parents=True, exist_ok=True)
     diagram = sld_mod.draw_diagram(spec)
-    dxf_path = output_dir / f"{stem}.dxf"
-    svg_path = output_dir / f"{stem}.svg"
-    pdf_path = output_dir / f"{stem}.pdf"
+    dxf_path = resolve_safe_child_path(out_root, f"{clean_stem}.dxf", label="stem")
+    svg_path = resolve_safe_child_path(out_root, f"{clean_stem}.svg", label="stem")
+    pdf_path = resolve_safe_child_path(out_root, f"{clean_stem}.pdf", label="stem")
 
     sld_mod.export_dxf(diagram, dxf_path)
     sld_mod.export_svg(diagram, svg_path)
     sld_mod.export_pdf(diagram, pdf_path)
 
     # Render PNG preview via thread-safe region renderer
-    preview_dir = output_dir / "preview"
+    preview_dir = out_root / "preview"
     font_map = build_auto_style_font_map(dxf_path)
     if render_lock is not None:
         with render_lock:
@@ -99,7 +101,7 @@ def generate_electrical_sld_bundle(
     else:
         prev = preview_file(dxf_path, preview_dir, font_map=font_map)
     png_src = preview_dir / prev["images"][0]
-    png_path = output_dir / f"{stem}.png"
+    png_path = resolve_safe_child_path(out_root, f"{clean_stem}.png", label="stem")
     png_path.write_bytes(png_src.read_bytes())
 
     audit_report = audit_mod.audit(dxf_path, expect_text or [], 40)

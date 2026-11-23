@@ -433,13 +433,15 @@ def render_studio_html() -> str:
         <!-- 2D Vector CAD Canvas -->
         <div class="viewport" id="vp2d">
           <canvas id="canvas2d" class="cad-canvas marquee-mode"></canvas>
+          <div id="pinChipsBar2D" style="display:none;position:absolute;top:10px;left:12px;z-index:18;display:flex;flex-wrap:wrap;gap:6px;max-width:75%;pointer-events:auto;"></div>
           <div class="floating-layers" id="layerPanel" style="display:none;"></div>
-          <!-- Image 1 Style Floating White Rounded Prompt Pill -->
+          <!-- Image 1 Style Floating White Rounded Prompt Pill (supports secondary edit & delete!) -->
           <div class="prompt-pill" id="promptPill2D">
             <input id="pillInput2D" type="text" placeholder="输入指令如：把孔改成Φ18 / 删掉虚线 / 问题一" autocomplete="off" />
             <span class="hit-tag" id="pillHits2D">0 图元</span>
-            <button class="pill-cancel" id="pillCancel2D" title="取消选框">✕</button>
-            <button class="pill-submit" id="pillSubmit2D" title="确认标注并锁定框内图元">
+            <button class="pill-cancel" id="pillDelete2D" style="display:none;color:#dc2626;" title="删除该条批注">🗑️</button>
+            <button class="pill-cancel" id="pillCancel2D" title="关闭胶囊">✕</button>
+            <button class="pill-submit" id="pillSubmit2D" title="执行改图或保存批注（支持二次修改）">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
                 <polyline points="20 6 9 17 4 12"></polyline>
               </svg>
@@ -491,7 +493,8 @@ def render_studio_html() -> str:
     let isSelectingBox2D = false;
     let selStartScreen2D = null;
     let activeMarquee2D = null; // { wx0, wy0, wx1, wy1, handles: [] }
-    let savedRegionPins2D = []; // [{ idx, wx0, wy0, wx1, wy1, text, handles }]
+    let savedRegionPins2D = []; // [{ idx, wx0, wy0, wx1, wy1, text, handles, applied }]
+    let editingPinIndex2D = null; // index into savedRegionPins2D when re-editing an existing pin!
     let highlightedHandle = null;
     let highlightedHandleSet = null;
 
@@ -1299,26 +1302,95 @@ def render_studio_html() -> str:
           hit = boxOverlap(cx - r, cy - r, cx + r, cy + r);
         } else if (p.k === "poly" || p.k === "solid") {
           hit = p.pts.some(([x, y]) => inBox(x, y));
+          if (!hit && p.pts.length >= 2) {
+            const cnt = (p.c || p.k === "solid") ? p.pts.length : p.pts.length - 1;
+            for (let i = 0; i < cnt; i++) {
+              const [x1, y1] = p.pts[i], [x2, y2] = p.pts[(i + 1) % p.pts.length];
+              if (boxOverlap(Math.min(x1, x2), Math.min(y1, y2), Math.max(x1, x2), Math.max(y1, y2))) { hit = true; break; }
+            }
+          }
         } else if (p.k === "text") {
-          hit = inBox(p.x, p.y);
+          const tw = Math.max(p.s, (p.t || "").length * p.s * 0.62);
+          const tx0 = (p.a === "mc" || p.a === "c") ? (p.x - tw / 2) : p.x;
+          const ty0 = p.a === "mc" ? (p.y - p.s / 2) : p.y;
+          hit = boxOverlap(tx0, ty0, tx0 + tw, ty0 + p.s);
         }
         if (hit) handles.add(p.h);
       }
       return Array.from(handles);
     }
 
-    function openPromptPill2D() {
+    function findClickedPinIndex2D(mx, my) {
+      for (let i = savedRegionPins2D.length - 1; i >= 0; i--) {
+        const pin = savedRegionPins2D[i];
+        const sx1 = camPanX + pin.wx1 * camScale;
+        const sy0 = camPanY - pin.wy1 * camScale;
+        // Blue droplet speech badge is centered at (sx1 + 11, sy0 - 11) with radius 11
+        if (Math.hypot(mx - (sx1 + 11), my - (sy0 - 11)) <= 18) return i;
+      }
+      return -1;
+    }
+
+    function renderPinChipsBar2D() {
+      const bar = document.getElementById("pinChipsBar2D");
+      if (!bar) return;
+      if (!savedRegionPins2D.length) {
+        bar.style.display = "none";
+        bar.innerHTML = "";
+        return;
+      }
+      bar.style.display = "flex";
+      bar.innerHTML = "";
+      savedRegionPins2D.forEach((pin, idx) => {
+        const chip = document.createElement("span");
+        chip.style.cssText = "display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:999px;font-size:11.5px;cursor:pointer;background:" + (pin.applied ? "rgba(16,185,129,0.92)" : "rgba(22,104,220,0.92)") + ";color:#fff;box-shadow:0 2px 6px rgba(15,23,42,0.18);";
+        const shortTxt = pin.text.length > 16 ? pin.text.slice(0, 16) + "…" : pin.text;
+        chip.textContent = `#${pin.idx} ${shortTxt} ✎`;
+        chip.title = "点击二次修改或重新执行该批注";
+        chip.onclick = (ev) => { ev.stopPropagation(); reopenSavedPin2D(idx); };
+        bar.appendChild(chip);
+      });
+    }
+
+    function reopenSavedPin2D(index) {
+      const pin = savedRegionPins2D[index];
+      if (!pin) return;
+      editingPinIndex2D = index;
+      const freshHandles = hitTestMarquee2D(pin.wx0, pin.wy0, pin.wx1, pin.wy1);
+      activeMarquee2D = {
+        wx0: pin.wx0, wy0: pin.wy0, wx1: pin.wx1, wy1: pin.wy1,
+        handles: freshHandles.length ? freshHandles : (pin.handles || [])
+      };
+      highlightedHandleSet = new Set(activeMarquee2D.handles);
+      draw2DScene();
+      openPromptPill2D(pin.text);
+    }
+
+    function deleteEditingPin2D() {
+      if (editingPinIndex2D === null || editingPinIndex2D < 0 || editingPinIndex2D >= savedRegionPins2D.length) return;
+      const removed = savedRegionPins2D.splice(editingPinIndex2D, 1)[0];
+      savedRegionPins2D.forEach((p, i) => { p.idx = i + 1; });
+      editingPinIndex2D = null;
+      highlightedHandleSet = null;
+      closePromptPill2D();
+      renderPinChipsBar2D();
+      setAlert(`🗑️ 已删除批注 #${removed.idx}（剩余批注已自动重排编号）`, "ok");
+    }
+
+    function openPromptPill2D(prefillText = null) {
       if (!activeMarquee2D) return;
       const pill = document.getElementById("promptPill2D");
       const inp = document.getElementById("pillInput2D");
+      const delBtn = document.getElementById("pillDelete2D");
       const cn = ["一", "二", "三", "四", "五", "六", "七", "八", "九", "十"];
-      const idx = savedRegionPins2D.length;
+      const idx = editingPinIndex2D !== null ? editingPinIndex2D : savedRegionPins2D.length;
       inp.placeholder = `问题${cn[idx] || (idx + 1)}（输入提问或局部改图指令...）`;
-      inp.value = "";
+      inp.value = prefillText !== null ? prefillText : "";
+      if (delBtn) delBtn.style.display = editingPinIndex2D !== null ? "inline-flex" : "none";
       document.getElementById("pillHits2D").textContent = `${activeMarquee2D.handles.length} 图元`;
       pill.style.display = "flex";
       syncPromptPill2DPos();
-      setTimeout(() => inp.focus(), 20);
+      setTimeout(() => { inp.focus(); if (prefillText !== null) inp.select(); }, 20);
     }
 
     function syncPromptPill2DPos() {
@@ -1330,15 +1402,18 @@ def render_studio_html() -> str:
       const sx1 = camPanX + activeMarquee2D.wx1 * camScale;
       const sy1 = camPanY - activeMarquee2D.wy0 * camScale;
       const cx = (sx0 + sx1) / 2, cy = (sy0 + sy1) / 2;
-      const pw = Math.min(390, vp.width - 28);
+      const pw = Math.min(410, vp.width - 28);
       pill.style.left = Math.max(12, Math.min(vp.width - pw - 12, cx - pw * 0.25)) + "px";
       pill.style.top = Math.max(12, Math.min(vp.height - 64, cy - 10)) + "px";
     }
 
     function closePromptPill2D() {
       activeMarquee2D = null;
+      editingPinIndex2D = null;
       const pill = document.getElementById("promptPill2D");
+      const delBtn = document.getElementById("pillDelete2D");
       if (pill) pill.style.display = "none";
+      if (delBtn) delBtn.style.display = "none";
       draw2DScene();
     }
 
@@ -1356,7 +1431,27 @@ def render_studio_html() -> str:
       ];
       const handles = activeMarquee2D.handles;
       const marqueeSnap = { ...activeMarquee2D };
+      const targetPinIdx = editingPinIndex2D;
       closePromptPill2D();
+
+      function upsertPinRecord(appliedFlag) {
+        const refreshed = hitTestMarquee2D(marqueeSnap.wx0, marqueeSnap.wy0, marqueeSnap.wx1, marqueeSnap.wy1);
+        if (targetPinIdx !== null && targetPinIdx >= 0 && targetPinIdx < savedRegionPins2D.length) {
+          savedRegionPins2D[targetPinIdx].text = txt;
+          savedRegionPins2D[targetPinIdx].handles = refreshed.length ? refreshed : handles;
+          savedRegionPins2D[targetPinIdx].applied = !!appliedFlag;
+          renderPinChipsBar2D();
+          return savedRegionPins2D[targetPinIdx].idx;
+        }
+        const pinNo = savedRegionPins2D.length + 1;
+        savedRegionPins2D.push({
+          idx: pinNo,
+          wx0: marqueeSnap.wx0, wy0: marqueeSnap.wy0, wx1: marqueeSnap.wx1, wy1: marqueeSnap.wy1,
+          text: txt, handles: refreshed.length ? refreshed : handles, applied: !!appliedFlag
+        });
+        renderPinChipsBar2D();
+        return pinNo;
+      }
 
       // Determine current 2D DXF source (supports continuous multi-step marquee edits!)
       let dxfPath = revState.dxfPath || null;
@@ -1428,23 +1523,19 @@ def render_studio_html() -> str:
               bar.appendChild(chip);
             });
 
+            const pNo = upsertPinRecord(true);
             highlightedHandleSet = null;
             renderLayerPanel();
             draw2DScene();
-            setAlert(`✅ ${res.summary_zh || "局部改图已原地生效！"}（可继续拉框连续修改，或点右上角“🔍 改图前后对比”）`, "ok");
+            setAlert(`✅ [批注 #${pNo} 已生效] ${res.summary_zh || "局部改图已原地生效！"}（点击蓝色角标 #${pNo} 可继续二次修改或删除批注）`, "ok");
             return;
           }
 
-          // Question / inspection pin mode
-          const pinNo = savedRegionPins2D.length + 1;
-          savedRegionPins2D.push({
-            idx: pinNo,
-            wx0: marqueeSnap.wx0, wy0: marqueeSnap.wy0, wx1: marqueeSnap.wx1, wy1: marqueeSnap.wy1,
-            text: txt, handles
-          });
+          // Question / inspection pin mode (supports secondary editing!)
+          const pinNo = upsertPinRecord(false);
           highlightedHandleSet = new Set(handles);
           draw2DScene();
-          setAlert(`💬 [批注 #${pinNo}] ${res.summary_zh || `命中 ${handles.length} 个图元`}`, "ok");
+          setAlert(`💬 [批注 #${pinNo}] ${res.summary_zh || `命中 ${handles.length} 个图元`}（点击角标 #${pinNo} 可二次修改为改图指令或删除）`, "ok");
           return;
         } catch (err) {
           setAlert(String(err), "error");
@@ -1452,15 +1543,10 @@ def render_studio_html() -> str:
         }
       }
 
-      const pinNo = savedRegionPins2D.length + 1;
-      savedRegionPins2D.push({
-        idx: pinNo,
-        wx0: marqueeSnap.wx0, wy0: marqueeSnap.wy0, wx1: marqueeSnap.wx1, wy1: marqueeSnap.wy1,
-        text: txt, handles
-      });
+      const pinNo = upsertPinRecord(false);
       highlightedHandleSet = new Set(handles);
       draw2DScene();
-      setAlert(`已添加框选批注 #${pinNo}（命中 ${handles.length} 个图元）`, "ok");
+      setAlert(`已保存框选批注 #${pinNo}（点击角标 #${pinNo} 可随时二次修改或删除）`, "ok");
     }
 
     document.getElementById("btnQuickDiff2D").onclick = async () => {
@@ -1485,6 +1571,7 @@ def render_studio_html() -> str:
 
     document.getElementById("pillSubmit2D").onclick = submitPromptPill2D;
     document.getElementById("pillCancel2D").onclick = closePromptPill2D;
+    document.getElementById("pillDelete2D").onclick = deleteEditingPin2D;
     document.getElementById("pillInput2D").addEventListener("keydown", e => {
       if (e.key === "Enter") submitPromptPill2D();
       else if (e.key === "Escape") closePromptPill2D();
@@ -1529,6 +1616,13 @@ def render_studio_html() -> str:
     cv2d.addEventListener("mousedown", e => {
       const rect = cv2d.getBoundingClientRect();
       const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+      if (e.button === 0 && !spaceHeld2D) {
+        const hitPin = findClickedPinIndex2D(mx, my);
+        if (hitPin >= 0) {
+          reopenSavedPin2D(hitPin);
+          return;
+        }
+      }
       const wantMarquee = (marqueeMode2D || e.shiftKey) && !spaceHeld2D && e.button === 0 && cadScene;
       if (!wantMarquee) {
         isPanning2D = true;
@@ -1536,6 +1630,7 @@ def render_studio_html() -> str:
         panStartY = e.clientY - camPanY;
         return;
       }
+      editingPinIndex2D = null;
       isSelectingBox2D = true;
       document.getElementById("promptPill2D").style.display = "none";
       selStartScreen2D = [mx, my];
@@ -1567,7 +1662,11 @@ def render_studio_html() -> str:
       const rect = cv2d.getBoundingClientRect();
       const mx = e.clientX - rect.left, my = e.clientY - rect.top;
       const wx = (mx - camPanX) / camScale, wy = (camPanY - my) / camScale;
-      document.getElementById("coordReadout").textContent = `光标坐标 X: ${wx.toFixed(2)} mm, Y: ${wy.toFixed(2)} mm  |  ${marqueeMode2D ? "拖拽拉出蓝色虚线框提问/改图（按住空格平移）" : "左键拖拽平移（按住 Shift 框选提问）"} · 滚轮缩放`;
+      const hoverPin = !isPanning2D && !isSelectingBox2D ? findClickedPinIndex2D(mx, my) : -1;
+      cv2d.style.cursor = hoverPin >= 0 ? "pointer" : "";
+      document.getElementById("coordReadout").textContent = hoverPin >= 0
+        ? `点击批注角标 #${savedRegionPins2D[hoverPin].idx} 可二次修改指令或删除批注`
+        : `光标坐标 X: ${wx.toFixed(2)} mm, Y: ${wy.toFixed(2)} mm  |  ${marqueeMode2D ? "拖拽拉出蓝色虚线框提问/改图（点击数字角标可二次修改，按住空格平移）" : "左键拖拽平移（按住 Shift 框选提问）"} · 滚轮缩放`;
       if (isPanning2D) {
         camPanX = e.clientX - panStartX;
         camPanY = e.clientY - panStartY;
@@ -1808,6 +1907,8 @@ def render_studio_html() -> str:
       highlightedHandle = null;
       highlightedHandleSet = null;
       savedRegionPins2D = [];
+      editingPinIndex2D = null;
+      renderPinChipsBar2D();
       closePromptPill2D();
       document.getElementById("vpDiff").style.display = "none";
       document.getElementById("vp2d").style.display = "block";

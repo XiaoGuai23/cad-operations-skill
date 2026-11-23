@@ -174,8 +174,13 @@ def execute_nl_region_revision(
                 h for h in targets
                 if by_handle[h].dxftype() in {"CIRCLE", "ARC"} and str(by_handle[h].dxf.get("layer", "")).upper() != "CENTER"
             ]
-        elif any(k in pl for k in ("标注", "尺寸", "dim")):
-            targets = [h for h in targets if by_handle[h].dxftype() in {"DIMENSION", "LEADER", "MULTILEADER"}]
+        elif any(k in pl for k in ("标注", "尺寸", "粗糙度", "公差", "基准", "符号", "dim")):
+            targets = [
+                h for h in targets
+                if by_handle[h].dxftype() in {"DIMENSION", "LEADER", "MULTILEADER"}
+                or str(by_handle[h].dxf.get("layer", "")).upper() == "DIM"
+                or (by_handle[h].dxftype() in {"TEXT", "MTEXT"} and any(s in str(by_handle[h].dxf.get("text", "")) for s in ("Ra", "⌀", "0.", "A", "B")))
+            ]
         elif any(k in pl for k in ("文字", "文本", "text")):
             targets = [h for h in targets if by_handle[h].dxftype() in {"TEXT", "MTEXT"}]
         elif any(k in pl for k in ("直线", "线段", "line")):
@@ -387,12 +392,33 @@ def execute_nl_region_revision(
             }
 
     # ------------------------------------------------------------------
-    # 5. Text / Material / Label Replacement ("材料改成 40Cr" / "把 X 改成 Y")
+    # 5. Text / Material / Roughness / Tolerance / Label Replacement
     # ------------------------------------------------------------------
     texts_in_box = [h for h in working_handles if by_handle[h].dxftype() in {"TEXT", "MTEXT"}]
+    m_ra = re.search(r"(?:粗糙度\s*(?:改成|改为|设为)?|(?:改成|改为|设为)\s*)Ra\s*(?P<ra>\d+(?:\.\d+)?)", prompt_clean, re.IGNORECASE)
+    if not m_ra:
+        m_ra = re.search(r"粗糙度\s*(?:改成|改为|设为)?\s*(?P<ra>\d+(?:\.\d+)?)", prompt_clean)
+    if texts_in_box and m_ra:
+        new_ra = f"Ra {m_ra.group('ra')}"
+        ra_cands = [
+            h for h in texts_in_box
+            if "ra" in (str(by_handle[h].dxf.get("text", "")) if by_handle[h].dxftype() == "TEXT" else by_handle[h].plain_text()).lower()
+        ] or [texts_in_box[0]]
+        return _atomic_doc_mutation(
+            doc=doc,
+            out_dxf=out_dxf,
+            dry_run=dry_run,
+            baseline_sha=current_sha,
+            prompt=prompt_clean,
+            action="edit_text",
+            handles=ra_cands,
+            mutator=lambda d, hs: [setattr(e.dxf, "text", new_ra) for e in d.modelspace() if str(e.dxf.handle).upper() in set(hs) and e.dxftype() == "TEXT"],
+            summary_zh=f"已将框内粗糙度数值更新为「{new_ra}」",
+        )
+
     m_pair = re.search(r"把\s*(?P<old>.+?)\s*(?:改成|改为|替换成|换成)\s*(?P<new>.+)$", prompt_clean)
     m_mat = re.search(r"(?:材料|材质)\s*(?:改成|改为|设为|换成)[:：]?\s*(?P<new>.+)$", prompt_clean)
-    m_set_txt = re.search(r"(?:文字|文本|标题|图名|改为|改成)\s*[:：]?\s*(?P<new>[^，。]+)$", prompt_clean)
+    m_set_txt = re.search(r"(?:文字|文本|标题|图名|公差|基准|改为|改成)\s*[:：]?\s*(?P<new>[^，。]+)$", prompt_clean)
     if texts_in_box and (m_pair or m_mat or m_set_txt):
         if m_pair:
             old_sub = m_pair.group("old").strip()

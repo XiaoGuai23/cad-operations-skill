@@ -9,13 +9,18 @@ import shutil
 from typing import Any
 
 from .models import (
+    BearingCap3D,
     Box3D,
     BoxBoss3D,
     CompoundSolid3D,
     Cylinder3D,
     CylinderBoss3D,
+    ExtrudePolygon3D,
     Flange3D,
     Model3DSpec,
+    RibbedBracket3D,
+    SlottedBracket3D,
+    SpurGear3D,
     SteppedShaft3D,
 )
 
@@ -172,9 +177,87 @@ def generate_autocad_3d_script(spec_3d: Model3DSpec, output_dwg_path: Path) -> s
             lines.append(f"_CYLINDER {cb.x:.4f},{cb.y:.4f},{z_step:.4f} {cb.cbore_diameter/2.0:.4f} {cb.cbore_depth:.4f}")
             lines.append("_SUBTRACT _P  _L ")
 
+    elif isinstance(body, SlottedBracket3D):
+        hw, hh = body.width / 2.0, body.height / 2.0
+        r = body.corner_radius
+        th = body.thickness
+        lines.append(f"_BOX {-hw + r:.4f},{-hh:.4f},0 {hw - r:.4f},{hh:.4f},{th:.4f}")
+        lines.append(f"_BOX {-hw:.4f},{-hh + r:.4f},0 {hw:.4f},{hh - r:.4f},{th:.4f}")
+        lines.append("_UNION _ALL ")
+        for sx in (-1.0, 1.0):
+            for sy in (-1.0, 1.0):
+                lines.append(f"_CYLINDER {sx * (hw - r):.4f},{sy * (hh - r):.4f},0 {r:.4f} {th:.4f}")
+                lines.append("_UNION _ALL ")
+        sr = body.slot_width / 2.0
+        half_s = (body.slot_length - body.slot_width) / 2.0
+        lines.append(f"_BOX {-half_s:.4f},{-sr:.4f},0 {half_s:.4f},{sr:.4f},{th:.4f}")
+        lines.append("_SUBTRACT _P  _L ")
+        for sx in (-1.0, 1.0):
+            lines.append(f"_CYLINDER {sx * half_s:.4f},0,0 {sr:.4f} {th:.4f}")
+            lines.append("_SUBTRACT _P  _L ")
+        if body.hole_diameter is not None:
+            hr = body.hole_diameter / 2.0
+            hx, hy = hw - body.hole_inset, hh - body.hole_inset
+            for sx in (-1.0, 1.0):
+                for sy in (-1.0, 1.0):
+                    lines.append(f"_CYLINDER {sx * hx:.4f},{sy * hy:.4f},0 {hr:.4f} {th:.4f}")
+                    lines.append("_SUBTRACT _P  _L ")
+
+    elif isinstance(body, ExtrudePolygon3D):
+        outer_pts = " ".join(f"{x:.4f},{y:.4f}" for x, y in body.outer_loop)
+        lines.append(f"_.PLINE {outer_pts} _C")
+        lines.append(f"_.EXTRUDE _L  {body.height:.4f}")
+        for inner in body.inner_loops:
+            inner_pts = " ".join(f"{x:.4f},{y:.4f}" for x, y in inner)
+            lines.append(f"_.PLINE {inner_pts} _C")
+            lines.append(f"_.EXTRUDE _L  {body.height:.4f}")
+            lines.append("_SUBTRACT _P  _L ")
+
+    elif isinstance(body, BearingCap3D):
+        rf = body.flange_diameter / 2.0
+        rs = body.spigot_diameter / 2.0
+        rb = body.bore_diameter / 2.0
+        r_rec = (rs + rb) / 2.0
+        tf = body.flange_thickness
+        th = body.total_height
+        z_fl = tf * 0.65
+        lines.append(f"_CYLINDER 0,0,0 {rf:.4f} {tf:.4f}")
+        lines.append(f"_CYLINDER 0,0,{tf:.4f} {rs:.4f} {th - tf:.4f}")
+        lines.append("_UNION _ALL ")
+        lines.append(f"_CYLINDER 0,0,0 {rb:.4f} {th:.4f}")
+        lines.append("_SUBTRACT _P  _L ")
+        lines.append(f"_CYLINDER 0,0,{z_fl:.4f} {r_rec:.4f} {th - z_fl:.4f}")
+        lines.append("_SUBTRACT _P  _L ")
+        if body.hole_count > 0:
+            r_bcd = body.bolt_circle_diameter / 2.0
+            rh = body.hole_diameter / 2.0
+            for k in range(body.hole_count):
+                ang = 2.0 * pi * k / body.hole_count
+                lines.append(f"_CYLINDER {r_bcd * cos(ang):.4f},{r_bcd * sin(ang):.4f},0 {rh:.4f} {tf:.4f}")
+                lines.append("_SUBTRACT _P  _L ")
+
+    elif isinstance(body, RibbedBracket3D):
+        hw = body.base_width / 2.0
+        lines.append(f"_BOX 0,{-hw:.4f},0 {body.base_length:.4f},{hw:.4f},{body.base_thickness:.4f}")
+        lines.append(f"_BOX 0,{-hw:.4f},{body.base_thickness:.4f} {body.wall_thickness:.4f},{hw:.4f},{body.total_height:.4f}")
+        lines.append("_UNION _ALL ")
+        if body.mount_hole_diameter > 0:
+            rm = body.mount_hole_diameter / 2.0
+            xm = body.base_length - max(18.0, rm * 2.2)
+            ym = hw - max(15.0, rm * 1.8)
+            for sy in (-1.0, 1.0):
+                lines.append(f"_CYLINDER {xm:.4f},{sy * ym:.4f},0 {rm:.4f} {body.base_thickness:.4f}")
+                lines.append("_SUBTRACT _P  _L ")
+
+    elif isinstance(body, SpurGear3D):
+        tip_r = body.module_mm * (body.teeth + 2.0) / 2.0
+        bore_r = body.bore_diameter / 2.0
+        lines.append(f"_CYLINDER 0,0,0 {tip_r:.4f} {body.face_width:.4f}")
+        lines.append(f"_CYLINDER 0,0,0 {bore_r:.4f} {body.face_width:.4f}")
+        lines.append("_SUBTRACT _P  _L ")
+
     else:
-        # Extruded polygon / slotted bracket note: 3D DXF MESH is already generated alongside
-        lines.append("; Complex contour extruded as verified 3D MESH in model3d.dxf")
+        raise ValueError(f"unsupported 3D body kind for native 3DSOLID script: {type(body).__name__}")
 
     lines.extend(
         [

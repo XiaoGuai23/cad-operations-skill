@@ -43,30 +43,40 @@ PartFamily = Literal[
 ]
 
 _CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+_DIA_CHARS = "\u2300\u2205\u00d8\u00f8\u03a6\u03c6\u0424\u0444"  # ⌀ ∅ Ø ø Φ φ Ф ф
+_DIA_SYM = f"[{_DIA_CHARS}]"
 _NUMBER_TOL_RE = re.compile(
     r"(?P<val>\d+(?:\.\d+)?)\s*(?:mm|MM|毫米)?\s*"
     r"(?:±\s*(?P<sym>\d+(?:\.\d+)?)|"
     r"\(\s*\+?(?P<up>[+-]?\d+(?:\.\d+)?)\s*/\s*(?P<lo>[+-]?\d+(?:\.\d+)?)\s*\))?"
 )
 _BOLT_PATTERN_RE = re.compile(
-    r"(?<![A-Za-z0-9\u00d8\u2300\u2205\u03a6\u03c6-])(?P<count>\d+)\s*[×xX*-]\s*[⌀∅Φφ]\s*(?P<dia>\d+(?:\.\d+)?)"
+    rf"(?<![A-Za-z0-9{_DIA_CHARS}-])(?P<count>\d+)\s*[×xX*-]\s*{_DIA_SYM}\s*(?P<dia>\d+(?:\.\d+)?)"
+)
+_HOLE_KV_PATTERN_RE = re.compile(
+    rf"(?:螺栓孔|安装孔|均布孔|mounting\s*holes?|bolt\s*holes?)\s*[:：=|]\s*(?P<count>\d+)\s*[×xX*-]\s*(?:{_DIA_SYM}|[MmDd])?\s*(?P<dia>\d+(?:\.\d+)?)",
+    re.IGNORECASE,
 )
 _CONV_HOLES_RE = re.compile(
-    r"(?:均布|打|开|带|分布|钻)?\s*(?P<count>\d+)\s*个\s*(?:直径\s*|[⌀∅ΦφDd]\s*)?(?P<dia>\d+(?:\.\d+)?)\s*(?:mm|毫米)?\s*的?\s*(?:螺栓|安装|通)?孔"
+    rf"(?:均布|打|开|带|分布|钻)?\s*(?P<count>\d+)\s*个\s*(?:直径\s*|(?:{_DIA_SYM}|[Dd])\s*)?(?P<dia>\d+(?:\.\d+)?)\s*(?:mm|毫米)?\s*的?\s*(?:螺栓|安装|通)?孔"
 )
 _REV_BCD_RE = re.compile(
-    r"(?:在\s*)?[⌀∅Φφ]?\s*(?P<val>\d+(?:\.\d+)?)\s*(?:mm|毫米)?\s*的?\s*(?:节圆|孔距圆|分布圆)"
+    rf"(?:在\s*)?{_DIA_SYM}?\s*(?P<val>\d+(?:\.\d+)?)\s*(?:mm|毫米)?\s*的?\s*(?:节圆|孔距圆|分布圆)"
 )
 _SHAFT_STEP_RE = re.compile(
-    r"(?:轴段|台阶|阶梯段|step)\s*\d*\s*[:：]?\s*[⌀∅ΦφDd]?\s*(?P<dia>\d+(?:\.\d+)?)\s*[×xX*]\s*[Ll]?\s*(?P<len>\d+(?:\.\d+)?)",
+    rf"(?:轴段|台阶|阶梯段|step)\s*\d*\s*[:：]?\s*(?:{_DIA_SYM}|[Dd])?\s*(?P<dia>\d+(?:\.\d+)?)\s*[×xX*]\s*[Ll]?\s*(?P<len>\d+(?:\.\d+)?)",
     re.IGNORECASE,
 )
 _CONV_SHAFT_STEP_RE = re.compile(
-    r"(?:第[一二三四五六1-9]段|(?:轴|阶梯)段\s*[1-9])\s*[:：]?\s*(?:外径|直径|[⌀∅ΦφDd])?\s*(?P<dia>\d+(?:\.\d+)?)\s*(?:mm|毫米)?\s*[,，\s]*?(?:长(?:度)?|[Ll])\s*[:：]?\s*(?P<len>\d+(?:\.\d+)?)",
+    rf"(?:第[一二三四五六1-9]段|(?:轴|阶梯)段\s*[1-9])\s*[:：]?\s*(?:外径|直径|{_DIA_SYM}|[Dd])?\s*(?P<dia>\d+(?:\.\d+)?)\s*(?:mm|毫米)?\s*[,，\s]*?(?:长(?:度)?|[Ll])\s*[:：]?\s*(?P<len>\d+(?:\.\d+)?)",
     re.IGNORECASE,
 )
 _CONV_SLOT_PAIR_RE = re.compile(
     r"(?P<slen>\d+(?:\.\d+)?)\s*[×xX*]\s*(?P<swid>\d+(?:\.\d+)?)\s*(?:mm|毫米)?\s*的?\s*(?:腰形槽|长圆槽|长槽)"
+)
+_MOUNTING_HOLE_MENTION_RE = re.compile(
+    r"(?:螺栓孔|安装孔|均布[^\n]{0,12}孔|节圆|孔距圆|分布圆|bolt\s*holes?|mounting\s*holes?|bolt\s*circle|\bBCD\b|\bPCD\b)",
+    re.IGNORECASE,
 )
 _INLINE_MATERIAL_RE = re.compile(
     r"(?<![A-Za-z0-9])(304不锈钢|316L?不锈钢|45#?钢|40Cr|20CrMnTi|Q235[AB]?|Q345[AB]?|6061(?:-T6)?铝合金|HT200|HT250|QT450|黄铜)(?![A-Za-z0-9])",
@@ -74,14 +84,14 @@ _INLINE_MATERIAL_RE = re.compile(
 )
 
 _PARAM_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
-    ("spigot_diameter", re.compile(r"(?:止口(?:外径|直径)?|嵌入式外径|spigot(?:\s*diameter)?)\s*(?:为|是)?\s*[:：=]?\s*[⌀∅Φφ]?\s*", re.IGNORECASE)),
-    ("boss_hole_diameter", re.compile(r"(?:轴承孔(?:径)?|立板孔(?:径)?|boss\s*hole)\s*(?:为|是)?\s*[:：=]?\s*[⌀∅Φφ]?\s*", re.IGNORECASE)),
-    ("outer_diameter", re.compile(r"(?<!止口)(?<!凸台)(?<!法兰颈)(?:外径|outer\s*diameter|OD)\s*(?:为|是)?\s*[:：=]?\s*[⌀∅Φφ]?\s*", re.IGNORECASE)),
-    ("bore_diameter", re.compile(r"(?:内径|内孔(?:直径)?|中心(?:通)?孔|轴孔(?:径)?|bore(?:\s*diameter)?|ID)\s*(?:为|是)?\s*[:：=]?\s*[⌀∅Φφ]?\s*", re.IGNORECASE)),
-    ("bolt_circle_diameter", re.compile(r"(?:节圆(?:直径)?|孔距圆|分布圆(?:直径)?|bolt\s*circle(?:\s*diameter)?|BCD|PCD)\s*(?:为|是)?\s*[:：=]?\s*[⌀∅Φφ]?\s*", re.IGNORECASE)),
-    ("hole_diameter", re.compile(r"(?:安装孔径|螺栓孔径|(?<!轴)(?<!内)(?<!中心)(?<!轴承)(?<!立板)孔径|hole\s*diameter)\s*(?:为|是)?\s*[:：=]?\s*[⌀∅Φφ]?\s*", re.IGNORECASE)),
+    ("spigot_diameter", re.compile(rf"(?:止口(?:外径|直径)?|嵌入式外径|spigot(?:\s*diameter)?)\s*(?:为|是)?\s*[:：=]?\s*{_DIA_SYM}?\s*", re.IGNORECASE)),
+    ("boss_hole_diameter", re.compile(rf"(?:轴承孔(?:径)?|立板孔(?:径)?|boss\s*hole)\s*(?:为|是)?\s*[:：=]?\s*{_DIA_SYM}?\s*", re.IGNORECASE)),
+    ("outer_diameter", re.compile(rf"(?<!止口)(?<!凸台)(?<!法兰颈)(?:外径|outer\s*diameter|OD)\s*(?:为|是)?\s*[:：=]?\s*{_DIA_SYM}?\s*", re.IGNORECASE)),
+    ("bore_diameter", re.compile(rf"(?:内径|内孔(?:直径)?|中心(?:通)?孔|轴孔(?:径)?|bore(?:\s*diameter)?|ID)\s*(?:为|是)?\s*[:：=]?\s*{_DIA_SYM}?\s*", re.IGNORECASE)),
+    ("bolt_circle_diameter", re.compile(rf"(?:节圆(?:直径)?|孔距圆|分布圆(?:直径)?|bolt\s*circle(?:\s*diameter)?|BCD|PCD)\s*(?:为|是)?\s*[:：=]?\s*{_DIA_SYM}?\s*", re.IGNORECASE)),
+    ("hole_diameter", re.compile(rf"(?:安装孔径|螺栓孔径|(?<!轴)(?<!内)(?<!中心)(?<!轴承)(?<!立板)孔径|hole\s*diameter)\s*(?:为|是)?\s*[:：=]?\s*{_DIA_SYM}?\s*", re.IGNORECASE)),
     ("hole_count", re.compile(r"(?:孔数|螺栓孔数|安装孔数|hole\s*count)\s*(?:为|是)?\s*[:：=]?\s*", re.IGNORECASE)),
-    ("hub_diameter", re.compile(r"(?:颈径|法兰颈(?:外)?径|凸台(?:外)?径|hub\s*diameter)\s*(?:为|是)?\s*[:：=]?\s*[⌀∅Φφ]?\s*", re.IGNORECASE)),
+    ("hub_diameter", re.compile(rf"(?:颈径|法兰颈(?:外)?径|凸台(?:外)?径|hub\s*diameter)\s*(?:为|是)?\s*[:：=]?\s*{_DIA_SYM}?\s*", re.IGNORECASE)),
     ("hub_height", re.compile(r"(?:颈高|法兰颈高|凸台高(?:度)?|hub\s*height)\s*(?:为|是)?\s*[:：=]?\s*", re.IGNORECASE)),
     ("module_mm", re.compile(r"(?:法向模数|模数|module)\s*(?:[mM]\s*)?(?:为|是)?\s*[:：=]?\s*", re.IGNORECASE)),
     ("teeth", re.compile(r"(?:齿数|teeth)\s*(?:[zZ]\s*)?(?:为|是)?\s*[:：=]?\s*", re.IGNORECASE)),
@@ -287,6 +297,12 @@ def compile_spec_from_fragments(
             _record_param(params, "hole_count", cnt, None, None, sid, frag.locator)
             _record_param(params, "hole_diameter", hdia, None, None, sid, frag.locator)
 
+        for m_hkv in _HOLE_KV_PATTERN_RE.finditer(line):
+            if "hole_count" not in params:
+                _record_param(params, "hole_count", float(m_hkv.group("count")), None, None, sid, frag.locator)
+            if "hole_diameter" not in params:
+                _record_param(params, "hole_diameter", float(m_hkv.group("dia")), None, None, sid, frag.locator)
+
         for m_ch in _CONV_HOLES_RE.finditer(line):
             cnt = float(m_ch.group("count"))
             hdia = float(m_ch.group("dia"))
@@ -385,11 +401,14 @@ def compile_spec_from_fragments(
             hc = int(round(resolved_params["hole_count"].value)) if "hole_count" in resolved_params else 0
             bcd = resolved_params["bolt_circle_diameter"].value if "bolt_circle_diameter" in resolved_params else None
             hd = resolved_params["hole_diameter"].value if "hole_diameter" in resolved_params else None
-            if hc > 0 and bcd is None:
+            mentions_holes = bool(_MOUNTING_HOLE_MENTION_RE.search(all_text)) or bcd is not None or hd is not None
+            if mentions_holes and hc <= 0:
+                missing.append("missing or unparsed mounting hole_count despite bolt/mounting hole description")
+            if (hc > 0 or mentions_holes) and bcd is None:
                 missing.append("missing required parameter for flange bolt pattern: bolt_circle_diameter")
-            elif hc > 0 and hd is None:
+            if (hc > 0 or mentions_holes) and hd is None:
                 missing.append("missing required parameter for flange bolt pattern: hole_diameter")
-            else:
+            if not missing:
                 try:
                     built = build_flange_geometry(
                         FlangeParameters(
@@ -777,10 +796,20 @@ def _attach_tolerances(
     dimensions: list[dict[str, Any]],
     params: dict[str, _SourcedParam],
 ) -> list[dict[str, Any]]:
+    """Bind tolerances & provenance strictly by semantic `param_key` so equal numeric values never cross-contaminate."""
     key_by_value: list[_SourcedParam] = list(params.values())
     enriched: list[dict[str, Any]] = []
     for dim in dimensions:
         copy_dim = dict(dim)
+        pkey = copy_dim.get("param_key")
+        if pkey is not None:
+            matched = params.get(str(pkey))
+            if matched is not None:
+                copy_dim["source_id"] = matched.source_id
+                copy_dim["tolerance_upper"] = matched.tol_upper
+                copy_dim["tolerance_lower"] = matched.tol_lower
+            enriched.append(copy_dim)
+            continue
         matched = next(
             (
                 p

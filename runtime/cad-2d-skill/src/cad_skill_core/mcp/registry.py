@@ -49,7 +49,13 @@ from .industry_adapters import (
     generate_pavement_bundle,
 )
 from .mcp_app_ui import MCP_APP_MIME_TYPE, MCP_APP_RESOURCE_URI, get_mcp_app_viewer_html
-from .sandbox import MCPSandboxError, MCPWorkspaceSandbox, default_runtime_root
+from .sandbox import (
+    MCPSandboxError,
+    MCPWorkspaceSandbox,
+    default_runtime_root,
+    resolve_safe_child_path,
+    validate_safe_single_name,
+)
 
 
 class StrictInputModel(BaseModel):
@@ -507,15 +513,16 @@ def _handle_generate_electrical_sld(
     task_id, task_dir = sandbox.allocate_task_dir("sld")
     out_dir = task_dir / "output"
     expectations = [(k, int(v)) for k, v in args.expect_text.items()]
+    clean_stem = validate_safe_single_name(args.stem, label="stem")
     bundle = generate_electrical_sld_bundle(
         args.spec,
         out_dir,
-        stem=args.stem,
+        stem=clean_stem,
         expect_text=expectations,
         render_lock=sandbox.render_lock,
     )
     png_path = bundle.pop("preview_png_path")
-    sld_dxf = out_dir / f"{args.stem}.dxf"
+    sld_dxf = resolve_safe_child_path(out_dir, f"{clean_stem}.dxf", label="stem")
     rubric_dict = score_dxf_drawing(sld_dxf).to_dict() if sld_dxf.is_file() else None
     payload = {
         "task_id": task_id,

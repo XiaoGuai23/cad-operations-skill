@@ -37,6 +37,8 @@ _SOLID3D_ALLOWED_HEADS = frozenset(
         "_.UNITS",
         "-LAYER",
         "_-LAYER",
+        "_PLINE",
+        "_.PLINE",
         "_BOX",
         "_.BOX",
         "_CYLINDER",
@@ -57,10 +59,25 @@ _SOLID3D_ALLOWED_HEADS = frozenset(
         "_.ZOOM",
         "_SAVEAS",
         "_.SAVEAS",
+        "_DXFOUT",
+        "_.DXFOUT",
         "_QSAVE",
         "_.QSAVE",
         "_QUIT",
         "_.QUIT",
+    }
+)
+
+_SOLID3D_CREATOR_HEADS = frozenset(
+    {
+        "_BOX",
+        "_.BOX",
+        "_CYLINDER",
+        "_.CYLINDER",
+        "_EXTRUDE",
+        "_.EXTRUDE",
+        "_REVOLVE",
+        "_.REVOLVE",
     }
 )
 
@@ -70,8 +87,13 @@ _FORBIDDEN_SCRIPT_TOKENS = re.compile(
 )
 
 
-def validate_3dsolid_script_allowlist(script_text: str, *, staged_dwg_name: str = "model3d.dwg") -> str:
-    """Validate every line of a 3DSOLID script against strict command allowlist & rewrite save target."""
+def validate_3dsolid_script_allowlist(
+    script_text: str,
+    *,
+    staged_dwg_name: str = "model3d.dwg",
+    verify_dxf_name: str = "verify3d.dxf",
+) -> str:
+    """Validate every line of a 3DSOLID script against strict command allowlist, require >=1 solid creator, & rewrite save/verify targets."""
 
     if not script_text or not script_text.strip():
         raise ValueError("3DSOLID script must not be empty")
@@ -82,6 +104,7 @@ def validate_3dsolid_script_allowlist(script_text: str, *, staged_dwg_name: str 
 
     sanitized_lines: list[str] = []
     saw_save = False
+    saw_solid_creator = False
     for raw_line in script_text.splitlines():
         stripped = raw_line.strip()
         if not stripped:
@@ -94,21 +117,42 @@ def validate_3dsolid_script_allowlist(script_text: str, *, staged_dwg_name: str 
         head = stripped.split()[0].upper()
         if head not in _SOLID3D_ALLOWED_HEADS:
             raise ValueError(f"command {head!r} is not in the 3DSOLID script allowlist")
+        if head in _SOLID3D_CREATOR_HEADS:
+            saw_solid_creator = True
         if head in {"_SAVEAS", "_.SAVEAS"}:
             sanitized_lines.append(f"_.SAVEAS\n2018\n{staged_dwg_name}")
             saw_save = True
-        elif head in {"_QUIT", "_.QUIT"}:
+        elif head in {"_DXFOUT", "_.DXFOUT", "_QUIT", "_.QUIT"}:
             continue
         else:
             if not stripped.isascii():
                 raise ValueError(f"non-ASCII token in controlled 3DSOLID command line: {stripped!r}")
             sanitized_lines.append(raw_line.rstrip("\r\n"))
 
+    if not saw_solid_creator:
+        raise ValueError("3DSOLID script does not create or import any 3D solid entity")
     if not saw_save:
         sanitized_lines.append(f"_.SAVEAS\n2018\n{staged_dwg_name}")
+    sanitized_lines.append(f"_.DXFOUT\n{verify_dxf_name}\n_Version\n2010\n16")
     sanitized_lines.append(f'(princ "\\n{_SOLID3D_SENTINEL}\\n")')
     sanitized_lines.append("_.QUIT\n_Yes")
     return "\n".join(sanitized_lines) + "\n"
+
+
+def verify_3dsolid_dxf_entities(path: Path) -> int:
+    """Reopen native CAD DXF export and verify >= 1 real 3DSOLID/BODY/REGION entity exists."""
+    import ezdxf
+
+    if not path.is_file() or path.stat().st_size == 0:
+        raise ValueError(f"3DSOLID verification DXF is missing or empty: {path}")
+    doc = ezdxf.readfile(path)
+    audit = doc.audit()
+    if audit.has_errors:
+        raise ValueError(f"3DSOLID verification DXF failed audit ({len(audit.errors)} errors): {path}")
+    solid_count = sum(1 for e in doc.modelspace() if e.dxftype() in {"3DSOLID", "BODY", "REGION"})
+    if solid_count < 1:
+        raise ValueError(f"native DWG modelspace contains 0 3DSOLID entities ({path})")
+    return solid_count
 
 
 def _validate_dwg_header(path: Path) -> str:
@@ -490,10 +534,11 @@ def execute_native_cad_job(request: NativeJobRequest) -> NativeJobResult:
         elif request.job_kind == "build-3dsolid":
             dwg_3d = stage / "model3d.dwg"
             hdr = _validate_dwg_header(dwg_3d)
+            solid_count = verify_3dsolid_dxf_entities(stage / "verify3d.dxf")
             published_outputs.append(
                 _publish_output_safe(dwg_3d, request.output_dir / f"{request.output_stem}.dwg")
             )
-            evidence_items.append(f"Native 3DSOLID DWG ({hdr}) created and verified.")
+            evidence_items.append(f"Native 3DSOLID DWG ({hdr}) created and verified ({solid_count} 3DSOLID(s) reopened).")
 
         else:
             evidence_items.append("Disposable native CAD audit + regenall probe succeeded cleanly.")

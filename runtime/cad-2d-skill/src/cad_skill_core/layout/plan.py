@@ -889,7 +889,27 @@ def _annotation_layouts(spec: DrawingSpec, views: tuple[ViewLayout, ...], printa
         ]
 
     # 5. Orthographic View Labels, Dimensions, Free Annotations & Assembly Balloons
-    result += [_text("view-label", view.label, view.bounds.center[0], view.bounds.max_y + 4.0, height, width_factor=width_factor, annotation_id=f"view-label-{view.name}", owner_view=view.name) for view in views]
+    gdt_views_above: set[str] = set()
+    if views and spec.gdt_frames:
+        views_lookup = {v.name: v for v in views}
+        for gdt in spec.gdt_frames:
+            gv = views_lookup.get(gdt.owner_view, views[0])
+            if gv.bounds.max_y + 18.0 < printable.max_y - 1.0:
+                gdt_views_above.add(gv.name)
+
+    result += [
+        _text(
+            "view-label",
+            view.label,
+            view.bounds.center[0],
+            (view.bounds.max_y + 13.0) if view.name in gdt_views_above else (view.bounds.max_y + 4.0),
+            height,
+            width_factor=width_factor,
+            annotation_id=f"view-label-{view.name}",
+            owner_view=view.name,
+        )
+        for view in views
+    ]
     if views:
         front = views[0]
         views_by_name = {v.name: v for v in views}
@@ -908,6 +928,60 @@ def _annotation_layouts(spec: DrawingSpec, views: tuple[ViewLayout, ...], printa
     return tuple(result)
 
 
+def _view_outline_sheet_bounds(
+    spec: DrawingSpec,
+    view: ViewLayout,
+) -> tuple[Bounds, tuple[float, ...], tuple[float, ...]]:
+    """Return exact OUTLINE-only sheet bounds plus vertical/horizontal CENTER line coordinates in sheet space."""
+    outline_ents = [
+        spec.geometry.entities[i]
+        for i in view.source_indices
+        if 0 <= i < len(spec.geometry.entities) and spec.geometry.entities[i].layer == "OUTLINE"
+    ]
+    tx, ty = view.translation
+    sc = view.scale
+    if outline_ents:
+        eb = _exact_group_bounds(outline_ents)
+        ob = Bounds(eb.min_x * sc + tx, eb.min_y * sc + ty, eb.max_x * sc + tx, eb.max_y * sc + ty)
+    else:
+        ob = view.bounds
+
+    vert_cx: list[float] = []
+    horiz_cy: list[float] = []
+    for i in view.source_indices:
+        if not (0 <= i < len(spec.geometry.entities)):
+            continue
+        ent = spec.geometry.entities[i]
+        if ent.layer == "CENTER" and isinstance(ent, LineEntity):
+            x0, y0 = ent.start[0] * sc + tx, ent.start[1] * sc + ty
+            x1, y1 = ent.end[0] * sc + tx, ent.end[1] * sc + ty
+            if abs(x0 - x1) < 1e-4 and abs(y1 - y0) > 1.0:
+                vert_cx.append(x0)
+            elif abs(y0 - y1) < 1e-4 and abs(x1 - x0) > 1.0:
+                horiz_cy.append(y0)
+    return ob, tuple(vert_cx), tuple(horiz_cy)
+
+
+def _pick_clear_x(
+    min_x: float,
+    max_x: float,
+    preferred_x: float,
+    avoid_xs: tuple[float, ...],
+    clearance: float = 2.8,
+) -> float:
+    if max_x <= min_x:
+        return min_x
+    base = min(max(preferred_x, min_x), max_x)
+    candidates = [
+        base,
+        *(base + step for step in (2.5, -2.5, 5.0, -5.0, 8.0, -8.0, 12.0, -12.0) if min_x <= base + step <= max_x),
+    ]
+    for cand in candidates:
+        if all(abs(cand - ax) >= clearance for ax in avoid_xs):
+            return cand
+    return base
+
+
 def _engineering_symbol_layouts(
     spec: DrawingSpec,
     views_by_name: dict[str, ViewLayout],
@@ -918,12 +992,13 @@ def _engineering_symbol_layouts(
     *,
     is_zh: bool,
 ) -> list[AnnotationLayout]:
-    """Plan collision-free GB/T 131 surface roughness, GB/T 1182 datum, and GD&T frame annotations."""
+    """Plan collision-free GB/T 131-2006 surface roughness, GB/T 1182 datum, and leader-equipped GD&T frames."""
     out: list[AnnotationLayout] = []
     s30 = 0.5773502691896257
-    sym_h = min(3.0, text_h * 0.88)
+    sym_h = min(2.6, text_h * 0.80)
+    gdt_owner_views = {g.owner_view for g in spec.gdt_frames}
 
-    # 1. Surface roughness symbols (general upper-right sheet callout + mating surface symbols)
+    # 1. Surface roughness symbols (GB/T 131-2006 horizontal-shelf symbol: zero line crossing text, tip flush on OUTLINE!)
     local_sf_idx = 0
     for idx, sf in enumerate(spec.surface_finishes, start=1):
         mode_tag = "machined" if sf.machining_required else "unmachined"
@@ -931,13 +1006,15 @@ def _engineering_symbol_layouts(
             prefix = "其余" if is_zh else "REST"
             pref_w = max(sym_h, measure_text_width_mm(prefix, text_h, width_factor=width_factor))
             val_w = max(sym_h, measure_text_width_mm(sf.value, sym_h, width_factor=width_factor))
-            h1, h2 = 4.6, 9.6
-            tx = printable.max_x - max(h2 * s30 + 3.0, val_w + 3.0)
-            ty = printable.max_y - h2 - 3.5
-            b_min_x = tx - h1 * s30 - pref_w - 2.5
-            b_max_x = max(tx + h2 * s30, tx - h1 * s30 + val_w) + 0.8
-            b_min_y = ty
-            b_max_y = max(ty + h2, ty + h1 + 1.0 + sym_h) + 0.5
+            h1, h2 = 3.8, 7.8
+            shelf_len = val_w + 1.8
+            right_span = h2 * s30 + shelf_len
+            tx = printable.max_x - right_span - 2.5
+            ty = printable.max_y - h2 - 3.0
+            b_min_x = tx - h1 * s30 - pref_w - 2.6
+            b_max_x = tx + right_span + 0.6
+            b_min_y = ty - 0.1
+            b_max_y = ty + h2 + 0.6
             if b_min_x > printable.min_x + 4.0 and b_min_y > printable.min_y + 4.0:
                 out.append(
                     AnnotationLayout(
@@ -945,7 +1022,7 @@ def _engineering_symbol_layouts(
                         f"{prefix}|{sf.value}",
                         Bounds(b_min_x, b_min_y, b_max_x, b_max_y),
                         "DIM",
-                        points=((tx, ty),),
+                        points=((tx, ty), (shelf_len, sym_h)),
                         annotation_id=f"roughness-{idx}",
                         group_id=f"roughness-{idx}",
                         dim_kind=f"general-{mode_tag}",
@@ -954,54 +1031,68 @@ def _engineering_symbol_layouts(
             continue
 
         v = views_by_name.get(sf.owner_view or default_view.name, default_view)
+        ob, vert_cx, horiz_cy = _view_outline_sheet_bounds(spec, v)
         local_sf_idx += 1
-        h1, h2 = 3.8, 8.0
+        h1, h2 = 3.2, 6.8
         val_w = max(sym_h, measure_text_width_mm(sf.value, sym_h, width_factor=width_factor))
-        sym_right_span = max(h2 * s30, val_w - h1 * s30) + 0.8
-        lbl_half_w = max(text_h, measure_text_width_mm(v.label, text_h, width_factor=width_factor)) / 2.0 + 3.5
+        shelf_len = val_w + 1.6
+        sym_right_span = h2 * s30 + shelf_len + 0.5
+        lbl_half_w = max(text_h, measure_text_width_mm(v.label, text_h, width_factor=width_factor)) / 2.0 + 3.0
 
-        # Prefer top-left of view if view is wide enough to stay clear of centered view-label
-        tx_cand = v.bounds.min_x + h1 * s30 + 2.0
-        if sf.placement == "top-left" and (tx_cand + sym_right_span) < (v.bounds.center[0] - lbl_half_w):
-            ty = v.bounds.max_y + 0.25
+        # Place flush on top OUTLINE edge of view (ty == ob.max_y, 0.00 mm gap!), avoiding CENTER lines & view-label
+        left_x_min = ob.min_x + h1 * s30 + 1.8
+        left_x_max = min(ob.max_x - sym_right_span - 1.0, v.bounds.center[0] - lbl_half_w - sym_right_span)
+        tx_cand = _pick_clear_x(left_x_min, left_x_max, left_x_min + 2.0, vert_cx, clearance=2.8)
+        if (
+            sf.placement == "top-left"
+            and v.name not in gdt_owner_views
+            and left_x_max >= left_x_min
+            and (ob.max_y + h2 + 0.6 < printable.max_y - 1.0)
+        ):
+            ty = ob.max_y
             out.append(
                 AnnotationLayout(
                     "surface-roughness",
                     sf.value,
-                    Bounds(tx_cand - h1 * s30 - 0.3, ty, tx_cand + sym_right_span, ty + h2 + 0.5),
+                    Bounds(tx_cand - h1 * s30 - 0.3, ty - 0.05, tx_cand + sym_right_span, ty + h2 + 0.4),
                     "DIM",
-                    points=((tx_cand, ty),),
+                    points=((tx_cand, ty), (shelf_len, sym_h)),
                     annotation_id=f"roughness-{idx}",
                     group_id=f"roughness-{idx}",
                     owner_view=v.name,
+                    allowed_contact=("own-view-endpoint",),
                     dim_kind=f"top-{mode_tag}",
                 )
             )
-        elif v.bounds.min_x - (sym_right_span + h1 * s30 + 3.0) > printable.min_x + 2.0:
-            # Place cleanly on upper-left vertical contour edge (upright check symbol with short horizontal shelf)
-            shelf_x = v.bounds.min_x - 0.25
-            shelf_y = v.bounds.min_y + v.bounds.height * (0.72 if local_sf_idx == 1 else 0.52)
-            tx = shelf_x - sym_right_span - 1.2
+        elif ob.min_x - (sym_right_span + h1 * s30 + 3.5) > printable.min_x + 2.0:
+            # Place on horizontal leader shelf touching exact left OUTLINE contour edge (ob.min_x)
+            shelf_x = ob.min_x
+            raw_sy = ob.min_y + ob.height * (0.72 if local_sf_idx == 1 else 0.52)
+            shelf_y = raw_sy + 3.0 if any(abs(raw_sy - cy) < 2.2 for cy in horiz_cy) else raw_sy
+            tx = shelf_x - sym_right_span - 1.6
             ty = shelf_y
             out.append(
                 AnnotationLayout(
                     "surface-roughness",
                     sf.value,
-                    Bounds(tx - h1 * s30 - 0.3, ty, shelf_x, ty + h2 + 0.5),
+                    Bounds(tx - h1 * s30 - 0.6, ty - 0.8, shelf_x + 0.05, ty + h2 + 0.4),
                     "DIM",
-                    points=((tx, ty), (shelf_x, shelf_y)),
+                    points=((tx, ty), (shelf_len, sym_h), (shelf_x, shelf_y)),
                     annotation_id=f"roughness-{idx}",
                     group_id=f"roughness-{idx}",
                     owner_view=v.name,
+                    allowed_contact=("own-view-endpoint",),
                     dim_kind=f"shelf-{mode_tag}",
                 )
             )
 
-    # 2. Datum feature symbols ([A]) on left contour of owner_view
+    # 2. Datum feature symbols ([A]) flush on exact left OUTLINE contour edge of owner_view
     for idx, dat in enumerate(spec.datums, start=1):
         v = views_by_name.get(dat.owner_view, default_view)
-        ax = v.bounds.min_x - 0.25
-        ay = v.bounds.min_y + v.bounds.height * (0.26 if idx == 1 else 0.14)
+        ob, _, horiz_cy = _view_outline_sheet_bounds(spec, v)
+        ax = ob.min_x
+        raw_ay = ob.min_y + ob.height * (0.26 if idx == 1 else 0.14)
+        ay = raw_ay + 2.8 if any(abs(raw_ay - cy) < 2.2 for cy in horiz_cy) else raw_ay
         box_size = 6.2
         total_left = 6.2 + box_size
         if ax - total_left > printable.min_x + 1.5:
@@ -1009,36 +1100,66 @@ def _engineering_symbol_layouts(
                 AnnotationLayout(
                     "datum-symbol",
                     dat.letter.strip()[:2],
-                    Bounds(ax - total_left, ay - box_size / 2.0, ax, ay + box_size / 2.0),
+                    Bounds(ax - total_left - 0.2, ay - box_size / 2.0 - 0.1, ax + 0.05, ay + box_size / 2.0 + 0.1),
                     "DIM",
                     points=((ax, ay),),
                     annotation_id=f"datum-{idx}",
                     group_id=f"datum-{idx}",
                     owner_view=v.name,
+                    allowed_contact=("own-view-endpoint",),
                 )
             )
 
-    # 3. GD&T Feature Control Frames ([⊥ | 0.02 | A]) cleanly above view-label band
+    # 3. GD&T Feature Control Frames ([◎ | ⌀0.02 | A]) BELOW view-label, with orthogonal leader + arrowhead touching OUTLINE!
     for idx, gdt in enumerate(spec.gdt_frames, start=1):
         v = views_by_name.get(gdt.owner_view, default_view)
-        box_h = 6.2
-        tol_w = max(11.5, measure_text_width_mm(gdt.tolerance, sym_h, width_factor=width_factor) + 3.8)
+        ob, vert_cx, _ = _view_outline_sheet_bounds(spec, v)
+        box_h = 5.8
+        tol_w = max(11.2, measure_text_width_mm(gdt.tolerance, sym_h, width_factor=width_factor) + 3.6)
         ref_count = len(gdt.datum_refs)
         frame_w = box_h + tol_w + ref_count * box_h
-        fy0 = v.bounds.max_y + 10.2 + (idx - 1) * (box_h + 2.2)
-        fx0 = max(printable.min_x + 2.0, min(v.bounds.center[0] - frame_w / 2.0, printable.max_x - frame_w - 4.0))
-        if fy0 + box_h < printable.max_y - 1.5:
+        fy0 = max(v.bounds.max_y, ob.max_y) + 4.0 + (idx - 1) * (box_h + 2.2)
+        # Shift frame slightly right of view center so orthogonal leader exits cleanly from left side down to top OUTLINE
+        pref_fx0 = v.bounds.center[0] - frame_w * 0.30
+        fx0 = max(printable.min_x + 8.0, min(pref_fx0, printable.max_x - frame_w - 3.0))
+        elbow_pref = max(ob.min_x + 2.5, min(ob.max_x - 2.5, fx0 - 4.2))
+        if elbow_pref > fx0 - 2.0:
+            # Frame is near left edge; exit leader from right side instead
+            leader_side = 1.0
+            x_target = _pick_clear_x(
+                max(ob.min_x + 2.5, fx0 + frame_w + 2.2),
+                max(ob.max_x - 2.5, fx0 + frame_w + 3.5),
+                min(ob.max_x - 3.0, fx0 + frame_w + 4.2),
+                vert_cx,
+                clearance=2.2,
+            )
+        else:
+            leader_side = -1.0
+            x_target = _pick_clear_x(
+                ob.min_x + 2.2,
+                min(ob.max_x - 2.2, fx0 - 2.2),
+                elbow_pref,
+                vert_cx,
+                clearance=2.2,
+            )
+        y_target = ob.max_y
+        b_min_x = min(fx0, x_target - 1.1) - 0.2
+        b_max_x = max(fx0 + frame_w, x_target + 1.1) + 0.2
+        b_min_y = min(fy0, y_target) - 0.05
+        b_max_y = fy0 + box_h + 0.2
+        if fy0 + box_h < printable.max_y - 4.5 and b_min_x > printable.min_x + 1.0 and b_max_x < printable.max_x - 1.0:
             payload_str = "|".join([gdt.symbol, gdt.tolerance, *gdt.datum_refs])
             out.append(
                 AnnotationLayout(
                     "gdt-frame",
                     payload_str,
-                    Bounds(fx0, fy0, fx0 + frame_w, fy0 + box_h),
+                    Bounds(b_min_x, b_min_y, b_max_x, b_max_y),
                     "DIM",
-                    points=((fx0, fy0), (tol_w, box_h)),
+                    points=((fx0, fy0), (tol_w, box_h), (x_target, y_target), (leader_side, 0.0)),
                     annotation_id=f"gdt-{idx}",
                     group_id=f"gdt-{idx}",
                     owner_view=v.name,
+                    allowed_contact=("own-view-endpoint",),
                 )
             )
     return out

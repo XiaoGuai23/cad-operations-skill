@@ -15,7 +15,9 @@ from cad_skill_core.documents.spec_compiler import (
     _CONV_HOLES_RE,
     _CONV_SHAFT_STEP_RE,
     _CONV_SLOT_PAIR_RE,
+    _HOLE_KV_PATTERN_RE,
     _INLINE_MATERIAL_RE,
+    _MOUNTING_HOLE_MENTION_RE,
     _NUMBER_TOL_RE,
     _PARAM_PATTERNS,
     _REV_BCD_RE,
@@ -144,6 +146,10 @@ def compile_model3d_from_fragments(
             params.setdefault("hole_count", float(m_b.group("count")))
             params.setdefault("hole_diameter", float(m_b.group("dia")))
 
+        for m_hkv in _HOLE_KV_PATTERN_RE.finditer(line):
+            params.setdefault("hole_count", float(m_hkv.group("count")))
+            params.setdefault("hole_diameter", float(m_hkv.group("dia")))
+
         for m_ch in _CONV_HOLES_RE.finditer(line):
             params.setdefault("hole_count", float(m_ch.group("count")))
             params.setdefault("hole_diameter", float(m_ch.group("dia")))
@@ -232,7 +238,10 @@ def compile_model3d_from_fragments(
         hc = int(round(params.get("hole_count", 0.0)))
         bcd = params.get("bolt_circle_diameter")
         hd = params.get("hole_diameter")
-        if hc > 0 and (bcd is None or hd is None):
+        mentions_holes = bool(_MOUNTING_HOLE_MENTION_RE.search(all_text)) or bcd is not None or hd is not None
+        if mentions_holes and hc <= 0:
+            missing.append("missing or unparsed mounting hole_count despite bolt/mounting hole description")
+        if (hc > 0 or mentions_holes) and (bcd is None or hd is None):
             missing.append("missing bolt_circle_diameter or hole_diameter for flange bolt holes")
             hc = 0
         hub_h = params.get("hub_height", 0.0)

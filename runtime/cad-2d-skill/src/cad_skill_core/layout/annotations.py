@@ -429,10 +429,11 @@ def _validate_final_layout(plan: LayoutPlan) -> None:
         for view_name, view_bounds in views.items():
             if annotation.bounds.intersects(view_bounds):
                 if (
-                    annotation.kind == "dimension"
+                    annotation.kind in {"dimension", "surface-roughness", "datum-symbol", "gdt-frame"}
                     and annotation.owner_view == view_name
                     and (
                         "own-view-feature" in annotation.allowed_contact
+                        or "own-view-endpoint" in annotation.allowed_contact
                         or _shallow_edge_overlap(
                             annotation.bounds,
                             view_bounds,
@@ -747,9 +748,13 @@ def _emit_surface_roughness(
     tx, ty = annotation.points[0]
     is_general = annotation.dim_kind.startswith("general-")
     machined = annotation.dim_kind.endswith("machined") and not annotation.dim_kind.endswith("unmachined")
-    h1 = 4.6 if is_general else 3.8
-    h2 = 9.6 if is_general else 8.0
-    sym_h = min(3.0, plan.text_height_mm * 0.85)
+    h1 = 3.8 if is_general else 3.2
+    h2 = 7.8 if is_general else 6.8
+    if len(annotation.points) >= 2:
+        shelf_len, sym_h = annotation.points[1]
+    else:
+        sym_h = min(2.6, plan.text_height_mm * 0.80)
+        shelf_len = 10.5
     lyr = annotation.layer
 
     if is_general and "|" in annotation.text:
@@ -758,31 +763,35 @@ def _emit_surface_roughness(
         modelspace.add_text(
             prefix,
             dxfattribs={"layer": "TEXT", "style": "normal", "height": plan.text_height_mm},
-        ).set_placement((pref_x, ty + h1 - 1.0))
+        ).set_placement((pref_x, ty + h1 - 0.8))
     else:
         val_text = annotation.text
 
-    # GB/T 131-2006 60-degree surface roughness tick + machining closing bar
+    # GB/T 131-2006 60-degree surface roughness symbol WITH right horizontal shelf (zero line crossing text!)
     p_left = (tx - h1 * s30, ty + h1)
     p_tip = (tx, ty)
     p_right_mid = (tx + h1 * s30, ty + h1)
     p_right_top = (tx + h2 * s30, ty + h2)
-    modelspace.add_lwpolyline([p_left, p_tip, p_right_top], close=False, dxfattribs={"layer": lyr})
+    p_shelf_end = (p_right_top[0] + shelf_len, ty + h2)
+    modelspace.add_lwpolyline([p_left, p_tip, p_right_top, p_shelf_end], close=False, dxfattribs={"layer": lyr})
     if machined:
         modelspace.add_line(p_left, p_right_mid, dxfattribs={"layer": lyr})
     else:
-        modelspace.add_circle((tx, ty + h1 * 0.66), h1 * 0.28, dxfattribs={"layer": lyr})
+        modelspace.add_circle((tx, ty + h1 * 0.65), h1 * 0.28, dxfattribs={"layer": lyr})
 
-    if annotation.dim_kind.startswith("shelf-") and len(annotation.points) >= 2:
-        sx, sy = annotation.points[1]
-        modelspace.add_line((p_left[0] - 0.5, sy), (sx, sy), dxfattribs={"layer": lyr})
-        # Small arrowhead touching left contour
-        modelspace.add_lwpolyline([(sx - 1.8, sy + 0.55), (sx, sy), (sx - 1.8, sy - 0.55)], close=False, dxfattribs={"layer": lyr})
+    if annotation.dim_kind.startswith("shelf-") and len(annotation.points) >= 3:
+        sx, sy = annotation.points[2]
+        modelspace.add_line((p_left[0] - 0.4, sy), (sx, sy), dxfattribs={"layer": lyr})
+        # Crisp filled arrowhead touching exact left OUTLINE contour
+        arr_pts = [(sx - 2.1, sy + 0.65), (sx - 2.1, sy - 0.65), (sx, sy)]
+        modelspace.add_solid(arr_pts, dxfattribs={"layer": lyr})
+        modelspace.add_lwpolyline(arr_pts, close=True, dxfattribs={"layer": lyr})
 
+    # Place Ra parameter value cleanly UNDER the horizontal shelf and strictly RIGHT of the 60-deg stroke!
     modelspace.add_text(
         val_text,
         dxfattribs={"layer": "TEXT", "style": "normal", "height": sym_h},
-    ).set_placement((tx - h1 * s30 + 0.2, ty + h1 + 0.9))
+    ).set_placement((p_right_top[0] + 0.45, ty + h2 - sym_h - 0.8))
 
 
 def _emit_datum_symbol(
@@ -793,14 +802,10 @@ def _emit_datum_symbol(
     ax, ay = annotation.points[0]
     box_s = 6.2
     lyr = annotation.layer
-    # Datum triangle touching vertical surface at (ax, ay)
-    tri = [(ax, ay - 2.1), (ax, ay + 2.1), (ax - 3.4, ay)]
+    # GB/T 1182 solid-filled datum triangle flush (0.00 mm gap) on OUTLINE vertical surface at (ax, ay)
+    tri = [(ax, ay - 2.0), (ax, ay + 2.0), (ax - 3.4, ay)]
+    modelspace.add_solid(tri, dxfattribs={"layer": lyr})
     modelspace.add_lwpolyline(tri, close=True, dxfattribs={"layer": lyr})
-    # Fill shading lines inside datum triangle per GB/T 1182
-    for frac in (0.28, 0.55):
-        vx = ax - 3.4 * frac
-        half_h = 2.1 * (1.0 - frac)
-        modelspace.add_line((vx, ay - half_h), (vx, ay + half_h), dxfattribs={"layer": lyr})
     # Stem + boxed datum letter
     bx1 = ax - 6.2
     bx0 = bx1 - box_s
@@ -849,25 +854,25 @@ def _emit_gdt_frame(
     icx = fx0 + box_h / 2.0
     icy = fy0 + box_h / 2.0
     if sym_kind == "coaxiality":
-        modelspace.add_circle((icx, icy), 1.9, dxfattribs={"layer": lyr})
-        modelspace.add_circle((icx, icy), 0.95, dxfattribs={"layer": lyr})
+        modelspace.add_circle((icx, icy), 1.8, dxfattribs={"layer": lyr})
+        modelspace.add_circle((icx, icy), 0.9, dxfattribs={"layer": lyr})
     elif sym_kind == "parallelism":
-        modelspace.add_line((icx - 1.7, icy - 1.7), (icx - 0.2, icy + 1.7), dxfattribs={"layer": lyr})
-        modelspace.add_line((icx + 0.2, icy - 1.7), (icx + 1.7, icy + 1.7), dxfattribs={"layer": lyr})
+        modelspace.add_line((icx - 1.6, icy - 1.6), (icx - 0.2, icy + 1.6), dxfattribs={"layer": lyr})
+        modelspace.add_line((icx + 0.2, icy - 1.6), (icx + 1.6, icy + 1.6), dxfattribs={"layer": lyr})
     elif sym_kind == "runout":
-        modelspace.add_line((icx - 1.7, icy - 1.7), (icx + 1.6, icy + 1.6), dxfattribs={"layer": lyr})
-        modelspace.add_lwpolyline([(icx + 0.4, icy + 1.5), (icx + 1.6, icy + 1.6), (icx + 1.5, icy + 0.4)], close=False, dxfattribs={"layer": lyr})
+        modelspace.add_line((icx - 1.6, icy - 1.6), (icx + 1.5, icy + 1.5), dxfattribs={"layer": lyr})
+        modelspace.add_lwpolyline([(icx + 0.4, icy + 1.4), (icx + 1.5, icy + 1.5), (icx + 1.4, icy + 0.4)], close=False, dxfattribs={"layer": lyr})
     elif sym_kind == "flatness":
         modelspace.add_lwpolyline(
-            [(icx - 2.0, icy - 1.3), (icx + 1.1, icy - 1.3), (icx + 2.0, icy + 1.3), (icx - 1.1, icy + 1.3)],
+            [(icx - 1.9, icy - 1.2), (icx + 1.0, icy - 1.2), (icx + 1.9, icy + 1.2), (icx - 1.0, icy + 1.2)],
             close=True,
             dxfattribs={"layer": lyr},
         )
     else:  # perpendicularity
-        modelspace.add_line((icx - 1.9, icy - 1.6), (icx + 1.9, icy - 1.6), dxfattribs={"layer": lyr})
-        modelspace.add_line((icx, icy - 1.6), (icx, icy + 1.9), dxfattribs={"layer": lyr})
+        modelspace.add_line((icx - 1.8, icy - 1.5), (icx + 1.8, icy - 1.5), dxfattribs={"layer": lyr})
+        modelspace.add_line((icx, icy - 1.5), (icx, icy + 1.8), dxfattribs={"layer": lyr})
 
-    txt_h = min(2.9, plan.text_height_mm * 0.86)
+    txt_h = min(2.8, plan.text_height_mm * 0.84)
     modelspace.add_text(
         tol_txt,
         dxfattribs={"layer": "TEXT", "style": "normal", "height": txt_h},
@@ -880,6 +885,22 @@ def _emit_gdt_frame(
             dxfattribs={"layer": "TEXT", "style": "normal", "height": txt_h},
         ).set_placement((rx + box_h / 2.0, icy), align=TextEntityAlignment.MIDDLE_CENTER)
         rx += box_h
+
+    # GB/T 1182 orthogonal leader line + solid arrowhead touching the toleranced OUTLINE contour!
+    if len(annotation.points) >= 3:
+        x_tgt, y_tgt = annotation.points[2]
+        side = annotation.points[3][0] if len(annotation.points) >= 4 else -1.0
+        x_exit = (fx0 + total_w) if side > 0 else fx0
+        modelspace.add_lwpolyline(
+            [(x_exit, icy), (x_tgt, icy), (x_tgt, y_tgt)],
+            close=False,
+            dxfattribs={"layer": lyr},
+        )
+        arr_h = min(2.5, max(1.8, abs(icy - y_tgt) * 0.45))
+        arr_w = arr_h * 0.34
+        arr_tri = [(x_tgt - arr_w, y_tgt + arr_h), (x_tgt + arr_w, y_tgt + arr_h), (x_tgt, y_tgt)]
+        modelspace.add_solid(arr_tri, dxfattribs={"layer": lyr})
+        modelspace.add_lwpolyline(arr_tri, close=True, dxfattribs={"layer": lyr})
 
 
 def _serialized(doc: ezdxf.document.Drawing) -> str:

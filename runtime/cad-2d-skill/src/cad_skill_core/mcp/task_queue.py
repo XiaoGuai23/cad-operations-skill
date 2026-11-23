@@ -127,6 +127,8 @@ class AsyncCADJobManager:
         src_root = str(Path(__file__).resolve().parents[2])
         env = dict(os.environ)
         env["PYTHONDONTWRITEBYTECODE"] = "1"
+        env["PYTHONUTF8"] = "1"
+        env["PYTHONIOENCODING"] = "utf-8"
         env["PYTHONPATH"] = src_root + os.pathsep + env.get("PYTHONPATH", "")
 
         worker_payload = json.dumps(
@@ -247,9 +249,15 @@ class AsyncCADJobManager:
 
 
 def _worker_main() -> int:
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
     from .registry import call_mcp_tool
 
-    raw = sys.stdin.read()
+    raw = sys.stdin.buffer.read().decode("utf-8") if hasattr(sys.stdin, "buffer") else sys.stdin.read()
     req = json.loads(raw)
     sb = MCPWorkspaceSandbox(
         Path(req["workspace_root"]),
@@ -261,8 +269,13 @@ def _worker_main() -> int:
         "isError": bool(res.get("isError")),
         "structuredContent": res.get("structuredContent") or {},
     }
-    sys.stdout.write(json.dumps(out, ensure_ascii=False) + "\n")
-    sys.stdout.flush()
+    payload_bytes = (json.dumps(out, ensure_ascii=False) + "\n").encode("utf-8")
+    if hasattr(sys.stdout, "buffer"):
+        sys.stdout.buffer.write(payload_bytes)
+        sys.stdout.buffer.flush()
+    else:
+        sys.stdout.write(payload_bytes.decode("utf-8"))
+        sys.stdout.flush()
     return 0
 
 

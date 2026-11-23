@@ -11,6 +11,7 @@ from dataclasses import asdict, dataclass
 import json
 from math import hypot, isclose, isfinite
 from pathlib import Path
+import re
 from typing import Any, Mapping
 
 import ezdxf
@@ -35,6 +36,7 @@ class CustomCriterionResult:
     earned: float
     passed: bool
     detail: str
+    status: str = "passed"  # "passed" | "failed" | "unevaluated"
 
 
 @dataclass(frozen=True, slots=True)
@@ -321,7 +323,7 @@ def score_dxf_drawing(
             cid = str(item.get("id", f"R-{idx:02d}"))
             desc = str(item.get("description", item.get("title", cid)))
             weight = float(item.get("weight", 10.0))
-            ok, detail = _evaluate_single_custom_criterion(
+            status_str, detail = _evaluate_single_custom_criterion(
                 item,
                 entities=entities,
                 used_layers=used_layers,
@@ -330,6 +332,7 @@ def score_dxf_drawing(
                 spans=(span_x, span_y),
                 audit_error_count=len(ez_auditor.errors),
             )
+            ok = status_str == "passed"
             custom_results.append(
                 CustomCriterionResult(
                     criterion_id=cid,
@@ -338,9 +341,12 @@ def score_dxf_drawing(
                     earned=weight if ok else 0.0,
                     passed=ok,
                     detail=detail,
+                    status=status_str,
                 )
             )
-            if not ok:
+            if status_str == "unevaluated":
+                recommendations.append(f"专项评分项 [{cid}] 未评估（计 0 分）：{detail}")
+            elif not ok:
                 recommendations.append(f"未满足专项评分项 [{cid}]：{desc}（{detail}）")
 
     if custom_results:
@@ -364,6 +370,30 @@ def score_dxf_drawing(
     )
 
 
+def _extract_nominal_dimension_numbers(ent: Any) -> list[float]:
+    """Extract exact nominal dimension value(s) strictly from a DXF DIMENSION entity."""
+    out: list[float] = []
+    raw_lbl = str(ent.dxf.get("text", "")).strip()
+    if raw_lbl and raw_lbl != "<>":
+        # Strip tolerance suffix ("±0.05" or "(+0.05/-0.02)") so tolerance numbers aren't mistaken for nominal values
+        base_part = re.split(r"±|\(", raw_lbl, maxsplit=1)[0].strip()
+        # Strip multiplicity count prefix such as "6×" / "4-" before a diameter/radius symbol
+        base_part = re.sub(r"^\d+\s*[×xX*-]\s*(?=[⌀∅ØøΦφФфRrMm\d])", "", base_part)
+        for tok in re.findall(r"(?<![A-Za-z0-9.])\d+(?:\.\d+)?(?![0-9])", base_part):
+            try:
+                out.append(float(tok))
+            except ValueError:
+                pass
+    if not out:
+        try:
+            meas = float(ent.get_measurement())
+            if isfinite(meas) and meas > 0:
+                out.append(meas)
+        except Exception:
+            pass
+    return out
+
+
 def _evaluate_single_custom_criterion(
     rule: Mapping[str, Any],
     *,
@@ -373,56 +403,62 @@ def _evaluate_single_custom_criterion(
     all_texts: list[str],
     spans: tuple[float, float],
     audit_error_count: int,
-) -> tuple[bool, str]:
-    check_type = str(rule.get("type", "composite")).lower()
+) -> tuple[str, str]:
+    raw_type = rule.get("type")
+    check_type = str(raw_type).strip().lower() if raw_type is not None else ""
     joined_text = "\n".join(all_texts)
 
     if check_type == "zero_audit_errors":
-        return (audit_error_count == 0, f"ezdxf errors={audit_error_count}")
+        return ("passed" if audit_error_count == 0 else "failed", f"ezdxf errors={audit_error_count}")
 
-    if check_type == "required_layers" or "required_layers" in rule:
+    if check_type == "required_layers" or (not check_type and "required_layers" in rule):
         req = {str(x).upper() for x in rule.get("required_layers", [])}
         missing = sorted(req - used_layers)
-        return (len(missing) == 0, "全部具备" if not missing else f"缺少图层 {missing}")
+        return ("passed" if not missing else "failed", "全部具备" if not missing else f"缺少图层 {missing}")
 
-    if check_type == "min_dimensions" or "min_dimensions" in rule:
+    if check_type == "min_dimensions" or (not check_type and "min_dimensions" in rule):
         target = int(rule.get("min_dimensions", 1))
-        return (dim_count >= target, f"实际标注数 {dim_count} / 要求 >= {target}")
+        return ("passed" if dim_count >= target else "failed", f"实际标注数 {dim_count} / 要求 >= {target}")
 
-    if check_type == "min_entities" or "min_entities" in rule:
+    if check_type == "min_entities" or (not check_type and "min_entities" in rule):
         target = int(rule.get("min_entities", 1))
-        return (len(entities) >= target, f"实际图元数 {len(entities)} / 要求 >= {target}")
+        return ("passed" if len(entities) >= target else "failed", f"实际图元数 {len(entities)} / 要求 >= {target}")
 
-    if check_type == "required_texts" or "required_texts" in rule:
+    if check_type == "required_texts" or (not check_type and "required_texts" in rule):
         req_t = [str(x) for x in rule.get("required_texts", [])]
         miss_t = [t for t in req_t if t.casefold() not in joined_text.casefold()]
-        return (len(miss_t) == 0, "全部命中" if not miss_t else f"缺少文本 {miss_t}")
+        return ("passed" if not miss_t else "failed", "全部命中" if not miss_t else f"缺少文本 {miss_t}")
 
-    if check_type == "expected_dimension_values" or "expected_dimension_values" in rule:
+    if check_type == "expected_dimension_values" or (not check_type and "expected_dimension_values" in rule):
         expected_vals = [float(x) for x in rule.get("expected_dimension_values", [])]
-        actual_vals: list[float] = []
+        dim_values: list[float] = []
         for ent in entities:
             if ent.dxftype() == "DIMENSION":
-                try:
-                    actual_vals.append(float(ent.get_measurement()))
-                except Exception:
-                    pass
-        # Also match formatted dimension labels in case of scaled views (1:2, 2:1)
-        dim_labels = [str(ent.dxf.get("text", "")) for ent in entities if ent.dxftype() == "DIMENSION"]
+                dim_values.extend(_extract_nominal_dimension_numbers(ent))
         unmatched: list[float] = []
         for ev in expected_vals:
-            token = f"{ev:g}"
-            if not (
-                any(isclose(av, ev, rel_tol=1e-2, abs_tol=0.5) for av in actual_vals)
-                or any(token in lbl for lbl in dim_labels)
-                or token in joined_text
-            ):
+            if not any(isclose(dv, ev, rel_tol=1e-3, abs_tol=0.05) for dv in dim_values):
                 unmatched.append(ev)
-        return (len(unmatched) == 0, "关键尺寸全部匹配" if not unmatched else f"未检出尺寸 {unmatched}")
+        return ("passed" if not unmatched else "failed", "关键尺寸全部匹配" if not unmatched else f"未检出尺寸标注 {unmatched}")
 
-    if check_type == "bbox_min_span" or "bbox_min_span" in rule:
+    if check_type == "bbox_min_span" or (not check_type and "bbox_min_span" in rule):
         min_w, min_h = rule.get("bbox_min_span", [10.0, 10.0])
         ok = spans[0] >= float(min_w) and spans[1] >= float(min_h)
-        return (ok, f"实际包络 {spans[0]:.1f}×{spans[1]:.1f} mm")
+        return ("passed" if ok else "failed", f"实际包络 {spans[0]:.1f}×{spans[1]:.1f} mm")
 
-    return (audit_error_count == 0 and len(entities) > 0, "基础交付物有效")
+    if check_type == "bbox_span" or (not check_type and "bbox_span" in rule):
+        tol = float(rule.get("tolerance", 1.0))
+        raw_span = rule.get("bbox_span")
+        if isinstance(raw_span, (list, tuple)) and len(raw_span) >= 2:
+            exp_w, exp_h = float(raw_span[0]), float(raw_span[1])
+            ok = isclose(spans[0], exp_w, rel_tol=0.03, abs_tol=tol) and isclose(spans[1], exp_h, rel_tol=0.03, abs_tol=tol)
+            return ("passed" if ok else "failed", f"实际包络 {spans[0]:.1f}×{spans[1]:.1f} mm（期望 {exp_w:g}×{exp_h:g} mm）")
+        exp_w_opt = rule.get("width", raw_span if isinstance(raw_span, (int, float)) else rule.get("value"))
+        exp_h_opt = rule.get("height")
+        if exp_w_opt is None and exp_h_opt is None:
+            return ("unevaluated", "bbox_span 规则缺少 width/height/bbox_span 目标值")
+        ok_w = True if exp_w_opt is None else isclose(spans[0], float(exp_w_opt), rel_tol=0.03, abs_tol=tol)
+        ok_h = True if exp_h_opt is None else isclose(spans[1], float(exp_h_opt), rel_tol=0.03, abs_tol=tol)
+        return ("passed" if (ok_w and ok_h) else "failed", f"实际包络 {spans[0]:.1f}×{spans[1]:.1f} mm")
+
+    return ("unevaluated", f"未实现的评分规则类型: {check_type or sorted(rule.keys())!r}")
