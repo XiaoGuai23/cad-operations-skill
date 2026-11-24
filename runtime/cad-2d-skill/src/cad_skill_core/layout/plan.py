@@ -1021,17 +1021,17 @@ def _engineering_symbol_layouts(
         mode_tag = "machined" if sf.machining_required else "unmachined"
         if sf.is_general:
             prefix = "其余" if is_zh else "REST"
-            pref_w = max(sym_h, measure_text_width_mm(prefix, text_h, width_factor=width_factor))
-            val_w = max(sym_h, measure_text_width_mm(sf.value, sym_h, width_factor=width_factor))
+            pref_w = max(text_h * 1.8, measure_text_width_mm(prefix, text_h, width_factor=width_factor) * 1.45)
+            val_w = max(sym_h * 1.8, measure_text_width_mm(sf.value, sym_h, width_factor=width_factor) * 1.45)
             h1, h2 = 3.8, 7.8
-            shelf_len = val_w + 1.8
+            shelf_len = val_w + 2.2
             right_span = h2 * s30 + shelf_len
-            tx = printable.max_x - right_span - 2.5
-            ty = printable.max_y - h2 - 3.0
+            tx = printable.max_x - right_span - 5.0
+            ty = printable.max_y - max(h2, text_h + 3.0) - 4.5
             b_min_x = tx - h1 * s30 - pref_w - 2.6
-            b_max_x = tx + right_span + 0.6
-            b_min_y = ty - 0.1
-            b_max_y = ty + h2 + 0.6
+            b_max_x = tx + right_span + 0.8
+            b_min_y = ty - 0.2
+            b_max_y = ty + max(h2, h1 - 0.8 + text_h) + 0.8
             if b_min_x > printable.min_x + 4.0 and b_min_y > printable.min_y + 4.0:
                 out.append(
                     AnnotationLayout(
@@ -1051,9 +1051,9 @@ def _engineering_symbol_layouts(
         ob, vert_cx, horiz_cy = _view_outline_sheet_bounds(spec, v)
         local_sf_idx += 1
         h1, h2 = 3.2, 6.8
-        val_w = max(sym_h, measure_text_width_mm(sf.value, sym_h, width_factor=width_factor))
-        shelf_len = val_w + 1.6
-        sym_right_span = h2 * s30 + shelf_len + 0.5
+        val_w = max(sym_h * 1.8, measure_text_width_mm(sf.value, sym_h, width_factor=width_factor) * 1.45)
+        shelf_len = val_w + 2.0
+        sym_right_span = h2 * s30 + shelf_len + 0.6
         lbl_half_w = max(text_h, measure_text_width_mm(v.label, text_h, width_factor=width_factor)) / 2.0 + 3.0
 
         # Place flush on top OUTLINE edge of view (ty == ob.max_y, 0.00 mm gap!), avoiding CENTER lines & view-label
@@ -1183,7 +1183,7 @@ def _engineering_symbol_layouts(
         per_view_gdt_idx[v.name] = v_stack_idx + 1
         ob, vert_cx, _ = _view_outline_sheet_bounds(spec, v)
         box_h = 5.8
-        tol_w = max(11.2, measure_text_width_mm(gdt.tolerance, sym_h, width_factor=width_factor) + 3.6)
+        tol_w = max(12.2, measure_text_width_mm(gdt.tolerance, sym_h, width_factor=width_factor) * 1.45 + 3.8)
         ref_count = len(gdt.datum_refs)
         frame_w = box_h + tol_w + ref_count * box_h
         fy0 = max(v.bounds.max_y, ob.max_y) + 4.0 + v_stack_idx * (box_h + 2.2)

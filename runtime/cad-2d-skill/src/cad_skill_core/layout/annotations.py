@@ -739,6 +739,13 @@ def _emit(modelspace: ezdxf.layouts.Modelspace, annotation: AnnotationLayout, pl
         raise ValueError(f"unsupported planned annotation: {annotation.kind}")
 
 
+def _style_width_factor(plan: LayoutPlan, style_name: str = "normal") -> float:
+    for name, _, _, wf in plan.text_styles:
+        if name == style_name and wf > 0:
+            return float(wf)
+    return 0.8
+
+
 def _emit_surface_roughness(
     modelspace: ezdxf.layouts.Modelspace,
     annotation: AnnotationLayout,
@@ -756,23 +763,24 @@ def _emit_surface_roughness(
         sym_h = min(2.6, plan.text_height_mm * 0.80)
         shelf_len = 10.5
     lyr = annotation.layer
+    wf = _style_width_factor(plan, "normal")
 
-    if is_general and "|" in annotation.text:
-        prefix, val_text = annotation.text.split("|", 1)
-        pref_x = annotation.bounds.min_x + 0.4
-        modelspace.add_text(
-            prefix,
-            dxfattribs={"layer": "TEXT", "style": "normal", "height": plan.text_height_mm},
-        ).set_placement((pref_x, ty + h1 - 0.8))
-    else:
-        val_text = annotation.text
-
-    # GB/T 131-2006 60-degree surface roughness symbol WITH right horizontal shelf (zero line crossing text!)
     p_left = (tx - h1 * s30, ty + h1)
     p_tip = (tx, ty)
     p_right_mid = (tx + h1 * s30, ty + h1)
     p_right_top = (tx + h2 * s30, ty + h2)
     p_shelf_end = (p_right_top[0] + shelf_len, ty + h2)
+
+    if is_general and "|" in annotation.text:
+        prefix, val_text = annotation.text.split("|", 1)
+        modelspace.add_text(
+            prefix,
+            dxfattribs={"layer": "TEXT", "style": "normal", "height": plan.text_height_mm, "width": wf},
+        ).set_placement((p_left[0] - 1.2, ty + h1 - 0.8), align=TextEntityAlignment.BOTTOM_RIGHT)
+    else:
+        val_text = annotation.text
+
+    # GB/T 131-2006 60-degree surface roughness symbol WITH right horizontal shelf (zero line crossing text!)
     modelspace.add_lwpolyline([p_left, p_tip, p_right_top, p_shelf_end], close=False, dxfattribs={"layer": lyr})
     if machined:
         modelspace.add_line(p_left, p_right_mid, dxfattribs={"layer": lyr})
@@ -790,7 +798,7 @@ def _emit_surface_roughness(
     # Place Ra parameter value cleanly UNDER the horizontal shelf and strictly RIGHT of the 60-deg stroke!
     modelspace.add_text(
         val_text,
-        dxfattribs={"layer": "TEXT", "style": "normal", "height": sym_h},
+        dxfattribs={"layer": "TEXT", "style": "normal", "height": sym_h, "width": wf},
     ).set_placement((p_right_top[0] + 0.45, ty + h2 - sym_h - 0.8))
 
 
@@ -802,6 +810,7 @@ def _emit_datum_symbol(
     ax, ay = annotation.points[0]
     box_s = 6.2
     lyr = annotation.layer
+    wf = _style_width_factor(plan, "normal")
     side = 1.0 if annotation.dim_kind == "right" else -1.0
     # GB/T 1182 solid-filled datum triangle flush (0.00 mm gap) on OUTLINE vertical surface at (ax, ay)
     tri = [(ax, ay - 2.0), (ax, ay + 2.0), (ax + side * 3.4, ay)]
@@ -824,7 +833,7 @@ def _emit_datum_symbol(
     txt_h = min(3.2, plan.text_height_mm * 0.92)
     modelspace.add_text(
         annotation.text,
-        dxfattribs={"layer": "TEXT", "style": "normal", "height": txt_h},
+        dxfattribs={"layer": "TEXT", "style": "normal", "height": txt_h, "width": wf},
     ).set_placement(((bx0 + bx1) / 2.0, ay), align=TextEntityAlignment.MIDDLE_CENTER)
 
 
@@ -841,6 +850,7 @@ def _emit_gdt_frame(
     refs = parts[2:] if len(parts) > 2 else []
     total_w = box_h + tol_w + len(refs) * box_h
     lyr = annotation.layer
+    wf = _style_width_factor(plan, "normal")
 
     # Outer rectangular feature control frame
     modelspace.add_lwpolyline(
@@ -881,14 +891,14 @@ def _emit_gdt_frame(
     txt_h = min(2.8, plan.text_height_mm * 0.84)
     modelspace.add_text(
         tol_txt,
-        dxfattribs={"layer": "TEXT", "style": "normal", "height": txt_h},
+        dxfattribs={"layer": "TEXT", "style": "normal", "height": txt_h, "width": wf},
     ).set_placement((x_div1 + tol_w / 2.0, icy), align=TextEntityAlignment.MIDDLE_CENTER)
 
     rx = x_div1 + tol_w
     for r_lbl in refs:
         modelspace.add_text(
             r_lbl,
-            dxfattribs={"layer": "TEXT", "style": "normal", "height": txt_h},
+            dxfattribs={"layer": "TEXT", "style": "normal", "height": txt_h, "width": wf},
         ).set_placement((rx + box_h / 2.0, icy), align=TextEntityAlignment.MIDDLE_CENTER)
         rx += box_h
 

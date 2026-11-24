@@ -92,6 +92,9 @@ class AddCircleHoleOp(_StrictIRBase):
     center: tuple[float, float] | None = None
     reference_handle: str | None = None
     offset: tuple[float, float] = (0.0, 0.0)
+    diameter_unit: str | None = None
+    center_unit: str | None = None
+    offset_unit: str | None = None
     unit: str | None = None
     layer: str = "OUTLINE"
     with_centerlines: bool = True
@@ -105,6 +108,9 @@ class AddBoltCircleOp(_StrictIRBase):
     center: tuple[float, float] | None = None
     reference_handle: str | None = None
     start_angle_deg: float = 0.0
+    hole_unit: str | None = None
+    pcd_unit: str | None = None
+    center_unit: str | None = None
     unit: str | None = None
     layer: str = "OUTLINE"
     with_pitch_circle: bool = True
@@ -117,6 +123,8 @@ class ChamferCornerOp(_StrictIRBase):
     handles: list[str] = Field(default_factory=list)
     corner_hint: tuple[float, float] | None = None
     all_corners_in_region: bool = False
+    distance1_unit: str | None = None
+    distance2_unit: str | None = None
     unit: str | None = None
 
 
@@ -513,12 +521,15 @@ def execute_revision_ir(
             by_handle = {str(e.dxf.handle).upper(): e for e in msp if e.is_alive}
 
             if isinstance(step, AddCircleHoleOp):
-                dia = scale_value_to_doc_units(step.diameter, step.unit, doc_units)
-                ox = scale_value_to_doc_units(step.offset[0], step.unit, doc_units)
-                oy = scale_value_to_doc_units(step.offset[1], step.unit, doc_units)
+                d_unit = step.diameter_unit if step.diameter_unit is not None else step.unit
+                o_unit = step.offset_unit if step.offset_unit is not None else step.unit
+                c_unit = step.center_unit if step.center_unit is not None else step.unit
+                dia = scale_value_to_doc_units(step.diameter, d_unit, doc_units)
+                ox = scale_value_to_doc_units(step.offset[0], o_unit, doc_units)
+                oy = scale_value_to_doc_units(step.offset[1], o_unit, doc_units)
                 if step.center is not None:
-                    cx = scale_value_to_doc_units(step.center[0], step.unit, doc_units) + ox
-                    cy = scale_value_to_doc_units(step.center[1], step.unit, doc_units) + oy
+                    cx = scale_value_to_doc_units(step.center[0], c_unit, doc_units) + ox
+                    cy = scale_value_to_doc_units(step.center[1], c_unit, doc_units) + oy
                 elif step.reference_handle and step.reference_handle.upper() in by_handle:
                     rcx, rcy = _entity_center(by_handle[step.reference_handle.upper()])
                     cx, cy = rcx + ox, rcy + oy
@@ -543,13 +554,16 @@ def execute_revision_ir(
                 summaries.append(f"已在 ({cx:.1f}, {cy:.1f}) 新增 ⌀{dia:g} 圆孔")
 
             elif isinstance(step, AddBoltCircleOp):
-                hole_d = scale_value_to_doc_units(step.hole_diameter, step.unit, doc_units)
-                pcd = scale_value_to_doc_units(step.bolt_circle_diameter, step.unit, doc_units)
+                h_unit = step.hole_unit if step.hole_unit is not None else step.unit
+                p_unit = step.pcd_unit if step.pcd_unit is not None else step.unit
+                c_unit = step.center_unit if step.center_unit is not None else step.unit
+                hole_d = scale_value_to_doc_units(step.hole_diameter, h_unit, doc_units)
+                pcd = scale_value_to_doc_units(step.bolt_circle_diameter, p_unit, doc_units)
                 if pcd <= hole_d * 1.2:
                     raise RevisionError(f"节圆直径 ({pcd:g}) 必须大于单孔直径 ({hole_d:g})。")
                 if step.center is not None:
-                    cx = scale_value_to_doc_units(step.center[0], step.unit, doc_units)
-                    cy = scale_value_to_doc_units(step.center[1], step.unit, doc_units)
+                    cx = scale_value_to_doc_units(step.center[0], c_unit, doc_units)
+                    cy = scale_value_to_doc_units(step.center[1], c_unit, doc_units)
                 elif step.reference_handle and step.reference_handle.upper() in by_handle:
                     cx, cy = _entity_center(by_handle[step.reference_handle.upper()])
                 else:
@@ -583,8 +597,14 @@ def execute_revision_ir(
             elif isinstance(step, (ChamferCornerOp, FilletCornerOp)):
                 is_chamfer = isinstance(step, ChamferCornerOp)
                 if is_chamfer:
-                    d1 = scale_value_to_doc_units(step.distance1, step.unit, doc_units)
-                    d2 = scale_value_to_doc_units(step.distance2 or step.distance1, step.unit, doc_units)
+                    u1 = step.distance1_unit if step.distance1_unit is not None else step.unit
+                    u2 = (
+                        step.distance2_unit
+                        if step.distance2_unit is not None
+                        else (u1 if step.distance2 is None else step.unit)
+                    )
+                    d1 = scale_value_to_doc_units(step.distance1, u1, doc_units)
+                    d2 = scale_value_to_doc_units(step.distance2 if step.distance2 is not None else step.distance1, u2, doc_units)
                     rad = 0.0
                 else:
                     d1 = d2 = 0.0
@@ -839,117 +859,272 @@ def compile_nl_to_feature_ir(
         except Exception:
             pass
 
-    # Layer B: Deterministic Offline Feature-Primitive Compiler
-    ops: list[RevisionIROperation] = []
+    # Layer B: Deterministic Offline Feature-Primitive Compiler (exhaustive clause-by-clause verification)
+    clauses = _split_feature_clauses(clean)
+    if not clauses:
+        return None
 
-    # 1. Bolt Circle Pattern ("新增 6×Ø10 均布螺栓孔，节圆 80" / "加一圈 4xM8 孔 PCD 100")
+    ops: list[RevisionIROperation] = []
+    unparsed_clauses: list[str] = []
+    rationales: list[str] = []
+
+    for cl in clauses:
+        op, reason = _compile_single_feature_clause(cl, cands)
+        if op is not None:
+            ops.append(op)
+            rationales.append(reason)
+        else:
+            unparsed_clauses.append(cl)
+
+    if not ops:
+        return None
+    if unparsed_clauses:
+        raise RevisionError(
+            f"复合指令中包含未能完整解析或暂不支持与新增特征混合执行的子句：「{'；'.join(unparsed_clauses)}」"
+        )
+    return StructuredRevisionIR(operations=ops, rationale_zh="；".join(dict.fromkeys(rationales)))
+
+
+_PARAM_CONTINUATION_RE = re.compile(
+    r"^\s*(?:节圆(?:直径)?|分布圆(?:直径)?|PCD|pcd|圆心|中心|位置|[xXyY]\s*=|轴线\s*[-0-9]|(?:不)?保留原图(?:元)?|删除原图(?:元)?|替换原图(?:元)?)",
+    re.IGNORECASE,
+)
+_ANY_ACTION_VERB_RE = re.compile(
+    r"(?:删|去掉|移除|清除|改成|改为|设为|设置|调整|放大|缩小|平移|移动|往[左右上下]|向[左右上下]|替换|"
+    r"新增|添加|增加|新开|打一个|加一个|加一圈|倒角|倒圆|圆角|导圆|倒斜角|斜角|镜像|对称复制|"
+    r"\b(?:delete|remove|change|set|resize|move|shift|add|chamfer|fillet|mirror)\b)",
+    re.IGNORECASE,
+)
+_COORD_TUPLE_RE = re.compile(
+    rf"[\(（]\s*(?P<x>-?\d+(?:\.\d+)?)\s*(?P<ux>{_UNIT_PAT})?\s*[,，]\s*(?P<y>-?\d+(?:\.\d+)?)\s*(?P<uy>{_UNIT_PAT})?\s*[\)）]\s*(?P<u_after>{_UNIT_PAT})?",
+    re.IGNORECASE,
+)
+
+
+def _split_feature_clauses(text: str) -> list[str]:
+    """Split prompt into independent action clauses outside `(...)`, merging parameter continuations."""
+    chunks: list[str] = []
+    buf: list[str] = []
+    depth = 0
+    for ch in text:
+        if ch in "（(":
+            depth += 1
+            buf.append(ch)
+        elif ch in "）)":
+            depth = max(0, depth - 1)
+            buf.append(ch)
+        elif depth == 0 and ch in "，,；;。!！\n":
+            seg = "".join(buf).strip()
+            if seg:
+                chunks.append(seg)
+            buf = []
+        else:
+            buf.append(ch)
+    tail = "".join(buf).strip()
+    if tail:
+        chunks.append(tail)
+
+    # Also split inline conjunctions ("并删除...", "同时把...", "然后再...") outside parentheses
+    fine_chunks: list[str] = []
+    conj_re = re.compile(r"\s*(?:并且?|同时|然后再?|以及|接着|顺便)\s*(?=(?:把|将|在|沿|向|往|删|去掉|移除|改|新增|添加|增加|倒|圆角|镜像))")
+    for seg in chunks:
+        parts = [p.strip() for p in conj_re.split(seg) if p.strip()]
+        fine_chunks.extend(parts)
+
+    # Merge pure parameter continuations (e.g. "新增 6×Ø10 均布螺栓孔" + "节圆 80", or "向右镜像" + "x=60")
+    merged: list[str] = []
+    for seg in fine_chunks:
+        if (
+            merged
+            and _PARAM_CONTINUATION_RE.match(seg)
+            and (
+                re.match(r"^\s*(?:(?:不)?保留原图|删除原图|替换原图)", seg)
+                or not re.search(r"(?:删|去掉|移除|改成|改为|新增|添加|倒角|圆角|镜像)", seg)
+            )
+        ):
+            merged[-1] = f"{merged[-1]}，{seg}"
+        else:
+            merged.append(seg)
+    return merged
+
+
+def _parse_center_from_clause(clause: str) -> tuple[tuple[float, float] | None, str | None, tuple[int, int] | None]:
+    m_ctr = _COORD_TUPLE_RE.search(clause)
+    if not m_ctr:
+        return None, None, None
+    ux = m_ctr.group("ux")
+    uy = m_ctr.group("uy")
+    ua = m_ctr.group("u_after")
+    if ux and uy and ux.lower() != uy.lower():
+        raise RevisionError(f"圆心坐标 X/Y 单位不一致: ({ux} vs {uy})")
+    c_unit = ux or uy or ua
+    return (float(m_ctr.group("x")), float(m_ctr.group("y"))), c_unit, m_ctr.span()
+
+
+def _has_unconsumed_action_tail(clause: str, consumed_spans: list[tuple[int, int]]) -> bool:
+    """Return True if residual text outside consumed regex spans still contains another action verb or stray clause."""
+    chars = list(clause)
+    for s, e in consumed_spans:
+        for idx in range(max(0, s), min(len(chars), e)):
+            chars[idx] = " "
+    leftover = "".join(chars)
+    # Strip benign location/target nouns
+    leftover = re.sub(
+        r"(?:在|于|把|将|对|向|往|沿着?|围绕|中心|圆心|原点|此处|这里|这处|这个|该|矩形|多段线|轮廓|外框|法兰|钢板|板|拐角|直角|折角|边|处|上|内|外|的|个|条|处)+",
+        " ",
+        leftover,
+    ).strip()
+    if not leftover:
+        return False
+    return bool(_ANY_ACTION_VERB_RE.search(leftover))
+
+
+def _assert_clause_fully_parsed(clause: str, consumed_spans: list[tuple[int, int]]) -> None:
+    if _has_unconsumed_action_tail(clause, consumed_spans):
+        raise RevisionError(f"指令包含未完整解析或冲突的附加动作，已拦截执行：「{clause}」")
+
+
+def _compile_single_feature_clause(
+    cl: str, cands: list[str]
+) -> tuple[RevisionIROperation | None, str]:
+    # 1. Bolt Circle Pattern ("新增 6×Ø10 mm 均布螺栓孔，节圆 80" / "加一圈 4xM8 孔 PCD 4 in")
     m_bcd = re.search(
-        rf"(?:新增|添加|增加|加(?:一圈)?|打)\s*(?P<cnt>\d+)\s*(?:[xX×\-]|个)\s*(?:[⌀∅ØøΦφMm])?\s*(?P<hd>\d+(?:\.\d+)?)\s*(?P<u1>{_UNIT_PAT})?.*?(?:节圆(?:直径)?|分布圆(?:直径)?|PCD|pcd|圆周)\s*(?:直径|为|:|：)?\s*(?:[⌀∅ØøΦφ])?\s*(?P<pcd>\d+(?:\.\d+)?)\s*(?P<u2>{_UNIT_PAT})?",
-        clean,
+        rf"(?:新增|添加|增加|加(?:一圈)?|打)\s*(?P<cnt>\d+)\s*(?:[xX×\-]|个)\s*(?:[⌀∅ØøΦφMm])?\s*(?P<hd>\d+(?:\.\d+)?)\s*(?P<u1>{_UNIT_PAT})?(?:[^0-9]*?)(?:节圆(?:直径)?|分布圆(?:直径)?|PCD|pcd|圆周)\s*(?:直径|为|:|：)?\s*(?:[⌀∅ØøΦφ])?\s*(?P<pcd>\d+(?:\.\d+)?)\s*(?P<u2>{_UNIT_PAT})?",
+        cl,
         re.IGNORECASE,
     )
     if m_bcd:
-        m_ctr = re.search(r"[\(（]\s*(-?\d+(?:\.\d+)?)\s*[,，]\s*(-?\d+(?:\.\d+)?)\s*[\)）]", clean)
-        ctr = (float(m_ctr.group(1)), float(m_ctr.group(2))) if m_ctr else None
-        ops.append(
+        ctr, ctr_u, ctr_span = _parse_center_from_clause(cl)
+        spans = [m_bcd.span()] + ([ctr_span] if ctr_span else [])
+        _assert_clause_fully_parsed(cl, spans)
+        return (
             AddBoltCircleOp(
                 count=int(m_bcd.group("cnt")),
                 hole_diameter=float(m_bcd.group("hd")),
                 bolt_circle_diameter=float(m_bcd.group("pcd")),
                 center=ctr,
-                unit=m_bcd.group("u2") or m_bcd.group("u1"),
-            )
+                hole_unit=m_bcd.group("u1"),
+                pcd_unit=m_bcd.group("u2"),
+                center_unit=ctr_u,
+            ),
+            "离线确定性编译：新增圆周均布螺栓孔阵列",
         )
-        return StructuredRevisionIR(operations=ops, rationale_zh="离线确定性编译：新增圆周均布螺栓孔阵列")
 
     # 2. Add Single Circle Hole ("在 (50, 30) 新增 Ø12 圆孔" / "添加一个直径 16 mm 的孔")
-    if re.search(r"(?:新增|添加|增加|新开|打一个|加一个).*?(?:孔|圆)", clean):
+    m_add_kw = re.search(r"(?:新增|添加|增加|新开|打一个|加一个)", cl)
+    if m_add_kw and re.search(r"(?:孔|圆)", cl):
+        ctr, ctr_u, ctr_span = _parse_center_from_clause(cl)
+        # Mask out coordinate tuple before searching hole diameter so "(50, 30)" is never misread as diameter
+        cl_no_ctr = (cl[: ctr_span[0]] + (" " * (ctr_span[1] - ctr_span[0])) + cl[ctr_span[1] :]) if ctr_span else cl
         m_hd = re.search(
-            rf"(?:直径|孔径|[⌀∅ØøΦφ])\s*(?P<val>\d+(?:\.\d+)?)\s*(?P<unit>{_UNIT_PAT})?",
-            clean,
+            rf"(?:直径|孔径|[⌀∅ØøΦφ])\s*(?P<val>\d+(?:\.\d+)?)\s*(?P<unit>{_UNIT_PAT})?(?:\s*的?\s*(?:圆孔|通孔|定位孔|孔|圆))?",
+            cl_no_ctr,
             re.IGNORECASE,
-        ) or re.search(rf"(?P<val>\d+(?:\.\d+)?)\s*(?P<unit>{_UNIT_PAT})?\s*(?:的)?(?:圆孔|通孔|孔)", clean, re.IGNORECASE)
+        ) or re.search(
+            rf"(?P<val>\d+(?:\.\d+)?)\s*(?P<unit>{_UNIT_PAT})?\s*的?\s*(?:圆孔|通孔|定位孔|孔)",
+            cl_no_ctr,
+            re.IGNORECASE,
+        )
         if m_hd:
-            m_ctr = re.search(r"[\(（]\s*(-?\d+(?:\.\d+)?)\s*[,，]\s*(-?\d+(?:\.\d+)?)\s*[\)）]", clean)
-            ctr = (float(m_ctr.group(1)), float(m_ctr.group(2))) if m_ctr else None
-            ops.append(
+            spans = [m_add_kw.span(), m_hd.span()] + ([ctr_span] if ctr_span else [])
+            _assert_clause_fully_parsed(cl, spans)
+            return (
                 AddCircleHoleOp(
                     diameter=float(m_hd.group("val")),
                     center=ctr,
-                    unit=m_hd.group("unit"),
-                )
+                    diameter_unit=m_hd.group("unit"),
+                    center_unit=ctr_u,
+                ),
+                "离线确定性编译：新增定位圆孔",
             )
-            return StructuredRevisionIR(operations=ops, rationale_zh="离线确定性编译：新增定位圆孔")
 
-    # 3. Fillet Corner ("倒圆角 R6" / "圆角改为 R8" / "导圆 R5")
-    if re.search(r"(?:倒圆角|导圆角|圆角|fillet)", clean, re.IGNORECASE):
+    # 3. Fillet Corner ("倒圆角 R6" / "圆角改为 R8" / "全部四个角倒圆角 R5")
+    m_fil_kw = re.search(r"(?:倒圆角|导圆角|圆角|fillet)", cl, re.IGNORECASE)
+    if m_fil_kw:
+        m_all = re.search(r"(?:全部|所有|四个角|四角|all)", cl, re.IGNORECASE)
+        cl_for_r = cl
+        if m_all:
+            cl_for_r = cl[: m_all.start()] + (" " * (m_all.end() - m_all.start())) + cl[m_all.end() :]
         m_fil = re.search(
-            rf"(?:[Rr]|半径|圆角(?:半径)?\s*(?:改为|设为|为)?)\s*(?P<r>\d+(?:\.\d+)?)\s*(?P<unit>{_UNIT_PAT})?",
-            clean,
+            rf"(?:[Rr]|半径|圆角(?:半径)?\s*(?:改为|改成|设为|为)?)\s*(?P<r>\d+(?:\.\d+)?)\s*(?P<unit>{_UNIT_PAT})?",
+            cl_for_r,
             re.IGNORECASE,
-        ) or re.search(rf"(?P<r>\d+(?:\.\d+)?)\s*(?P<unit>{_UNIT_PAT})?", clean, re.IGNORECASE)
+        ) or re.search(rf"(?P<r>\d+(?:\.\d+)?)\s*(?P<unit>{_UNIT_PAT})?", cl_for_r, re.IGNORECASE)
         if m_fil:
-            all_flag = bool(re.search(r"(?:全部|所有|四个角|四角|all)", clean, re.IGNORECASE))
-            ops.append(
+            spans = [m_fil_kw.span(), m_fil.span()] + ([m_all.span()] if m_all else [])
+            _assert_clause_fully_parsed(cl, spans)
+            return (
                 FilletCornerOp(
                     radius=float(m_fil.group("r")),
                     handles=cands,
-                    all_corners_in_region=all_flag,
+                    all_corners_in_region=bool(m_all),
                     unit=m_fil.group("unit"),
-                )
+                ),
+                "离线确定性编译：拐角相切圆弧过渡（Fillet）",
             )
-            return StructuredRevisionIR(operations=ops, rationale_zh="离线确定性编译：拐角相切圆弧过渡（Fillet）")
 
-    # 4. Chamfer Corner ("倒角 C5" / "倒角 4×45°" / "倒斜角 3x5")
-    if re.search(r"(?:倒角|倒斜角|斜角|chamfer)", clean, re.IGNORECASE) and not re.search(r"圆角", clean):
+    # 4. Chamfer Corner ("倒角 C5" / "倒角 6×45°" / "倒斜角 3 mm × 5 mm")
+    m_cham_kw = re.search(r"(?:倒角|倒斜角|斜角|chamfer)", cl, re.IGNORECASE)
+    if m_cham_kw and not re.search(r"圆角", cl):
+        m_all = re.search(r"(?:全部|所有|四个角|四角|all)", cl, re.IGNORECASE)
         m_asym = re.search(
-            rf"(?P<d1>\d+(?:\.\d+)?)\s*[xX×]\s*(?P<d2>\d+(?:\.\d+)?)(?![0-9.])(?!\s*[°度])\s*(?P<unit>{_UNIT_PAT})?",
-            clean,
+            rf"(?P<d1>\d+(?:\.\d+)?)\s*(?P<u1>{_UNIT_PAT})?\s*[xX×]\s*(?P<d2>\d+(?:\.\d+)?)(?![0-9.])(?!\s*[°度])\s*(?P<u2>{_UNIT_PAT})?",
+            cl,
             re.IGNORECASE,
         )
         m_sym = re.search(
-            rf"(?:[Cc]\s*)?(?P<d>\d+(?:\.\d+)?)\s*(?:[xX×]\s*45\s*[°度]?)?\s*(?P<unit>{_UNIT_PAT})?",
-            clean,
+            rf"(?:[Cc]\s*)?(?P<d>\d+(?:\.\d+)?)\s*(?P<unit>{_UNIT_PAT})?\s*(?:[xX×]\s*45\s*[°度]?)?",
+            cl,
             re.IGNORECASE,
         )
-        all_flag = bool(re.search(r"(?:全部|所有|四个角|四角|all)", clean, re.IGNORECASE))
         if m_asym:
-            ops.append(
+            spans = [m_cham_kw.span(), m_asym.span()] + ([m_all.span()] if m_all else [])
+            _assert_clause_fully_parsed(cl, spans)
+            u1_raw = m_asym.group("u1")
+            u2_raw = m_asym.group("u2")
+            return (
                 ChamferCornerOp(
                     distance1=float(m_asym.group("d1")),
                     distance2=float(m_asym.group("d2")),
                     handles=cands,
-                    all_corners_in_region=all_flag,
-                    unit=m_asym.group("unit"),
-                )
+                    all_corners_in_region=bool(m_all),
+                    distance1_unit=u1_raw or u2_raw,
+                    distance2_unit=u2_raw,
+                ),
+                "离线确定性编译：不等距拐角倒角（Chamfer）",
             )
-            return StructuredRevisionIR(operations=ops, rationale_zh="离线确定性编译：不等距拐角倒角（Chamfer）")
         if m_sym:
-            ops.append(
+            spans = [m_cham_kw.span(), m_sym.span()] + ([m_all.span()] if m_all else [])
+            _assert_clause_fully_parsed(cl, spans)
+            return (
                 ChamferCornerOp(
                     distance1=float(m_sym.group("d")),
                     handles=cands,
-                    all_corners_in_region=all_flag,
-                    unit=m_sym.group("unit"),
-                )
+                    all_corners_in_region=bool(m_all),
+                    distance1_unit=m_sym.group("unit"),
+                ),
+                "离线确定性编译：45°拐角倒角（Chamfer）",
             )
-            return StructuredRevisionIR(operations=ops, rationale_zh="离线确定性编译：45°拐角倒角（Chamfer）")
 
-    # 5. Mirror Entities ("沿 Y 轴镜像" / "上下对称镜像" / "向右镜像，x=60")
-    if re.search(r"(?:镜像|对称复制|mirror)", clean, re.IGNORECASE):
-        is_horiz = bool(re.search(r"(?:上下|水平|X\s*轴|y\s*=)", clean, re.IGNORECASE))
-        m_coord = re.search(rf"(?:[xXyY]\s*=\s*|轴线?\s*)(?P<c>-?\d+(?:\.\d+)?)\s*(?P<unit>{_UNIT_PAT})?", clean)
+    # 5. Mirror Entities ("沿垂直轴 x=50 镜像" / "上下对称镜像")
+    m_mir_kw = re.search(r"(?:镜像|对称复制|mirror)", cl, re.IGNORECASE)
+    if m_mir_kw:
+        is_horiz = bool(re.search(r"(?:上下|水平|X\s*轴|y\s*=)", cl, re.IGNORECASE))
+        m_coord = re.search(rf"(?:[xXyY]\s*=\s*|轴线?\s*)(?P<c>-?\d+(?:\.\d+)?)\s*(?P<unit>{_UNIT_PAT})?", cl)
         coord_val = float(m_coord.group("c")) if m_coord else 0.0
-        keep_orig = not bool(re.search(r"(?:不保留原图|删除原图|替换原图)", clean))
-        ops.append(
+        m_keep = re.search(r"(?:不保留原图(?:元)?|删除原图(?:元)?|替换原图(?:元)?|保留原图(?:元)?)", cl)
+        keep_orig = not bool(re.search(r"(?:不保留原图|删除原图|替换原图)", cl))
+        spans = [m_mir_kw.span()] + ([m_coord.span()] if m_coord else []) + ([m_keep.span()] if m_keep else [])
+        _assert_clause_fully_parsed(cl, spans)
+        return (
             MirrorEntitiesOp(
                 handles=cands,
                 axis="horizontal" if is_horiz else "vertical",
                 axis_coord=coord_val,
                 keep_original=keep_orig,
                 unit=m_coord.group("unit") if m_coord else None,
-            )
+            ),
+            "离线确定性编译：对称轴几何镜像（Mirror）",
         )
-        return StructuredRevisionIR(operations=ops, rationale_zh="离线确定性编译：对称轴几何镜像（Mirror）")
 
-    return None
+    return None, ""

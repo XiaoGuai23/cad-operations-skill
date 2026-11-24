@@ -25,7 +25,7 @@ from ezdxf.math import Matrix44
 
 from .common import RevisionError, compare_untouched, sha256_file, snapshot_modelspace
 from .edits import _DELETE
-from .ir_engine import compile_nl_to_feature_ir, execute_revision_ir
+from .ir_engine import _split_feature_clauses, compile_nl_to_feature_ir, execute_revision_ir
 from .transaction import DocumentCheckpoint
 from .workflow import apply_revision, inventory_drawing
 
@@ -380,6 +380,12 @@ def execute_nl_region_revision(
 
     if not working_handles:
         raise RevisionError("框选区域内未命中可修改的 CAD 图元，请重新拉取蓝色虚线框覆盖目标特征。")
+
+    action_clauses = _split_feature_clauses(active_prompt)
+    if len(action_clauses) > 1:
+        raise RevisionError(
+            f"检测到多条未合并的复合修改子句（{action_clauses}），为防止部分子句被静默忽略，请分步执行或使用结构化 IR。"
+        )
 
     out_dir = Path(output_dir).resolve()
     out_dir.parent.mkdir(parents=True, exist_ok=True)

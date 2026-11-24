@@ -8,9 +8,10 @@ from typing import Any
 
 import ezdxf
 from ezdxf import bbox
+from ezdxf.lldxf.tagwriter import TagCollector
 from ezdxf.render import hatching
 
-from cad_skill_core.revision.common import sha256_file, snapshot_modelspace, values_close
+from cad_skill_core.revision.common import _plain, sha256_file, snapshot_modelspace, values_close
 
 # Standard AutoCAD Color Index (ACI 1..9 + common indices) for Dark & Light CAD themes
 _ACI_DARK_HEX: dict[int, str] = {
@@ -310,13 +311,64 @@ def extract_dxf_vector_scene(dxf_path: Path) -> dict[str, Any]:
     }
 
 
+def _snapshot_block_tree(
+    doc: ezdxf.document.Drawing,
+    block_name: str,
+    cache: dict[str, list[Any]],
+    seen: set[str] | None = None,
+) -> list[Any]:
+    """Recursively snapshot entity tags of a referenced block definition (excluding volatile handles)."""
+    if not block_name:
+        return []
+    key = block_name.casefold()
+    if key in cache:
+        return cache[key]
+    visited = set(seen or ())
+    if key in visited or block_name not in doc.blocks:
+        return []
+    visited.add(key)
+    blk = doc.blocks.get(block_name)
+    if blk is None:
+        return []
+    items: list[Any] = []
+    for child in blk:
+        if not child.is_alive:
+            continue
+        tags = [
+            [tag.code, _plain(tag.value)]
+            for tag in TagCollector.dxftags(child)
+            if tag.code not in {5, 330}
+        ]
+        nested: list[Any] = []
+        if child.dxftype() == "INSERT":
+            nested = _snapshot_block_tree(doc, str(child.dxf.get("name", "")), cache, visited)
+        elif child.dxftype() == "DIMENSION":
+            nested = _snapshot_block_tree(doc, str(child.dxf.get("geometry", "")), cache, visited)
+        items.append([child.dxftype(), tags, nested])
+    cache[key] = items
+    return items
+
+
+def _referenced_block_signature(
+    doc: ezdxf.document.Drawing,
+    ent: Any,
+    cache: dict[str, list[Any]],
+) -> list[Any]:
+    dt = ent.dxftype()
+    if dt == "INSERT":
+        return _snapshot_block_tree(doc, str(ent.dxf.get("name", "")), cache)
+    if dt == "DIMENSION":
+        return _snapshot_block_tree(doc, str(ent.dxf.get("geometry", "")), cache)
+    return []
+
+
 def compute_dxf_vector_diff(
     before_dxf_path: Path | str,
     after_dxf_path: Path | str,
     *,
     tolerance: float = 1e-4,
 ) -> dict[str, Any]:
-    """Compute handle-level & vector-primitive red/green overlay diff between two DXF files."""
+    """Compute handle-level & vector-primitive red/green overlay diff between two DXF files (including referenced block edits)."""
     before_resolved = Path(before_dxf_path).expanduser().resolve(strict=True)
     after_resolved = Path(after_dxf_path).expanduser().resolve(strict=True)
 
@@ -329,12 +381,22 @@ def compute_dxf_vector_diff(
     before_ents = {str(e.dxf.handle).upper(): e for e in before_doc.modelspace() if e.is_alive}
     after_ents = {str(e.dxf.handle).upper(): e for e in after_doc.modelspace() if e.is_alive}
 
+    before_blk_cache: dict[str, list[Any]] = {}
+    after_blk_cache: dict[str, list[Any]] = {}
+
     added_handles = sorted(h for h in after_snap if h not in before_snap)
     deleted_handles = sorted(h for h in before_snap if h not in after_snap)
     modified_handles = sorted(
         h
         for h in (before_snap.keys() & after_snap.keys())
-        if not values_close(before_snap[h], after_snap[h], tolerance)
+        if (
+            not values_close(before_snap[h], after_snap[h], tolerance)
+            or not values_close(
+                _referenced_block_signature(before_doc, before_ents[h], before_blk_cache),
+                _referenced_block_signature(after_doc, after_ents[h], after_blk_cache),
+                tolerance,
+            )
+        )
     )
     untouched_count = len(before_snap.keys() & after_snap.keys()) - len(modified_handles)
 
