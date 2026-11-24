@@ -9,6 +9,11 @@ from pathlib import Path
 import re
 from typing import Any, Literal
 
+from cad_skill_core.geometry.feature_graph import (
+    FeatureGraphSpec,
+    build_feature_graph_geometry,
+    compile_nl_to_feature_graph,
+)
 from cad_skill_core.geometry.parametric import (
     BearingCapParameters,
     FlangeParameters,
@@ -40,6 +45,7 @@ PartFamily = Literal[
     "spur-gear",
     "bearing-cap",
     "ribbed-bracket",
+    "custom-profile",
 ]
 
 _CJK_RE = re.compile(r"[\u4e00-\u9fff]")
@@ -104,8 +110,8 @@ _PARAM_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("depth", re.compile(r"(?:底板宽(?:度)?|进深|深度|深|depth)\s*(?:为|是)?\s*[:：=]?\s*", re.IGNORECASE)),
     ("corner_radius", re.compile(r"(?:(?:四角)?倒圆|圆角(?:半径)?|corner\s*radius|fillet\s*radius)\s*(?:为|是)?\s*[:：=]?\s*[Rr]?\s*", re.IGNORECASE)),
     ("thickness", re.compile(r"(?<!筋)(?<!肋板)(?<!立板)(?<!竖板)(?<!壁)(?:底盘厚(?:度)?|法兰厚(?:度)?|底板厚(?:度)?|板厚|厚度|厚|thickness)\s*(?:为|是)?\s*[:：=]?\s*", re.IGNORECASE)),
-    ("width", re.compile(r"(?<!底)(?<!齿)(?<!齿轮)(?<!槽)(?:底板长(?:度)?|总长|总宽|(?<!底)板宽|(?<!底板)(?<!齿轮)宽度|(?<!底板)(?<!齿)(?<!槽)宽|(?<!槽)长|width)\s*(?:为|是)?\s*[:：=]?\s*", re.IGNORECASE)),
-    ("height", re.compile(r"(?<!颈)(?<!凸台)(?:总高|板高|高度|高|height)\s*(?:为|是)?\s*[:：=]?\s*", re.IGNORECASE)),
+    ("width", re.compile(r"(?<!底)(?<!齿)(?<!齿轮)(?<!槽)(?<!顶)(?<!头部)(?<!腹板)(?<!立柱)(?<!上)(?<!下)(?<!柄)(?:底板长(?:度)?|总长|总宽|(?<!底)板宽|(?<!底板)(?<!齿轮)宽度|(?<!底板)(?<!齿)(?<!槽)(?<!顶)(?<!腹板)(?<!立柱)(?<!柄)宽|(?<!槽)长|width)\s*(?:为|是)?\s*[:：=]?\s*", re.IGNORECASE)),
+    ("height", re.compile(r"(?<!颈)(?<!凸台)(?<!翼缘)(?<!头部)(?<!横梁)(?<!上)(?<!下)(?:总高|板高|高度|(?<!翼缘)(?<!头部)(?<!横梁)高|height)\s*(?:为|是)?\s*[:：=]?\s*", re.IGNORECASE)),
 )
 
 
@@ -124,10 +130,21 @@ def compile_spec_from_files(
     part_family: PartFamily = "auto",
     title_block_language: Literal["auto", "en", "zh"] = "auto",
     include_pro_symbols: bool = True,
+    preference_memory_path: Path | None = None,
+    feature_graph: FeatureGraphSpec | dict[str, Any] | None = None,
     ocr: OCRCallable | None = None,
     output_path: Path | None = None,
 ) -> DrawingSpec:
     """Extract fragments from source files and compile into a validated DrawingSpec."""
+
+    resolved_mem = preference_memory_path
+    if resolved_mem is None and paths:
+        first_p = Path(paths[0]).expanduser().resolve()
+        for anc in (first_p.parent, first_p.parent.parent, first_p.parent.parent.parent):
+            cand_mem = anc / ".cad-memory" / "project-preferences.json"
+            if cand_mem.is_file():
+                resolved_mem = cand_mem
+                break
 
     fragments = extract_sources(paths, ocr=ocr)
     spec = compile_spec_from_fragments(
@@ -135,10 +152,51 @@ def compile_spec_from_files(
         part_family=part_family,
         title_block_language=title_block_language,
         include_pro_symbols=include_pro_symbols,
+        preference_memory_path=resolved_mem,
+        feature_graph=feature_graph,
     )
     if output_path is not None:
         save_spec(spec, output_path)
     return spec
+
+
+def compile_spec_from_feature_graph(
+    graph: FeatureGraphSpec | dict[str, Any],
+    *,
+    project_name: str | None = None,
+    drawing_number: str | None = None,
+    material: str | None = "Q235B",
+    title_block_language: Literal["en", "zh"] = "zh",
+    include_pro_symbols: bool = True,
+    preference_memory_path: Path | None = None,
+) -> DrawingSpec:
+    """Compile a non-template `FeatureGraphSpec` directly into a validated GB/T `DrawingSpec`."""
+    fg = graph if isinstance(graph, FeatureGraphSpec) else FeatureGraphSpec.model_validate(graph)
+    title = project_name or fg.name or ("非标异形结构件" if title_block_language == "zh" else "Custom Profile Part")
+    lines = [
+        f"# {title}",
+        *([f"图号：{drawing_number}"] if drawing_number else []),
+        *([f"材料：{material}"] if material else []),
+    ]
+    frags = [
+        SourceFragment(
+            id=f"fg-src-{idx:04d}",
+            file="feature-graph.json",
+            locator=f"line {idx}",
+            media_type="text/markdown",
+            text=ln,
+            confidence=1.0,
+        )
+        for idx, ln in enumerate(lines, start=1)
+    ]
+    return compile_spec_from_fragments(
+        frags,
+        part_family="custom-profile",
+        title_block_language=title_block_language,
+        include_pro_symbols=include_pro_symbols,
+        preference_memory_path=preference_memory_path,
+        feature_graph=fg,
+    )
 
 
 def compile_spec_from_fragments(
@@ -147,6 +205,8 @@ def compile_spec_from_fragments(
     part_family: PartFamily = "auto",
     title_block_language: Literal["auto", "en", "zh"] = "auto",
     include_pro_symbols: bool = True,
+    preference_memory_path: Path | None = None,
+    feature_graph: FeatureGraphSpec | dict[str, Any] | None = None,
 ) -> DrawingSpec:
     """Analyze extracted SourceFragments, detect conflicts/missing dims, and emit DrawingSpec."""
 
@@ -592,6 +652,28 @@ def compile_spec_from_fragments(
             except ValueError as exc:
                 conflicts.append(f"ribbed-bracket geometric constraint violation: {exc}")
 
+    elif inferred_family == "custom-profile" or feature_graph is not None:
+        inferred_family = "custom-profile"
+        try:
+            fg_obj = (
+                (feature_graph if isinstance(feature_graph, FeatureGraphSpec) else FeatureGraphSpec.model_validate(feature_graph))
+                if feature_graph is not None
+                else compile_nl_to_feature_graph(all_text)
+            )
+            if fg_obj is None:
+                missing.append("missing base_profile or polygon/plate dimensions for custom-profile")
+            else:
+                built_fg = build_feature_graph_geometry(fg_obj, source_id=first_source_id)
+                requested_views = built_fg.views
+                entities_dump = [e.model_dump(mode="json") for e in built_fg.entities]
+                view_indices = built_fg.view_entity_indices
+                dimensions_dump = _attach_tolerances(built_fg.dimensions, resolved_params)
+                geo_params.update(built_fg.parameters)
+                if project_name is None:
+                    project_name = fg_obj.name or ("异形结构板" if resolved_lang == "zh" else "Custom Profile Plate")
+        except Exception as exc:
+            conflicts.append(f"custom-profile feature graph violation: {exc}")
+
     elif inferred_family == "rounded-rect":
         req_keys = ("width", "height", "corner_radius")
         absent = [k for k in req_keys if k not in resolved_params]
@@ -704,6 +786,16 @@ def compile_spec_from_fragments(
         },
     }
     validated_spec = DrawingSpec.model_validate(spec_dict)
+    if preference_memory_path is not None:
+        from cad_skill_core.standards.preference_memory import apply_project_preferences_to_spec
+
+        has_exp_gen_ra = bool(_GENERAL_SURFACE_RE.search(all_text) and _RA_TOKEN_RE.search(all_text))
+        validated_spec, _, _ = apply_project_preferences_to_spec(
+            validated_spec,
+            preference_memory_path,
+            family=inferred_family,
+            explicit_flags={"explicit_general_ra": has_exp_gen_ra},
+        )
     if scale_was_auto:
         from cad_skill_core.layout.models import LayoutOverflowError
         from cad_skill_core.layout.plan import plan_layout
@@ -786,10 +878,16 @@ def _infer_family(
         return "ribbed-bracket"
     if shaft_steps or re.search(r"阶梯轴|传动轴|stepped\s*shaft", all_text, re.IGNORECASE):
         return "stepped-shaft"
-    if "slot_length" in params or "slot_width" in params or re.search(r"腰形槽|长槽支架|slotted\s*bracket", all_text, re.IGNORECASE):
-        return "slotted-bracket"
     if "outer_diameter" in params or re.search(r"法兰|flange", all_text, re.IGNORECASE):
         return "flange"
+    if re.search(
+        r"多边形|顶点|异形|连接板|多孔.*(?:底板|安装板)|T[型形][^\n，。]{0,8}?(?:板|滑块|垫块|块|座)|方槽|矩形槽|阵列.*孔",
+        all_text,
+        re.IGNORECASE,
+    ):
+        return "custom-profile"
+    if "slot_length" in params or "slot_width" in params or re.search(r"腰形槽|长槽支架|slotted\s*bracket", all_text, re.IGNORECASE):
+        return "slotted-bracket"
     if "width" in params and "height" in params and "corner_radius" in params:
         return "rounded-rect"
     return "generic"

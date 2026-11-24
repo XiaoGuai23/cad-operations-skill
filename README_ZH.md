@@ -17,10 +17,10 @@
 <!-- 状态与核心能力徽章墙 -->
 <p>
   <a href="https://github.com/XiaoGuai23/cad-operations-skill/actions/workflows/smoke-test.yml"><img src="https://github.com/XiaoGuai23/cad-operations-skill/actions/workflows/smoke-test.yml/badge.svg" alt="CI Tests"></a>
-  <a href="https://github.com/XiaoGuai23/cad-operations-skill/releases"><img src="assets/badges/release.svg" alt="Release v2.2.0"></a>
-  <img src="assets/badges/tests.svg" alt="1,024+ Tests Passed">
+  <a href="https://github.com/XiaoGuai23/cad-operations-skill/releases"><img src="assets/badges/release.svg" alt="Release v2.3.0"></a>
+  <img src="assets/badges/tests.svg" alt="1,033+ Tests Passed">
   <img src="assets/badges/python.svg" alt="Python 3.12">
-  <a href="references/mcp-server-guide.md"><img src="assets/badges/mcp-tools.svg" alt="MCP 23 Tools"></a>
+  <a href="references/mcp-server-guide.md"><img src="assets/badges/mcp-tools.svg" alt="MCP 26 Tools"></a>
   <a href="SKILL.md"><img src="assets/badges/agent-skill.svg" alt="Agent Skill"></a>
   <a href="LICENSE"><img src="assets/badges/license.svg" alt="MIT License"></a>
 </p>

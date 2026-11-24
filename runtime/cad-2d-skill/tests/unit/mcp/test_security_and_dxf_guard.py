@@ -67,7 +67,7 @@ def test_api_key_authentication_allows_public_shell_and_guards_mcp_and_api_route
             json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
         )
         assert ok_header.status_code == 200
-        assert len(ok_header.json()["result"]["tools"]) == 23
+        assert len(ok_header.json()["result"]["tools"]) == 26
     finally:
         app.state.job_manager.shutdown()
 

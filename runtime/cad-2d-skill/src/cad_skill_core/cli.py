@@ -92,6 +92,7 @@ def _parser() -> argparse.ArgumentParser:
             'spur-gear',
             'bearing-cap',
             'ribbed-bracket',
+            'custom-profile',
         ),
         default='auto',
     )
@@ -152,6 +153,28 @@ def _parser() -> argparse.ArgumentParser:
     cad1k_cmd.add_argument('--standard-profile', default='gb-mechanical', dest='standard_profile')
     cad1k_cmd.add_argument('--json', action='store_true', dest='as_json')
 
+    pref_cmd = commands.add_parser('preferences', help='list, teach, learn, or confirm project-level drafting preferences')
+    pref_cmd.add_argument('action', choices=('list', 'teach', 'learn-sample', 'confirm', 'reject'))
+    pref_cmd.add_argument('--memory', type=Path, default=Path('.cad-memory/project-preferences.json'), dest='memory_path')
+    pref_cmd.add_argument('--text', default=None)
+    pref_cmd.add_argument('--sample', type=Path, default=None)
+    pref_cmd.add_argument('--pref-id', default=None, dest='pref_id')
+    pref_cmd.add_argument('--part-family', default='auto', dest='part_family')
+    pref_cmd.add_argument('--json', action='store_true', dest='as_json')
+
+    rec_reg = commands.add_parser('record-regression', help='archive a DXF revision case + post-conditions into the permanent regression vault')
+    rec_reg.add_argument('source', type=Path)
+    rec_reg.add_argument('--case-id', required=True, dest='case_id')
+    rec_reg.add_argument('--title', required=True)
+    rec_reg.add_argument('--prompt', required=True)
+    rec_reg.add_argument('--vault', type=Path, default=Path('tests/regressions'), dest='vault_dir')
+    rec_reg.add_argument('--must-reject', action='store_true', dest='must_reject')
+    rec_reg.add_argument('--json', action='store_true', dest='as_json')
+
+    run_reg = commands.add_parser('run-regressions', help='replay all recorded regression cases and verify post-conditions')
+    run_reg.add_argument('--vault', type=Path, default=Path('tests/regressions'), dest='vault_dir')
+    run_reg.add_argument('--json', action='store_true', dest='as_json')
+
     for name, help_text in (
         ("generate", "generate and audit core DXF and previews"),
         ("inspect", "run a fresh zero-repair inspection generation"),
@@ -197,6 +220,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _phase4_command(arguments)
     if arguments.command in {'score-drawing', 'benchmark-cad1k'}:
         return _cad1k_command(arguments)
+    if arguments.command in {'preferences', 'record-regression', 'run-regressions'}:
+        return _learning_command(arguments)
 
     from .pipeline import PipelineInputError, PipelineOptions, run_task
     try:
@@ -471,6 +496,74 @@ def _cad1k_command(arguments: argparse.Namespace) -> int:
         return 2
     except Exception as error:
         _write_error(f"rubric/benchmark failure: {type(error).__name__}: {error}", arguments.as_json)
+        return 1
+
+
+def _learning_command(arguments: argparse.Namespace) -> int:
+    try:
+        if arguments.command == "preferences":
+            from .standards.preference_memory import (
+                learn_preferences_from_sample_dxf,
+                load_preference_store,
+                set_preference_status,
+                teach_preferences_from_text,
+            )
+
+            mem = arguments.memory_path
+            if arguments.action == "list":
+                store = load_preference_store(mem)
+                payload = {"command": "preferences", "action": "list", **store.model_dump(mode="json")}
+            elif arguments.action == "teach":
+                if not arguments.text:
+                    raise ValueError("--text is required for 'preferences teach'")
+                items = teach_preferences_from_text(mem, arguments.text, part_family=arguments.part_family)
+                payload = {
+                    "command": "preferences",
+                    "action": "teach",
+                    "recorded": [e.model_dump(mode="json") for e in items],
+                }
+            elif arguments.action == "learn-sample":
+                if arguments.sample is None:
+                    raise ValueError("--sample is required for 'preferences learn-sample'")
+                items = learn_preferences_from_sample_dxf(arguments.sample, mem, part_family=arguments.part_family)
+                payload = {
+                    "command": "preferences",
+                    "action": "learn-sample",
+                    "recorded": [e.model_dump(mode="json") for e in items],
+                }
+            else:
+                if not arguments.pref_id:
+                    raise ValueError("--pref-id is required for 'confirm' / 'reject'")
+                target_st = "confirmed" if arguments.action == "confirm" else "rejected"
+                updated = set_preference_status(mem, arguments.pref_id, target_st)
+                payload = {"command": "preferences", "action": arguments.action, "entry": updated.model_dump(mode="json")}
+            print(_stable_json(payload) if arguments.as_json else json.dumps(payload, ensure_ascii=False, indent=2))
+            return 0
+
+        from .benchmark.regression_flywheel import record_regression_case, replay_regression_vault
+
+        if arguments.command == "record-regression":
+            res = record_regression_case(
+                arguments.vault_dir,
+                case_id=arguments.case_id,
+                title=arguments.title,
+                source_dxf_path=arguments.source,
+                prompt=arguments.prompt,
+                must_reject=arguments.must_reject,
+            )
+            payload = {"command": "record-regression", **res}
+            print(_stable_json(payload) if arguments.as_json else json.dumps(payload, ensure_ascii=False, indent=2))
+            return 0
+
+        rep = replay_regression_vault(arguments.vault_dir)
+        payload = {"command": "run-regressions", **rep}
+        print(_stable_json(payload) if arguments.as_json else json.dumps(payload, ensure_ascii=False, indent=2))
+        return 0 if rep["all_passed"] else 1
+    except (ValueError, KeyError, FileNotFoundError, FileExistsError, TypeError, OSError) as error:
+        _write_error(f"user/validation error: {error}", arguments.as_json)
+        return 2
+    except Exception as error:
+        _write_error(f"learning/regression failure: {type(error).__name__}: {error}", arguments.as_json)
         return 1
 
 

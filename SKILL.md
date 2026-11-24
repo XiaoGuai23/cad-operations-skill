@@ -23,6 +23,7 @@ edit the current authoritative drawing; for new drawings use a validated spec.
 | SolidWorks parts, assemblies or drawings | [SolidWorks workflow](references/solidworks-mcp.md) |
 | Machine paths, MCP availability or setup | [Local environment](references/local-cad-environment.md) |
 | MCP Server (`stdio` / HTTP), Web Auto-Drafting Studio (`/studio`), 3D modeling & domestic CAD drivers | [MCP & Web Studio guide](references/mcp-server-guide.md) and [command examples](references/command-examples.md) |
+| Project preference memory (`preferences`), non-standard custom plates (`custom-profile` / `FeatureGraphSpec`), reopen-DXF post-verification & regression vault (`record-regression` / `run-regressions`) | [MCP & Web Studio guide](references/mcp-server-guide.md) |
 
 Read only the branch needed for the task. Existing command examples are in
 [command examples](references/command-examples.md); task-specific scripts remain

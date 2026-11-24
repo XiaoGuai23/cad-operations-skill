@@ -768,7 +768,10 @@ def _annotation_layouts(spec: DrawingSpec, views: tuple[ViewLayout, ...], printa
         title_cell_max_x = tx1
 
     title_cell_avail = (title_cell_max_x - title_cell_min_x) - 10.0
-    use_large_title = max(title_h, measure_text_width_mm(spec.project.name, title_h, width_factor=title_wf)) <= title_cell_avail
+    use_large_title = (
+        max(title_h, measure_text_width_mm(spec.project.name, title_h, width_factor=title_wf) * 2.4)
+        <= title_cell_avail
+    )
     chosen_title_style = "title" if (use_large_title and "title" in standard.text_styles) else "normal"
     chosen_title_h = title_h if chosen_title_style == "title" else height
     chosen_title_wf = title_wf if chosen_title_style == "title" else width_factor
@@ -1111,69 +1114,79 @@ def _engineering_symbol_layouts(
         placed_datum = False
         box_size = 6.2
         total_span = 6.2 + box_size
+        prefer_right_datum = (
+            dat.placement == "right-center"
+            or spec.geometry.parameters.get("preferred_leader_side") == "right"
+        )
+        side_order = ("right", "left") if prefer_right_datum else ("left", "right")
         for cv in cand_views:
             ob, _, horiz_cy = _view_outline_sheet_bounds(spec, cv)
             prev_ys = used_left_datum_ys.setdefault(cv.name, [])
-            ax_left = ob.min_x
-            if ax_left - total_span > printable.min_x + 1.5:
-                for frac in (0.25, 0.56, 0.14, 0.82):
-                    cand_ay = ob.min_y + ob.height * frac
-                    if any(abs(cand_ay - cy) < 2.2 for cy in horiz_cy):
-                        cand_ay += 2.6
-                    if (
-                        ob.min_y + 1.5 <= cand_ay <= ob.max_y - 1.5
-                        and all(abs(cand_ay - py) >= box_size + 1.8 for py in prev_ys)
-                        and all(
-                            not Bounds(ax_left - total_span - 0.2, cand_ay - box_size / 2.0 - 0.1, ax_left + 0.05, cand_ay + box_size / 2.0 + 0.1).intersects(existing.bounds)
-                            for existing in (*prior, *out)
-                        )
-                    ):
-                        prev_ys.append(cand_ay)
-                        out.append(
-                            AnnotationLayout(
-                                "datum-symbol",
-                                dat.letter.strip()[:2],
-                                Bounds(ax_left - total_span - 0.2, cand_ay - box_size / 2.0 - 0.1, ax_left + 0.05, cand_ay + box_size / 2.0 + 0.1),
-                                "DIM",
-                                points=((ax_left, cand_ay),),
-                                annotation_id=f"datum-{idx}",
-                                group_id=f"datum-{idx}",
-                                owner_view=cv.name,
-                                allowed_contact=("own-view-endpoint",),
-                                dim_kind="left",
-                            )
-                        )
-                        placed_datum = True
-                        break
-            if placed_datum:
-                break
-            # Try right OUTLINE contour edge of cv if left edge is occupied or narrow
-            ax_right = ob.max_x
-            if ax_right + total_span < printable.max_x - 1.5:
-                for r_frac in (0.28, 0.62, 0.16, 0.78):
-                    cand_ay = ob.min_y + ob.height * r_frac
-                    if not (ob.min_y + 1.5 <= cand_ay <= ob.max_y - 1.5):
-                        continue
-                    cand_b = Bounds(ax_right - 0.05, cand_ay - box_size / 2.0 - 0.1, ax_right + total_span + 0.2, cand_ay + box_size / 2.0 + 0.1)
-                    if all(not cand_b.intersects(existing.bounds) for existing in (*prior, *out)):
-                        out.append(
-                            AnnotationLayout(
-                                "datum-symbol",
-                                dat.letter.strip()[:2],
-                                cand_b,
-                                "DIM",
-                                points=((ax_right, cand_ay),),
-                                annotation_id=f"datum-{idx}",
-                                group_id=f"datum-{idx}",
-                                owner_view=cv.name,
-                                allowed_contact=("own-view-endpoint",),
-                                dim_kind="right",
-                            )
-                        )
-                        placed_datum = True
-                        break
+            for d_side in side_order:
+                if d_side == "left":
+                    ax_left = ob.min_x
+                    if ax_left - total_span > printable.min_x + 1.5:
+                        for frac in (0.25, 0.56, 0.14, 0.82):
+                            cand_ay = ob.min_y + ob.height * frac
+                            if any(abs(cand_ay - cy) < 2.2 for cy in horiz_cy):
+                                cand_ay += 2.6
+                            if (
+                                ob.min_y + 1.5 <= cand_ay <= ob.max_y - 1.5
+                                and all(abs(cand_ay - py) >= box_size + 1.8 for py in prev_ys)
+                                and all(
+                                    not Bounds(ax_left - total_span - 0.2, cand_ay - box_size / 2.0 - 0.1, ax_left + 0.05, cand_ay + box_size / 2.0 + 0.1).intersects(existing.bounds)
+                                    for existing in (*prior, *out)
+                                )
+                            ):
+                                prev_ys.append(cand_ay)
+                                out.append(
+                                    AnnotationLayout(
+                                        "datum-symbol",
+                                        dat.letter.strip()[:2],
+                                        Bounds(ax_left - total_span - 0.2, cand_ay - box_size / 2.0 - 0.1, ax_left + 0.05, cand_ay + box_size / 2.0 + 0.1),
+                                        "DIM",
+                                        points=((ax_left, cand_ay),),
+                                        annotation_id=f"datum-{idx}",
+                                        group_id=f"datum-{idx}",
+                                        owner_view=cv.name,
+                                        allowed_contact=("own-view-endpoint",),
+                                        dim_kind="left",
+                                    )
+                                )
+                                placed_datum = True
+                                break
+                else:
+                    ax_right = ob.max_x
+                    if ax_right + total_span < printable.max_x - 1.5:
+                        for r_frac in (0.28, 0.62, 0.16, 0.78):
+                            cand_ay = ob.min_y + ob.height * r_frac
+                            if any(abs(cand_ay - cy) < 2.2 for cy in horiz_cy):
+                                cand_ay += 2.6
+                            if not (ob.min_y + 1.5 <= cand_ay <= ob.max_y - 1.5):
+                                continue
+                            cand_b = Bounds(ax_right - 0.05, cand_ay - box_size / 2.0 - 0.1, ax_right + total_span + 0.2, cand_ay + box_size / 2.0 + 0.1)
+                            if all(not cand_b.intersects(existing.bounds) for existing in (*prior, *out)):
+                                prev_ys.append(cand_ay)
+                                out.append(
+                                    AnnotationLayout(
+                                        "datum-symbol",
+                                        dat.letter.strip()[:2],
+                                        cand_b,
+                                        "DIM",
+                                        points=((ax_right, cand_ay),),
+                                        annotation_id=f"datum-{idx}",
+                                        group_id=f"datum-{idx}",
+                                        owner_view=cv.name,
+                                        allowed_contact=("own-view-endpoint",),
+                                        dim_kind="right",
+                                    )
+                                )
+                                placed_datum = True
+                                break
                 if placed_datum:
                     break
+            if placed_datum:
+                break
 
     # 3. GD&T Feature Control Frames ([◎ | ⌀0.02 | A]) BELOW view-label, with non-crossing orthogonal leaders + arrowheads!
     per_view_gdt_idx: dict[str, int] = {}
@@ -1296,7 +1309,13 @@ def _dimension_layout(
             lane_key = (view.name, "radial")
             radial_idx = lane_counts.get(lane_key, 0)
             lane_counts[lane_key] = radial_idx + 1
-            angles = (25.0, 145.0, -35.0, -145.0, 65.0, 115.0)
+            pref_l_side = spec.geometry.parameters.get("preferred_leader_side")
+            if pref_l_side == "right":
+                angles = (25.0, -35.0, 55.0, -55.0, 145.0, -145.0)
+            elif pref_l_side == "left":
+                angles = (145.0, -145.0, 115.0, -115.0, 25.0, -35.0)
+            else:
+                angles = (25.0, 145.0, -35.0, -145.0, 65.0, 115.0)
             angle_deg = angles[radial_idx % len(angles)]
         pad = max(r_sheet, standard.dimension.text_height_mm * 2.0)
         return AnnotationLayout(

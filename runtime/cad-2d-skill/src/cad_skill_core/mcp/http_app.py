@@ -172,6 +172,47 @@ class WebCAD1KEvalRequest(BaseModel):
     standard_profile: str = "gb-mechanical"
 
 
+class WebPreferencesRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["list", "teach", "learn_sample", "confirm", "reject"] = "list"
+    instruction_text: str | None = None
+    sample_dxf_path: str | None = None
+    pref_id: str | None = None
+    part_family: str = "auto"
+    confirm: bool = False
+
+
+class WebFeatureGraphRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    feature_graph: dict[str, Any] | None = None
+    markdown_brief: str | None = None
+    project_name: str | None = None
+    drawing_number: str | None = None
+    material: str | None = "Q235B"
+    standard_profile: str | None = None
+    include_pro_symbols: bool = True
+
+
+class WebRegressionsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["list", "record", "replay"] = "list"
+    case_id: str | None = None
+    title: str | None = None
+    dxf_path: str | None = None
+    task_id: str | None = None
+    artifact_name: str = "drawing.dxf"
+    prompt: str | None = None
+    candidate_handles: list[str] | None = None
+    region_box: list[float] | None = None
+    structured_ir: dict[str, Any] | None = None
+    must_reject: bool = False
+    expected_post_conditions: list[dict[str, Any]] = Field(default_factory=list)
+    bug_note: str = ""
+
+
 def _attach_download_urls(payload: dict[str, Any]) -> dict[str, Any]:
     task_id = payload.get("task_id")
     if not task_id or "artifacts" not in payload:
@@ -468,6 +509,25 @@ def create_mcp_http_app(
         structured = _attach_download_urls(res["structuredContent"])
         status_code = 400 if res["isError"] else 200
         return JSONResponse(status_code=status_code, content=structured)
+
+    @app.post("/api/v1/preferences")
+    def web_manage_preferences(req: WebPreferencesRequest) -> JSONResponse:
+        res = call_mcp_tool(sandbox, "cad_manage_preferences", req.model_dump())
+        status_code = 400 if res["isError"] else 200
+        return JSONResponse(status_code=status_code, content=res["structuredContent"])
+
+    @app.post("/api/v1/draft/feature-graph")
+    def web_draft_feature_graph(req: WebFeatureGraphRequest) -> JSONResponse:
+        res = call_mcp_tool(sandbox, "cad_generate_feature_graph", req.model_dump())
+        structured = _attach_download_urls(res["structuredContent"])
+        status_code = 400 if res["isError"] else 200
+        return JSONResponse(status_code=status_code, content=structured)
+
+    @app.post("/api/v1/regressions")
+    def web_manage_regressions(req: WebRegressionsRequest) -> JSONResponse:
+        res = call_mcp_tool(sandbox, "cad_manage_regressions", req.model_dump())
+        status_code = 400 if res["isError"] else 200
+        return JSONResponse(status_code=status_code, content=res["structuredContent"])
 
     @app.get("/api/v1/tasks/{task_id}")
     def get_task(task_id: str) -> dict[str, Any]:

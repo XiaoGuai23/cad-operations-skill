@@ -80,6 +80,7 @@ class Dimension(SchemaModel):
     target_entity_index: int | None = None
     orientation: Literal["horizontal", "vertical", "aligned", "diameter", "radius"] | None = None
     prefix: str | None = None
+    suffix: str | None = None
     tolerance_upper: float | None = None
     tolerance_lower: float | None = None
     param_key: str | None = None
@@ -93,20 +94,21 @@ class Dimension(SchemaModel):
                 auto_prefix = "R"
             else:
                 auto_prefix = ""
+        sfx = self.suffix or ""
         base = f"{auto_prefix}{self.value:g}"
         if self.tolerance_upper is not None and self.tolerance_lower is not None:
             if abs(self.tolerance_upper + self.tolerance_lower) <= 1e-9 and self.tolerance_upper > 0:
-                return f"{base}±{abs(self.tolerance_upper):g}"
+                return f"{base}±{abs(self.tolerance_upper):g}{sfx}"
             up = f"+{self.tolerance_upper:g}" if self.tolerance_upper >= 0 else f"{self.tolerance_upper:g}"
             lo = f"+{self.tolerance_lower:g}" if self.tolerance_lower > 0 else f"{self.tolerance_lower:g}"
-            return f"{base} ({up}/{lo})"
+            return f"{base} ({up}/{lo}){sfx}"
         if self.tolerance_upper is not None:
             up = f"+{self.tolerance_upper:g}" if self.tolerance_upper >= 0 else f"{self.tolerance_upper:g}"
-            return f"{base} {up}"
+            return f"{base} {up}{sfx}"
         if self.tolerance_lower is not None:
             lo = f"+{self.tolerance_lower:g}" if self.tolerance_lower > 0 else f"{self.tolerance_lower:g}"
-            return f"{base} {lo}"
-        return base
+            return f"{base} {lo}{sfx}"
+        return f"{base}{sfx}"
 
 
 class Annotation(SchemaModel):
@@ -139,7 +141,7 @@ class DatumSymbol(SchemaModel):
     letter: NonBlankText
     source_id: NonBlankText
     owner_view: str = "front"
-    placement: Literal["left-center", "bottom-left", "top-right"] = "left-center"
+    placement: Literal["left-center", "right-center", "bottom-left", "top-right"] = "left-center"
     target_feature: str | None = None
 
 

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from math import isfinite
 from pathlib import Path
 from typing import Any
@@ -56,6 +56,7 @@ class SampleLearningResult:
     sample_extents_mm: tuple[float, float] | None
     sample_styles: tuple[str, ...]
     sample_dimstyles: tuple[str, ...]
+    detected_habits: dict[str, Any] = field(default_factory=dict)
 
 
 def learn_standard_from_dxf(
@@ -63,6 +64,8 @@ def learn_standard_from_dxf(
     *,
     base_standard: DrawingStandard | None = None,
     profile_name: str | None = None,
+    preference_memory_path: Path | None = None,
+    confirm_preferences: bool = False,
 ) -> SampleLearningResult:
     """Inspect a sample DXF read-only and derive a validated DrawingStandard."""
 
@@ -212,6 +215,15 @@ def learn_standard_from_dxf(
         sheets=sheets,
         protected_zones=protected_zones,
     )
+    from .preference_memory import extract_habits_from_sample_dxf, learn_preferences_from_sample_dxf
+
+    habit_info = extract_habits_from_sample_dxf(path)
+    if preference_memory_path is not None:
+        learn_preferences_from_sample_dxf(
+            path,
+            preference_memory_path,
+            confirm=confirm_preferences,
+        )
     return SampleLearningResult(
         standard=standard,
         matched_layers=matched_layers,
@@ -219,6 +231,7 @@ def learn_standard_from_dxf(
         sample_extents_mm=sample_extents_mm,
         sample_styles=tuple(sample_style_names),
         sample_dimstyles=tuple(sample_dimstyle_names),
+        detected_habits=habit_info["habits"],
     )
 
 

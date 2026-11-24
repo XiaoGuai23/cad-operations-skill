@@ -19,18 +19,34 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 import json
-from math import acos, atan2, cos, degrees, hypot, isfinite, pi, radians, sin, tan
+from math import acos, atan2, cos, degrees, hypot, isclose, isfinite, pi, radians, sin, tan
 import os
 from pathlib import Path
 import re
+import tempfile
 from typing import Annotated, Any, Literal, Union
 import urllib.request
 
 import ezdxf
 from ezdxf import bbox
+from ezdxf.math import Matrix44
 from pydantic import BaseModel, ConfigDict, Field
 
 from .common import RevisionError, compare_untouched, sha256_file, snapshot_modelspace
+from .post_verify import (
+    BoltCircleExistsCheck,
+    CircleDiameterEqualsCheck,
+    CircleExistsAtCheck,
+    CornerChamferExistsCheck,
+    CornerFilletExistsCheck,
+    HandlesAbsentCheck,
+    HandlesTranslatedCheck,
+    LinearSpanEqualsCheck,
+    MirroredHandlesExistCheck,
+    PostConditionSpec,
+    TextContainsCheck,
+    verify_revision_post_conditions,
+)
 from .transaction import DocumentCheckpoint
 
 _INSUNITS_MM_SCALE: dict[int, tuple[float, str]] = {
@@ -148,6 +164,49 @@ class MirrorEntitiesOp(_StrictIRBase):
     unit: str | None = None
 
 
+class DeleteEntitiesOp(_StrictIRBase):
+    op: Literal["delete_entities"] = "delete_entities"
+    handles: list[str] = Field(default_factory=list)
+    entity_filter: Literal["all", "circle", "line", "text", "dimension", "hidden", "center"] = "all"
+
+
+class MoveEntitiesOp(_StrictIRBase):
+    op: Literal["move_entities"] = "move_entities"
+    handles: list[str] = Field(default_factory=list)
+    dx: float = 0.0
+    dy: float = 0.0
+    dx_unit: str | None = None
+    dy_unit: str | None = None
+    unit: str | None = None
+
+
+class ResizeHoleOp(_StrictIRBase):
+    op: Literal["resize_hole"] = "resize_hole"
+    handles: list[str] = Field(default_factory=list)
+    new_diameter: float = Field(gt=0.0)
+    match_old_diameter: float | None = Field(default=None, gt=0.0)
+    new_diameter_unit: str | None = None
+    old_diameter_unit: str | None = None
+    unit: str | None = None
+    sync_dimensions: bool = True
+
+
+class ResizeLinearOp(_StrictIRBase):
+    op: Literal["resize_linear"] = "resize_linear"
+    handles: list[str] = Field(default_factory=list)
+    new_length: float = Field(gt=0.0)
+    axis: Literal["auto", "horizontal", "vertical"] = "auto"
+    new_length_unit: str | None = None
+    unit: str | None = None
+
+
+class UpdateTextOp(_StrictIRBase):
+    op: Literal["update_text"] = "update_text"
+    handles: list[str] = Field(default_factory=list)
+    new_text: str
+    old_text: str | None = None
+
+
 RevisionIROperation = Annotated[
     Union[
         AddCircleHoleOp,
@@ -155,15 +214,21 @@ RevisionIROperation = Annotated[
         ChamferCornerOp,
         FilletCornerOp,
         MirrorEntitiesOp,
+        DeleteEntitiesOp,
+        MoveEntitiesOp,
+        ResizeHoleOp,
+        ResizeLinearOp,
+        UpdateTextOp,
     ],
     Field(discriminator="op"),
 ]
 
 
 class StructuredRevisionIR(_StrictIRBase):
-    schema_version: Literal["cad-revision-ir/v2"] = "cad-revision-ir/v2"
+    schema_version: Literal["cad-revision-ir/v2", "cad-revision-ir/v2.3"] = "cad-revision-ir/v2"
     baseline_sha256: str | None = None
     operations: list[RevisionIROperation] = Field(min_length=1)
+    post_conditions: list[PostConditionSpec] = Field(default_factory=list)
     rationale_zh: str = ""
 
 
@@ -513,6 +578,10 @@ def execute_revision_ir(
     added_handles: list[str] = []
     deleted_handles: list[str] = []
     summaries: list[str] = []
+    auto_checks: list[PostConditionSpec] = []
+    net_move_doc: dict[str, tuple[float, float]] = {}
+    final_circle_diam_doc: dict[str, float] = {}
+    final_linear_span_doc: dict[str, tuple[float, Literal["auto", "horizontal", "vertical"]]] = {}
 
     cand_upper = [str(h).upper() for h in (candidate_handles or []) if h]
 
@@ -551,6 +620,14 @@ def execute_revision_ir(
                     cl_h = msp.add_line((cx - ext_r, cy), (cx + ext_r, cy), dxfattribs={"layer": "CENTER"})
                     cl_v = msp.add_line((cx, cy - ext_r), (cx, cy + ext_r), dxfattribs={"layer": "CENTER"})
                     added_handles.extend([str(cl_h.dxf.handle).upper(), str(cl_v.dxf.handle).upper()])
+                auto_checks.append(
+                    CircleExistsAtCheck(
+                        center=(cx, cy),
+                        diameter=dia,
+                        layer=step.layer,
+                        label=f"新增圆孔 ({cx:.2f}, {cy:.2f}) ⌀{dia:g}",
+                    )
+                )
                 summaries.append(f"已在 ({cx:.1f}, {cy:.1f}) 新增 ⌀{dia:g} 圆孔")
 
             elif isinstance(step, AddBoltCircleOp):
@@ -592,6 +669,16 @@ def execute_revision_ir(
                     _ensure_layer(doc, "CENTER")
                     pc = msp.add_circle((cx, cy), r_pcd, dxfattribs={"layer": "CENTER"})
                     added_handles.append(str(pc.dxf.handle).upper())
+                auto_checks.append(
+                    BoltCircleExistsCheck(
+                        center=(cx, cy),
+                        count=step.count,
+                        hole_diameter=hole_d,
+                        bolt_circle_diameter=pcd,
+                        start_angle_deg=step.start_angle_deg,
+                        label=f"{step.count}×⌀{hole_d:g} 均布孔 (节圆 ⌀{pcd:g})",
+                    )
+                )
                 summaries.append(f"已围绕 ({cx:.1f}, {cy:.1f}) 新增 {step.count}×⌀{hole_d:g} 均布螺栓孔（节圆 ⌀{pcd:g}）")
 
             elif isinstance(step, (ChamferCornerOp, FilletCornerOp)):
@@ -672,6 +759,14 @@ def execute_revision_ir(
                 else:
                     raise RevisionError("倒角/倒圆角需要选中两条相交轮廓线或一个多段线拐角。")
 
+                if is_chamfer:
+                    auto_checks.append(
+                        CornerChamferExistsCheck(distance1=d1, distance2=d2, min_count=1, label=f"倒角 C{d1:g}")
+                    )
+                else:
+                    auto_checks.append(
+                        CornerFilletExistsCheck(radius=rad, min_count=1, label=f"倒圆角 R{rad:g}")
+                    )
                 summaries.append(
                     f"已完成拐角倒角 C{d1:g}" + (f"×{d2:g}" if abs(d1 - d2) > 1e-6 else "")
                     if is_chamfer
@@ -716,18 +811,234 @@ def execute_revision_ir(
                     )
                     p0, ux, uy = (ax, 0.0), 0.0, 1.0
 
-                mirrored_cnt = 0
+                step_added: list[str] = []
                 for ent in src_ents:
                     cloned = _mirror_single_entity(msp, ent, p0, ux, uy)
                     if cloned is not None:
-                        added_handles.append(str(cloned.dxf.handle).upper())
-                        mirrored_cnt += 1
+                        ch = str(cloned.dxf.handle).upper()
+                        added_handles.append(ch)
+                        step_added.append(ch)
                         if not step.keep_original:
-                            deleted_handles.append(str(ent.dxf.handle).upper())
+                            dh = str(ent.dxf.handle).upper()
+                            deleted_handles.append(dh)
                             msp.delete_entity(ent)
-                if mirrored_cnt == 0:
+                if not step_added:
                     raise RevisionError("选中图元类型暂不支持几何镜像。")
-                summaries.append(f"已沿{'水平' if step.axis == 'horizontal' else '垂直' if step.axis == 'vertical' else '指定'}对称轴镜像 {mirrored_cnt} 个图元")
+                auto_checks.append(
+                    MirroredHandlesExistCheck(added_handles=step_added, min_count=len(step_added), label="镜像图元存在性")
+                )
+                summaries.append(f"已沿{'水平' if step.axis == 'horizontal' else '垂直' if step.axis == 'vertical' else '指定'}对称轴镜像 {len(step_added)} 个图元")
+
+            elif isinstance(step, DeleteEntitiesOp):
+                pool_h = [h.upper() for h in step.handles if h] or cand_upper
+                del_targets: list[str] = []
+                for h in pool_h:
+                    ent = by_handle.get(h)
+                    if ent is None or str(ent.dxf.get("layer", "")).upper() == "FRAME":
+                        continue
+                    dt = ent.dxftype()
+                    lyr = str(ent.dxf.get("layer", "")).upper()
+                    if step.entity_filter == "circle" and dt not in {"CIRCLE", "ARC"}:
+                        continue
+                    if step.entity_filter == "line" and dt != "LINE":
+                        continue
+                    if step.entity_filter == "text" and dt not in {"TEXT", "MTEXT"}:
+                        continue
+                    if step.entity_filter == "dimension" and dt != "DIMENSION":
+                        continue
+                    if step.entity_filter == "hidden" and lyr != "HIDDEN":
+                        continue
+                    if step.entity_filter == "center" and lyr != "CENTER":
+                        continue
+                    del_targets.append(h)
+                if not del_targets:
+                    raise RevisionError("删除操作未命中匹配条件的可删除图元。")
+                for h in del_targets:
+                    msp.delete_entity(by_handle[h])
+                    deleted_handles.append(h)
+                summaries.append(f"已精准删除 {len(del_targets)} 个目标图元")
+
+            elif isinstance(step, MoveEntitiesOp):
+                pool_h = [h.upper() for h in step.handles if h] or cand_upper
+                mv_targets = [
+                    h for h in pool_h
+                    if h in by_handle and str(by_handle[h].dxf.get("layer", "")).upper() != "FRAME"
+                ]
+                if not mv_targets:
+                    raise RevisionError("平移操作未命中可移动图元。")
+                ux_tok = step.dx_unit if step.dx_unit is not None else step.unit
+                uy_tok = step.dy_unit if step.dy_unit is not None else step.unit
+                dx_doc = scale_value_to_doc_units(step.dx, ux_tok, doc_units)
+                dy_doc = scale_value_to_doc_units(step.dy, uy_tok, doc_units)
+                mat = Matrix44.translate(dx_doc, dy_doc, 0.0)
+                for h in mv_targets:
+                    by_handle[h].transform(mat)
+                    modified_handles.append(h)
+                    prev_dx, prev_dy = net_move_doc.get(h, (0.0, 0.0))
+                    net_move_doc[h] = (prev_dx + dx_doc, prev_dy + dy_doc)
+                summaries.append(f"已将 {len(mv_targets)} 个图元平移 ({dx_doc:+g}, {dy_doc:+g})")
+
+            elif isinstance(step, ResizeHoleOp):
+                from .nl_revise import _match_associated_circle_dimension, _replace_exact_nominal_token
+
+                pool_h = [h.upper() for h in step.handles if h] or cand_upper
+                cir_cands = [
+                    h for h in pool_h
+                    if h in by_handle
+                    and by_handle[h].dxftype() in {"CIRCLE", "ARC"}
+                    and str(by_handle[h].dxf.get("layer", "")).upper() != "CENTER"
+                ]
+                if step.match_old_diameter is not None:
+                    ou = step.old_diameter_unit if step.old_diameter_unit is not None else step.unit
+                    old_target_d = scale_value_to_doc_units(step.match_old_diameter, ou, doc_units)
+                    cir_cands = [
+                        h for h in cir_cands
+                        if isclose(2.0 * float(by_handle[h].dxf.radius), old_target_d, abs_tol=max(1e-2, old_target_d * 0.02))
+                    ]
+                if not cir_cands:
+                    raise RevisionError("改孔径操作未找到匹配的圆/圆弧图元。")
+
+                nu = step.new_diameter_unit if step.new_diameter_unit is not None else step.unit
+                new_d_doc = scale_value_to_doc_units(step.new_diameter, nu, doc_units)
+                new_r_doc = new_d_doc / 2.0
+                old_r_doc = float(by_handle[cir_cands[0]].dxf.radius)
+                old_d_doc = 2.0 * old_r_doc
+                target_geom = [
+                    (float(by_handle[h].dxf.center.x), float(by_handle[h].dxf.center.y), float(by_handle[h].dxf.radius))
+                    for h in cir_cands
+                ]
+                for h in cir_cands:
+                    by_handle[h].dxf.radius = new_r_doc
+                    modified_handles.append(h)
+                    final_circle_diam_doc[h] = new_d_doc
+
+                synced_dim_cnt = 0
+                if step.sync_dimensions:
+                    for ent in msp:
+                        if ent.dxftype() != "DIMENSION":
+                            continue
+                        ok_a, is_rad_d, matched_c = _match_associated_circle_dimension(
+                            ent, target_geom, old_d_doc, old_r_doc
+                        )
+                        if ok_a and matched_c is not None:
+                            dh = str(ent.dxf.handle).upper()
+                            cur_txt = str(ent.dxf.get("text", ""))
+                            old_v = old_r_doc if is_rad_d else old_d_doc
+                            new_v = new_r_doc if is_rad_d else new_d_doc
+                            if cur_txt and cur_txt != "<>":
+                                ent.dxf.text = _replace_exact_nominal_token(cur_txt, old_v, new_v)
+                            try:
+                                ent.render()
+                            except Exception:
+                                pass
+                            modified_handles.append(dh)
+                            synced_dim_cnt += 1
+                summaries.append(
+                    f"已将 {len(cir_cands)} 处圆孔直径改为 ⌀{new_d_doc:g}"
+                    + (f"（同步 {synced_dim_cnt} 处关联标注）" if synced_dim_cnt else "")
+                )
+
+            elif isinstance(step, ResizeLinearOp):
+                pool_h = [h.upper() for h in step.handles if h] or cand_upper
+                lu = step.new_length_unit if step.new_length_unit is not None else step.unit
+                new_len_doc = scale_value_to_doc_units(step.new_length, lu, doc_units)
+                poly_h = [
+                    h for h in pool_h
+                    if h in by_handle
+                    and by_handle[h].dxftype() == "LWPOLYLINE"
+                    and str(by_handle[h].dxf.get("layer", "")).upper() not in {"FRAME", "CENTER", "DIM"}
+                ]
+                line_h = [
+                    h for h in pool_h
+                    if h in by_handle
+                    and by_handle[h].dxftype() == "LINE"
+                    and str(by_handle[h].dxf.get("layer", "")).upper() not in {"FRAME", "CENTER", "DIM"}
+                ]
+                if poly_h:
+                    p_ent = by_handle[poly_h[0]]
+                    pts = list(p_ent.get_points("xyseb"))
+                    xs = [float(p[0]) for p in pts]
+                    ys = [float(p[1]) for p in pts]
+                    min_x, max_x = min(xs), max(xs)
+                    min_y, max_y = min(ys), max(ys)
+                    ax_mode = step.axis if step.axis != "auto" else "horizontal"
+                    if ax_mode == "vertical":
+                        if max_y - min_y <= 1e-6:
+                            raise RevisionError("轮廓高度跨度为 0，无法调整高度。")
+                        ratio = new_len_doc / (max_y - min_y)
+                        new_pts = [(p[0], min_y + (float(p[1]) - min_y) * ratio, p[2], p[3], p[4]) for p in pts]
+                    else:
+                        if max_x - min_x <= 1e-6:
+                            raise RevisionError("轮廓宽度跨度为 0，无法调整宽度。")
+                        ratio = new_len_doc / (max_x - min_x)
+                        new_pts = [(min_x + (float(p[0]) - min_x) * ratio, p[1], p[2], p[3], p[4]) for p in pts]
+                    p_ent.set_points(new_pts, format="xyseb")
+                    modified_handles.append(poly_h[0])
+                    final_linear_span_doc[poly_h[0]] = (new_len_doc, ax_mode)
+                    summaries.append(f"已将轮廓 #{poly_h[0]} 跨度调整为 {new_len_doc:g}")
+                elif line_h:
+                    l_ent = by_handle[line_h[0]]
+                    sx, sy, sz = float(l_ent.dxf.start.x), float(l_ent.dxf.start.y), float(l_ent.dxf.start.z)
+                    ex, ey, ez = float(l_ent.dxf.end.x), float(l_ent.dxf.end.y), float(l_ent.dxf.end.z)
+                    cur_l = hypot(ex - sx, ey - sy)
+                    if cur_l <= 1e-7:
+                        raise RevisionError("退化零长直线无法按方向调整长度。")
+                    ux, uy = (ex - sx) / cur_l, (ey - sy) / cur_l
+                    l_ent.dxf.end = (sx + ux * new_len_doc, sy + uy * new_len_doc, ez)
+                    modified_handles.append(line_h[0])
+                    final_linear_span_doc[line_h[0]] = (new_len_doc, "auto")
+                    summaries.append(f"已将直线 #{line_h[0]} 长度调整为 {new_len_doc:g}")
+                else:
+                    raise RevisionError("调整长度操作未命中直线或多段线图元。")
+
+            elif isinstance(step, UpdateTextOp):
+                pool_h = [h.upper() for h in step.handles if h] or cand_upper
+                txt_h = [
+                    h for h in pool_h
+                    if h in by_handle and by_handle[h].dxftype() in {"TEXT", "MTEXT", "DIMENSION"}
+                ]
+                if step.old_text:
+                    txt_h = [
+                        h for h in txt_h
+                        if step.old_text in (
+                            str(by_handle[h].dxf.get("text", ""))
+                            if by_handle[h].dxftype() in {"TEXT", "DIMENSION"}
+                            else by_handle[h].plain_text()
+                        )
+                    ]
+                if not txt_h:
+                    raise RevisionError("文字修改操作未命中匹配的文字图元。")
+                for h in txt_h:
+                    ent = by_handle[h]
+                    if ent.dxftype() in {"TEXT", "DIMENSION"}:
+                        cur = str(ent.dxf.get("text", ""))
+                        ent.dxf.text = cur.replace(step.old_text, step.new_text) if step.old_text else step.new_text
+                    else:
+                        ent.text = ent.text.replace(step.old_text, step.new_text) if step.old_text else step.new_text
+                    modified_handles.append(h)
+                auto_checks.append(
+                    TextContainsCheck(handles=txt_h, expected_substring=step.new_text, label=f"文字包含「{step.new_text}」")
+                )
+                summaries.append(f"已更新 {len(txt_h)} 处文字为「{step.new_text}」")
+
+        del_set = set(deleted_handles)
+        if del_set:
+            auto_checks.append(HandlesAbsentCheck(handles=sorted(del_set), label="已删除句柄缺席核验"))
+        for h, (ndx, ndy) in net_move_doc.items():
+            if h not in del_set and h in before_snap:
+                auto_checks.append(
+                    HandlesTranslatedCheck(handles=[h], dx=ndx, dy=ndy, label=f"图元 #{h} 位移核验")
+                )
+        for h, fin_d in final_circle_diam_doc.items():
+            if h not in del_set:
+                auto_checks.append(
+                    CircleDiameterEqualsCheck(handles=[h], diameter=fin_d, label=f"圆孔 #{h} 直径=⌀{fin_d:g}")
+                )
+        for h, (fin_l, fin_ax) in final_linear_span_doc.items():
+            if h not in del_set:
+                auto_checks.append(
+                    LinearSpanEqualsCheck(handles=[h], length=fin_l, axis=fin_ax, label=f"图元 #{h} 跨度={fin_l:g}")
+                )
 
         after_snap = snapshot_modelspace(doc)
         allowed_set = set(modified_handles) | set(added_handles) | set(deleted_handles)
@@ -741,16 +1052,30 @@ def execute_revision_ir(
             checkpoint.restore()
             raise RevisionError(f"IR 改图后 DXF 审计未通过 ({len(dxf_audit.errors)} 处错误)，已回滚。")
 
+        all_post_checks: list[PostConditionSpec] = [*auto_checks, *parsed_ir.post_conditions]
         out_dir = Path(output_dir).expanduser().resolve()
         out_dir.mkdir(parents=True, exist_ok=True)
         out_dxf = out_dir / "revised.dxf"
         if not dry_run:
             tmp_out = out_dxf.with_name(f".{out_dxf.name}.tmp")
             doc.saveas(tmp_out)
+            ver_report = verify_revision_post_conditions(src_path, tmp_out, all_post_checks)
+            if not ver_report["passed"]:
+                tmp_out.unlink(missing_ok=True)
+                checkpoint.restore()
+                failed_msgs = [it["detail"] for it in ver_report["items"] if not it["passed"]]
+                raise RevisionError(f"事后重读 DXF 物理核验未通过，已拦截输出: {'；'.join(failed_msgs)}")
             tmp_out.replace(out_dxf)
             new_sha = sha256_file(out_dxf)
         else:
+            with tempfile.TemporaryDirectory() as tmp_d:
+                sim_dxf = Path(tmp_d) / "simulated.dxf"
+                doc.saveas(sim_dxf)
+                ver_report = verify_revision_post_conditions(src_path, sim_dxf, all_post_checks)
             checkpoint.restore()
+            if not ver_report["passed"]:
+                failed_msgs = [it["detail"] for it in ver_report["items"] if not it["passed"]]
+                raise RevisionError(f"Dry-Run 事后重读 DXF 核验未通过: {'；'.join(failed_msgs)}")
             new_sha = current_sha
 
         dedup_mod = list(dict.fromkeys(modified_handles))
@@ -762,6 +1087,7 @@ def execute_revision_ir(
             "status": "simulated" if dry_run else "applied",
             "dry_run": dry_run,
             "ir": parsed_ir.model_dump(mode="json"),
+            "verification": ver_report,
             "baseline_sha256": current_sha,
             "new_sha256": new_sha,
             "modified_handles": dedup_mod,
@@ -783,20 +1109,38 @@ def execute_revision_ir(
 # ======================================================================
 
 
-def compile_nl_to_feature_ir(
+def compile_nl_to_unified_ir(
     prompt_text: str,
     *,
     candidate_handles: Sequence[str] | None = None,
     region_box: Sequence[float] | None = None,
     llm_callable: Callable[[str, dict[str, Any]], dict[str, Any] | str] | None = None,
 ) -> StructuredRevisionIR | None:
-    """Compile feature-creation & corner/mirror NL instructions into `StructuredRevisionIR`.
+    """Compile ANY single- or multi-clause revision instruction into `StructuredRevisionIR` (all 10 ops)."""
+    return compile_nl_to_feature_ir(
+        prompt_text,
+        candidate_handles=candidate_handles,
+        region_box=region_box,
+        llm_callable=llm_callable,
+        include_core_ops_on_single_clause=True,
+    )
+
+
+def compile_nl_to_feature_ir(
+    prompt_text: str,
+    *,
+    candidate_handles: Sequence[str] | None = None,
+    region_box: Sequence[float] | None = None,
+    llm_callable: Callable[[str, dict[str, Any]], dict[str, Any] | str] | None = None,
+    include_core_ops_on_single_clause: bool = False,
+) -> StructuredRevisionIR | None:
+    """Compile feature-creation & multi-clause NL instructions into `StructuredRevisionIR`.
 
     1. If `llm_callable` or `CAD_SKILL_LLM_API_KEY` is configured, attempts structured JSON IR
        generation first and validates strictly against `StructuredRevisionIR`.
     2. Otherwise (or if offline), compiles deterministically via multi-clause geometric intent rules.
-    Returns `None` if the prompt does not request a v2 feature primitive (allowing `nl_revise` to
-    dispatch delete/move/resize/text as usual).
+    Returns `None` if a single-clause prompt does not request a v2 feature primitive (allowing `nl_revise`
+    to dispatch legacy single-clause delete/move/resize/text as usual).
     """
     clean = (prompt_text or "").strip()
     if not clean:
@@ -823,9 +1167,10 @@ def compile_nl_to_feature_ir(
     if api_key and base_url.startswith("https://"):
         try:
             sys_msg = (
-                "Output ONLY valid JSON matching schema_version='cad-revision-ir/v2' with an 'operations' list. "
-                "Allowed ops: add_circle_hole, add_bolt_circle, chamfer_corner, fillet_corner, mirror_entities. "
-                "If the prompt is not one of these 5 operations, output {{\"operations\": []}}."
+                "Output ONLY valid JSON matching schema_version='cad-revision-ir/v2.3' with an 'operations' list. "
+                "Allowed ops: add_circle_hole, add_bolt_circle, chamfer_corner, fillet_corner, mirror_entities, "
+                "delete_entities, move_entities, resize_hole, resize_linear, update_text. "
+                "Decompose EVERY requested action in the user prompt into separate items in 'operations'."
             )
             req_body = json.dumps(
                 {
@@ -859,17 +1204,18 @@ def compile_nl_to_feature_ir(
         except Exception:
             pass
 
-    # Layer B: Deterministic Offline Feature-Primitive Compiler (exhaustive clause-by-clause verification)
+    # Layer B: Deterministic Offline Unified IR Compiler (exhaustive clause-by-clause verification)
     clauses = _split_feature_clauses(clean)
     if not clauses:
         return None
 
+    allow_core = include_core_ops_on_single_clause or (len(clauses) > 1)
     ops: list[RevisionIROperation] = []
     unparsed_clauses: list[str] = []
     rationales: list[str] = []
 
     for cl in clauses:
-        op, reason = _compile_single_feature_clause(cl, cands)
+        op, reason = _compile_single_feature_clause(cl, cands, allow_core_ops=allow_core)
         if op is not None:
             ops.append(op)
             rationales.append(reason)
@@ -880,9 +1226,13 @@ def compile_nl_to_feature_ir(
         return None
     if unparsed_clauses:
         raise RevisionError(
-            f"复合指令中包含未能完整解析或暂不支持与新增特征混合执行的子句：「{'；'.join(unparsed_clauses)}」"
+            f"复合指令中包含未能完整解析或冲突的子句：「{'；'.join(unparsed_clauses)}」"
         )
-    return StructuredRevisionIR(operations=ops, rationale_zh="；".join(dict.fromkeys(rationales)))
+    return StructuredRevisionIR(
+        schema_version="cad-revision-ir/v2",
+        operations=ops,
+        rationale_zh="；".join(dict.fromkeys(rationales)),
+    )
 
 
 _PARAM_CONTINUATION_RE = re.compile(
@@ -892,7 +1242,8 @@ _PARAM_CONTINUATION_RE = re.compile(
 _ANY_ACTION_VERB_RE = re.compile(
     r"(?:删|去掉|移除|清除|改成|改为|设为|设置|调整|放大|缩小|平移|移动|往[左右上下]|向[左右上下]|替换|"
     r"新增|添加|增加|新开|打一个|加一个|加一圈|倒角|倒圆|圆角|导圆|倒斜角|斜角|镜像|对称复制|"
-    r"\b(?:delete|remove|change|set|resize|move|shift|add|chamfer|fillet|mirror)\b)",
+    r"旋转|翻转|缩放|拉伸|修剪|延伸|打断|分解|"
+    r"\b(?:delete|remove|change|set|resize|move|shift|add|chamfer|fillet|mirror|rotate|scale|trim|extend|explode)\b)",
     re.IGNORECASE,
 )
 _COORD_TUPLE_RE = re.compile(
@@ -913,7 +1264,7 @@ def _split_feature_clauses(text: str) -> list[str]:
         elif ch in "）)":
             depth = max(0, depth - 1)
             buf.append(ch)
-        elif depth == 0 and ch in "，,；;。!！\n":
+        elif depth == 0 and ch in "，,；;。!！、\n":
             seg = "".join(buf).strip()
             if seg:
                 chunks.append(seg)
@@ -926,7 +1277,7 @@ def _split_feature_clauses(text: str) -> list[str]:
 
     # Also split inline conjunctions ("并删除...", "同时把...", "然后再...") outside parentheses
     fine_chunks: list[str] = []
-    conj_re = re.compile(r"\s*(?:并且?|同时|然后再?|以及|接着|顺便)\s*(?=(?:把|将|在|沿|向|往|删|去掉|移除|改|新增|添加|增加|倒|圆角|镜像))")
+    conj_re = re.compile(r"\s*(?:并且?|同时|然后再?|以及|接着|顺便)\s*(?=(?:把|将|在|沿|向|往|删|去掉|移除|改|新增|添加|增加|开|钻|倒|圆角|镜像|旋转|翻转|缩放|修剪|延伸))")
     for seg in chunks:
         parts = [p.strip() for p in conj_re.split(seg) if p.strip()]
         fine_chunks.extend(parts)
@@ -985,11 +1336,14 @@ def _assert_clause_fully_parsed(clause: str, consumed_spans: list[tuple[int, int
 
 
 def _compile_single_feature_clause(
-    cl: str, cands: list[str]
+    cl: str,
+    cands: list[str],
+    *,
+    allow_core_ops: bool = False,
 ) -> tuple[RevisionIROperation | None, str]:
     # 1. Bolt Circle Pattern ("新增 6×Ø10 mm 均布螺栓孔，节圆 80" / "加一圈 4xM8 孔 PCD 4 in")
     m_bcd = re.search(
-        rf"(?:新增|添加|增加|加(?:一圈)?|打)\s*(?P<cnt>\d+)\s*(?:[xX×\-]|个)\s*(?:[⌀∅ØøΦφMm])?\s*(?P<hd>\d+(?:\.\d+)?)\s*(?P<u1>{_UNIT_PAT})?(?:[^0-9]*?)(?:节圆(?:直径)?|分布圆(?:直径)?|PCD|pcd|圆周)\s*(?:直径|为|:|：)?\s*(?:[⌀∅ØøΦφ])?\s*(?P<pcd>\d+(?:\.\d+)?)\s*(?P<u2>{_UNIT_PAT})?",
+        rf"(?:新增|添加|增加|加(?:一圈)?|打|开|钻)\s*(?P<cnt>\d+)\s*(?:[xX×\-]|个)\s*(?:[⌀∅ØøΦφMm])?\s*(?P<hd>\d+(?:\.\d+)?)\s*(?P<u1>{_UNIT_PAT})?(?:[^0-9]*?)(?:节圆(?:直径)?|分布圆(?:直径)?|PCD|pcd|圆周)\s*(?:直径|为|:|：)?\s*(?:[⌀∅ØøΦφ])?\s*(?P<pcd>\d+(?:\.\d+)?)\s*(?P<u2>{_UNIT_PAT})?",
         cl,
         re.IGNORECASE,
     )
@@ -1010,11 +1364,10 @@ def _compile_single_feature_clause(
             "离线确定性编译：新增圆周均布螺栓孔阵列",
         )
 
-    # 2. Add Single Circle Hole ("在 (50, 30) 新增 Ø12 圆孔" / "添加一个直径 16 mm 的孔")
-    m_add_kw = re.search(r"(?:新增|添加|增加|新开|打一个|加一个)", cl)
-    if m_add_kw and re.search(r"(?:孔|圆)", cl):
+    # 2. Add Single Circle Hole ("在 (50, 30) 新增 Ø12 圆孔" / "在 (30, 40) 开 Ø12 mm 孔")
+    m_add_kw = re.search(r"(?:新增|添加|增加|新开|开一个|打一个|加一个|钻一个|(?<!不)开|(?<!不)钻)", cl)
+    if m_add_kw and re.search(r"(?:孔|圆)", cl) and not re.search(r"(?:改成|改为|设为|调整为|变成)", cl):
         ctr, ctr_u, ctr_span = _parse_center_from_clause(cl)
-        # Mask out coordinate tuple before searching hole diameter so "(50, 30)" is never misread as diameter
         cl_no_ctr = (cl[: ctr_span[0]] + (" " * (ctr_span[1] - ctr_span[0])) + cl[ctr_span[1] :]) if ctr_span else cl
         m_hd = re.search(
             rf"(?:直径|孔径|[⌀∅ØøΦφ])\s*(?P<val>\d+(?:\.\d+)?)\s*(?P<unit>{_UNIT_PAT})?(?:\s*的?\s*(?:圆孔|通孔|定位孔|孔|圆))?",
@@ -1125,6 +1478,117 @@ def _compile_single_feature_clause(
                 unit=m_coord.group("unit") if m_coord else None,
             ),
             "离线确定性编译：对称轴几何镜像（Mirror）",
+        )
+
+    if not allow_core_ops:
+        return None, ""
+
+    # 6. Delete Entities ("删除圆孔" / "去掉虚线" / "删掉中心线")
+    m_del = re.search(r"(?:删除|删掉|删去|去掉|移除|清除|\bdelete\b|\bremove\b)", cl, re.IGNORECASE)
+    if m_del:
+        ef: Literal["all", "circle", "line", "text", "dimension", "hidden", "center"] = "all"
+        if re.search(r"虚线|hidden", cl, re.IGNORECASE):
+            ef = "hidden"
+        elif re.search(r"中心线|轴线|center", cl, re.IGNORECASE):
+            ef = "center"
+        elif re.search(r"孔|圆|circle|hole", cl, re.IGNORECASE):
+            ef = "circle"
+        elif re.search(r"直线|线段|line", cl, re.IGNORECASE):
+            ef = "line"
+        elif re.search(r"标注|尺寸|dim", cl, re.IGNORECASE):
+            ef = "dimension"
+        elif re.search(r"文字|文本|text", cl, re.IGNORECASE):
+            ef = "text"
+        _assert_clause_fully_parsed(cl, [m_del.span()])
+        return DeleteEntitiesOp(handles=cands, entity_filter=ef), "离线确定性编译：删除目标图元"
+
+    # 7. Move / Translate ("向右平移 20 mm" / "往上移 1 in")
+    m_mv = re.search(
+        rf"(?:往|向)?\s*(?P<dir>左|右|上|下|left|right|up|down)\s*(?:平移|移动|移|偏移?)?\s*(?P<val>\d+(?:\.\d+)?)\s*(?P<unit>{_UNIT_PAT})?",
+        cl,
+        re.IGNORECASE,
+    )
+    if m_mv:
+        _assert_clause_fully_parsed(cl, [m_mv.span()])
+        d_tok = m_mv.group("dir").lower()
+        mag = float(m_mv.group("val"))
+        ut = m_mv.group("unit")
+        dx_v = -mag if d_tok in {"左", "left"} else (mag if d_tok in {"右", "right"} else 0.0)
+        dy_v = mag if d_tok in {"上", "up"} else (-mag if d_tok in {"下", "down"} else 0.0)
+        return (
+            MoveEntitiesOp(handles=cands, dx=dx_v, dy=dy_v, dx_unit=ut, dy_unit=ut),
+            "离线确定性编译：平移图元",
+        )
+
+    # 8. Resize Linear Span ("长度改为 120 mm" / "高度改成 80")
+    m_lin_kw = re.search(r"(?:线长|长度|边长|总长|总宽|总高|底板长|底板宽|宽度|高度|跨度|\blength\b|\bwidth\b|\bheight\b)", cl, re.IGNORECASE)
+    m_chg_num = re.search(
+        rf"(?:改成|改为|设为|调整为|变成|=|:|：)\s*(?P<val>\d+(?:\.\d+)?)\s*(?P<unit>{_UNIT_PAT})?",
+        cl,
+        re.IGNORECASE,
+    )
+    if m_lin_kw and m_chg_num:
+        _assert_clause_fully_parsed(cl, [m_lin_kw.span(), m_chg_num.span()])
+        ax_m: Literal["auto", "horizontal", "vertical"] = (
+            "vertical" if re.search(r"高|竖|height", cl, re.IGNORECASE) else "horizontal" if re.search(r"宽|width", cl, re.IGNORECASE) else "auto"
+        )
+        return (
+            ResizeLinearOp(
+                handles=cands,
+                new_length=float(m_chg_num.group("val")),
+                axis=ax_m,
+                new_length_unit=m_chg_num.group("unit"),
+            ),
+            "离线确定性编译：调整线性跨度/长度",
+        )
+
+    # 9. Resize Hole Diameter ("把 Ø12 的孔改为 Ø18 mm" / "孔径改为 20 mm")
+    m_cir_kw = re.search(r"(?:孔径|直径|半径|圆孔|螺栓孔|安装孔|通孔|孔|圆|\bdiameter\b|\bhole\b)", cl, re.IGNORECASE)
+    if m_cir_kw:
+        m_old_new = re.search(
+            rf"(?:把|将)?\s*[⌀∅ØøΦφ]?\s*(?P<old>\d+(?:\.\d+)?)\s*(?P<ou>{_UNIT_PAT})?\s*的?\s*(?:圆孔|孔|圆|直径|孔径)?\s*(?:直径|孔径)?\s*(?:改成|改为|设为|调整为|变成)\s*[⌀∅ØøΦφ]?\s*(?P<new>\d+(?:\.\d+)?)\s*(?P<nu>{_UNIT_PAT})?",
+            cl,
+            re.IGNORECASE,
+        )
+        if m_old_new:
+            _assert_clause_fully_parsed(cl, [m_cir_kw.span(), m_old_new.span()])
+            return (
+                ResizeHoleOp(
+                    handles=cands,
+                    match_old_diameter=float(m_old_new.group("old")),
+                    old_diameter_unit=m_old_new.group("ou"),
+                    new_diameter=float(m_old_new.group("new")),
+                    new_diameter_unit=m_old_new.group("nu"),
+                ),
+                "离线确定性编译：按旧孔径匹配并修改孔径",
+            )
+        m_simple_d = re.search(
+            rf"(?:改成|改为|设为|调整为|变成)\s*(?P<rad>[Rr]|半径)?\s*[⌀∅ØøΦφ]?\s*(?P<new>\d+(?:\.\d+)?)\s*(?P<nu>{_UNIT_PAT})?",
+            cl,
+            re.IGNORECASE,
+        )
+        if m_simple_d:
+            _assert_clause_fully_parsed(cl, [m_cir_kw.span(), m_simple_d.span()])
+            val_f = float(m_simple_d.group("new"))
+            if m_simple_d.group("rad"):
+                val_f *= 2.0
+            return (
+                ResizeHoleOp(handles=cands, new_diameter=val_f, new_diameter_unit=m_simple_d.group("nu")),
+                "离线确定性编译：修改圆孔直径并同步标注",
+            )
+
+    # 10. Update Text ("材料改为 40Cr" / "把 Q235 改成 304不锈钢")
+    m_txt_pair = re.search(r"把\s*(?P<old>[^，,；;]+?)\s*(?:改成|改为|替换成|换成)\s*(?P<new>.+)$", cl)
+    if m_txt_pair and not re.search(r"孔|圆|长|宽|高|倒角|圆角", m_txt_pair.group("old")):
+        return (
+            UpdateTextOp(handles=cands, old_text=m_txt_pair.group("old").strip(), new_text=m_txt_pair.group("new").strip()),
+            "离线确定性编译：替换图面文字",
+        )
+    m_txt_set = re.search(r"(?:材料|材质|文字|标题|图名)\s*(?:改成|改为|设为|换成)\s*[:：]?\s*(?P<new>.+)$", cl)
+    if m_txt_set:
+        return (
+            UpdateTextOp(handles=cands, new_text=m_txt_set.group("new").strip()),
+            "离线确定性编译：更新文字内容",
         )
 
     return None, ""

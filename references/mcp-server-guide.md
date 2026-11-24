@@ -70,28 +70,34 @@ D:\Python312\python.exe -B -m cad_skill_core.cli mcp-http --host 127.0.0.1 --por
 
 ---
 
-## 3. 已暴露的 20 个 MCP Tools（二维 + 三维 + 框选自然语言改图 + 审图打分 + CAD-1K 评测 + 国产 CAD 驱动全闭环）
+## 3. 已暴露的 26 个 MCP Tools（二维 + 三维 + 统一改图核验 + 项目偏好记忆 + 非标特征组合 + 回归飞轮全闭环）
 
 1. `cad_doctor`：诊断 Python 渲染栈、本机中文字体覆盖率、三维内核能力与多厂商 CAD 驱动状态。
-2. `cad_compile_spec`：解析项目书/手册/CSV/DOCX/PDF，编译 `DrawingSpec`（含 GB/T 131 `Ra` 粗糙度、基准符号与形位公差框）并拦截缺失尺寸与冲突参数。
+2. `cad_compile_spec`：解析项目书/手册/CSV/DOCX/PDF，编译 `DrawingSpec`（自动融合已确认的项目制图偏好记忆）并拦截缺失尺寸与冲突参数。
 3. `cad_validate_spec`：严格校验 `DrawingSpec` 结构、尺寸锚点与溯源完整性。
-4. `cad_learn_standard`：从参考样图 DXF 自动提取图层、线宽、字高、`DIMSTYLE` 与图幅标准。
+4. `cad_learn_standard`：从参考样图 DXF 自动提取图层、线宽、字高、`DIMSTYLE`、图幅标准以及制图表达习惯（孔阵列合并标法、引线方位、粗糙度习惯）。
 5. `cad_generate_mechanical_2d`：生成国标/ISO 三视图零件与装配图（支持 `standard_profile` 标准预设切换、自动避让修复与实时 `rubric_score`）。
 6. `cad_generate_electrical_sld`：生成单母/分段/双母电气主接线图（DXF/SVG/PDF/PNG + 交叉审计）。
 7. `cad_generate_pavement`：生成道路路面结构设计图（原生 `HATCH` + `DIMENSION` 审计级 DXF + PNG）。
 8. `cad_inventory_dxf`：列出 DXF 可编辑图元句柄（Handle）、坐标与当前 SHA-256。
 9. `cad_revise_dxf`：执行带 `DocumentCheckpoint` 回滚保护的局部原子改图（支持 `dry_run`）。
-10. `cad_revise_by_nl`：基于蓝色虚线框选区域或图元句柄执行口语化自然语言直接改图（改孔径联动标注、删特定线型图元、平移、改材料文字、纯提问批注），绑定 SHA-256 防并发。
+10. `cad_revise_by_nl`：基于框选区域或图元句柄执行多子句自然语言直接改图，写盘后自动重读 DXF 逐项核对物理尺寸（`PostConditionVerifier`）。
 11. `cad_preview_and_diff`：渲染局部放大 PNG 区域图或改图前后对比图。
-12. `cad_generate_3d`：生成并独立回测水密流形三维模型（`model.step` AP214 / `.stl` / `.obj` / `.glb` / `model3d.dxf` / `iso.png` / `audit-3d.json`，覆盖直齿圆柱齿轮、轴承透盖、带筋支座等 7 类零件族），支持 `with_2d_sheet=true` 联动生成二维工程图，以及 `run_native_cad=true` 调用本地 AutoCAD/中望/浩辰生成原生 `3DSOLID` `.dwg`。
+12. `cad_generate_3d`：生成并独立回测水密流形三维模型（`model.step` AP214 / `.stl` / `.obj` / `.glb` / `model3d.dxf` / `iso.png` / `audit-3d.json`）。
 13. `cad_project_3d_to_2d`：将三维规约 `Model3DSpec` 正交/剖视投影为多视图二维 `DrawingSpec`。
 14. `cad_list_drivers`：只读探测本机安装的 AutoCAD（2021–2026）、中望 CAD（ZWCAD）、浩辰 CAD（GstarCAD）、CAXA 电子图板及 ODA 转换器矩阵。
 15. `cad_verify_roundtrip`：核验 DWG ↔ DXF 双向往返前后的图层、块、布局、样式、图元数与总包围盒结构无损性。
-16. `cad_compile_3d_spec`：将中英文口语化描述或项目书文档（`.md`/`.docx`/`.pdf`/`.csv`）编译为三维 `Model3DSpec`，并自动提示缺失或冲突参数。
-17. `cad_open_viewer`：打开 MCP App 常驻交互式蓝图与三维审图台（支持蓝色虚线框选局部提问与原地热改图）。
+16. `cad_compile_3d_spec`：将中英文口语化描述或项目书文档编译为三维 `Model3DSpec`。
+17. `cad_open_viewer`：打开 MCP App 常驻交互式蓝图与三维审图台。
 18. `cad_app_load_scene`：供 MCP App 画布内部加载二维矢量图元与三维棱线网格。
 19. `cad_score_drawing`：执行 100 分制五维工程审图打分（评定 `S/A/B/C/D` 级，兼容 `cad-1000-hours` `rubrics.json`）。
-20. `cad_run_cad1k_eval`：运行免视频 `cad-1000-hours` 离线工程基准评测套件（齿轮/轴承透盖/带筋支座/DXF 局部改图）。
+20. `cad_run_cad1k_eval`：运行免视频 `cad-1000-hours` 离线工程基准评测套件。
+21. `cad_audit_legacy_drawing`：对任意外部/历史存量 DXF 执行六维体检与确定性自动清洗（按 `$INSUNITS` 换算接缝容差并保留三维高程几何）。
+22. `cad_apply_revision_ir`：执行统一结构化改图中间表示（`cad-revision-ir/v2.3`，覆盖 10 种几何增删改特征原语 + 事后重开 DXF 逐项物理核验）。
+23. `cad_vector_diff`：计算改图前后句柄级与图块引用级红绿矢量叠加差异。
+24. `cad_manage_preferences`：查询、口语教学、从样图提取、确认或停用项目级制图偏好记忆（`.cad-memory/project-preferences.json`）。
+25. `cad_generate_feature_graph`：基于自由轮廓 + 可组合特征图谱（`cad-feature-graph/v1`：多边形/T 型板/圆角倒角/阵列孔/腰形槽/矩形方槽）生成非标异形件国标三视图。
+26. `cad_manage_regressions`：将错题或审图修正案例（基线 DXF + 指令 + 物理验收断言）沉淀为永久回归测试集并一键回放核验。
 
 ## 4. MCP Resources 与 Prompts
 

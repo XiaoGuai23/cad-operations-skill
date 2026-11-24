@@ -11,10 +11,17 @@ from typing import Any, Callable, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from cad_skill_core.benchmark.cad1k_harness import run_cad1k_benchmark
+from cad_skill_core.benchmark.regression_flywheel import (
+    list_regression_cases,
+    record_regression_case,
+    replay_regression_vault,
+)
 from cad_skill_core.documents.spec_compiler import (
     PartFamily,
+    compile_spec_from_feature_graph,
     compile_spec_from_files,
 )
+from cad_skill_core.geometry.feature_graph import FeatureGraphSpec
 from cad_skill_core.environment import check_environment
 from cad_skill_core.inspection.legacy_audit import audit_legacy_dxf, clean_legacy_dxf
 from cad_skill_core.inspection.rubric_scorer import score_dxf_drawing
@@ -38,6 +45,13 @@ from cad_skill_core.revision.preview import preview_file
 from cad_skill_core.revision.workflow import apply_revision, inventory_drawing
 from cad_skill_core.schema.io import load_spec, save_spec
 from cad_skill_core.schema.models import DrawingSpec
+from cad_skill_core.standards.preference_memory import (
+    default_preference_memory_path,
+    learn_preferences_from_sample_dxf,
+    load_preference_store,
+    set_preference_status,
+    teach_preferences_from_text,
+)
 from cad_skill_core.standards.profile import list_builtin_standards
 from cad_skill_core.standards.sample_learner import (
     learn_standard_from_dxf,
@@ -341,6 +355,60 @@ class VectorDiffArgs(StrictInputModel):
     tolerance: float = Field(default=1e-4, gt=0.0, le=1.0)
 
 
+class ManagePreferencesArgs(StrictInputModel):
+    action: Literal["list", "teach", "learn_sample", "confirm", "reject"] = Field(
+        default="list",
+        description="Action on project-level drafting preferences ('.cad-memory/project-preferences.json').",
+    )
+    instruction_text: str | None = Field(
+        default=None,
+        description="Natural-language preference instruction when action='teach' (e.g., '法兰图孔阵列改成数量×孔径另标节圆，引线放视图右侧，确认以后沿用').",
+    )
+    sample_dxf_path: str | None = Field(
+        default=None,
+        description="Sample DXF path inside allowed roots when action='learn_sample'.",
+    )
+    pref_id: str | None = Field(
+        default=None,
+        description="Target preference ID when action in {'confirm', 'reject'}.",
+    )
+    part_family: str = Field(default="auto", description="Target part family or 'auto'.")
+    confirm: bool = Field(default=False, description="Immediately mark learned sample habits as confirmed.")
+
+
+class GenerateFeatureGraphArgs(StrictInputModel):
+    feature_graph: dict[str, Any] | None = Field(
+        default=None,
+        description="Composable FeatureGraphSpec ('cad-feature-graph/v1') JSON object with base_profile, thickness_mm, and features.",
+    )
+    markdown_brief: str | None = Field(
+        default=None,
+        description="Natural-language non-standard plate/profile brief when feature_graph is omitted.",
+    )
+    project_name: str | None = Field(default=None)
+    drawing_number: str | None = Field(default=None)
+    material: str | None = Field(default="Q235B")
+    standard_profile: str | None = Field(default=None)
+    include_pro_symbols: bool = Field(default=True)
+    include_image_base64: bool = Field(default=False)
+
+
+class ManageRegressionsArgs(StrictInputModel):
+    action: Literal["list", "record", "replay"] = Field(default="list")
+    case_id: str | None = Field(default=None, description="Unique slug when action='record'.")
+    title: str | None = Field(default=None, description="Human-readable case title when action='record'.")
+    dxf_path: str | None = Field(default=None, description="Baseline DXF path when action='record'.")
+    task_id: str | None = Field(default=None, description="Existing MCP task_id when action='record'.")
+    artifact_name: str = Field(default="drawing.dxf")
+    prompt: str | None = Field(default=None, description="Revision prompt when action='record'.")
+    candidate_handles: list[str] | None = Field(default=None)
+    region_box: list[float] | None = Field(default=None)
+    structured_ir: dict[str, Any] | None = Field(default=None)
+    must_reject: bool = Field(default=False)
+    expected_post_conditions: list[dict[str, Any]] = Field(default_factory=list)
+    bug_note: str = Field(default="")
+
+
 @dataclass(frozen=True, slots=True)
 class ToolDefinition:
     name: str
@@ -397,10 +465,12 @@ def _handle_compile_spec(
         resolved_files.append(sandbox.resolve_readable_file(raw))
 
     spec_out = output_dir / "drawing-spec.json"
+    pref_mem = default_preference_memory_path(sandbox.workspace_root)
     spec = compile_spec_from_files(
         resolved_files,
         part_family=args.part_family,
         title_block_language=args.language,
+        preference_memory_path=pref_mem,
         output_path=spec_out,
     )
     has_blocking = bool(spec.validation.missing or spec.validation.conflicts)
@@ -454,7 +524,12 @@ def _handle_learn_standard(
     task_id, task_dir = sandbox.allocate_task_dir("standard")
     out_dir = task_dir / "output"
     out_dir.mkdir()
-    learned = learn_standard_from_dxf(sample, profile_name=args.profile_name)
+    pref_mem = default_preference_memory_path(sandbox.workspace_root)
+    learned = learn_standard_from_dxf(
+        sample,
+        profile_name=args.profile_name,
+        preference_memory_path=pref_mem,
+    )
     yaml_path = save_standard_yaml(learned.standard, out_dir / "learned-standard.yaml")
     payload = {
         "task_id": task_id,
@@ -463,6 +538,7 @@ def _handle_learn_standard(
         "detected_sheet": learned.detected_sheet,
         "sample_extents_mm": learned.sample_extents_mm,
         "matched_layers": learned.matched_layers,
+        "detected_habits": learned.detected_habits,
         "artifacts": [
             {
                 "name": yaml_path.name,
@@ -494,6 +570,7 @@ def _handle_generate_mechanical_2d(
         compiled = compile_spec_from_files(
             [brief_path],
             include_pro_symbols=args.include_pro_symbols,
+            preference_memory_path=default_preference_memory_path(sandbox.workspace_root),
             output_path=task_dir / "work" / "drawing-spec.json",
         )
         if compiled.validation.missing or compiled.validation.conflicts:
@@ -1223,6 +1300,115 @@ def _handle_vector_diff(
     return compute_dxf_vector_diff(before_p, after_p, tolerance=args.tolerance), None, False
 
 
+def _handle_manage_preferences(
+    sandbox: MCPWorkspaceSandbox, args: ManagePreferencesArgs
+) -> tuple[dict[str, Any], Path | None, bool]:
+    mem_path = default_preference_memory_path(sandbox.workspace_root)
+    if args.action == "list":
+        store = load_preference_store(mem_path)
+        return {"status": "ok", "memory_path": str(mem_path), **store.model_dump(mode="json")}, None, False
+    if args.action == "teach":
+        if not args.instruction_text:
+            raise ValueError("instruction_text is required when action='teach'")
+        recorded = teach_preferences_from_text(
+            mem_path,
+            args.instruction_text,
+            part_family=args.part_family,
+            force_confirm=True if args.confirm else None,
+        )
+        return {
+            "status": "recorded",
+            "memory_path": str(mem_path),
+            "entries": [e.model_dump(mode="json") for e in recorded],
+        }, None, False
+    if args.action == "learn_sample":
+        if not args.sample_dxf_path:
+            raise ValueError("sample_dxf_path is required when action='learn_sample'")
+        sample = sandbox.resolve_readable_file(args.sample_dxf_path)
+        entries = learn_preferences_from_sample_dxf(
+            sample,
+            mem_path,
+            part_family=args.part_family,
+            confirm=args.confirm,
+        )
+        return {
+            "status": "learned",
+            "memory_path": str(mem_path),
+            "entries": [e.model_dump(mode="json") for e in entries],
+        }, None, False
+    if not args.pref_id:
+        raise ValueError("pref_id is required when action in {'confirm', 'reject'}")
+    target_st = "confirmed" if args.action == "confirm" else "rejected"
+    updated = set_preference_status(mem_path, args.pref_id, target_st)
+    return {"status": "updated", "entry": updated.model_dump(mode="json")}, None, False
+
+
+def _handle_generate_feature_graph(
+    sandbox: MCPWorkspaceSandbox, args: GenerateFeatureGraphArgs
+) -> tuple[dict[str, Any], Path | None, bool]:
+    if (args.feature_graph is None) == (args.markdown_brief is None):
+        raise ValueError("provide exactly one of feature_graph or markdown_brief")
+    pref_mem = default_preference_memory_path(sandbox.workspace_root)
+    if args.feature_graph is not None:
+        spec = compile_spec_from_feature_graph(
+            args.feature_graph,
+            project_name=args.project_name,
+            drawing_number=args.drawing_number,
+            material=args.material,
+            include_pro_symbols=args.include_pro_symbols,
+            preference_memory_path=pref_mem,
+        )
+    else:
+        assert args.markdown_brief is not None
+        task_tmp_id, tmp_dir = sandbox.allocate_task_dir("fgbrief")
+        del task_tmp_id
+        brief_md = tmp_dir / "brief.md"
+        brief_md.write_text(args.markdown_brief, encoding="utf-8")
+        spec = compile_spec_from_files(
+            [brief_md],
+            part_family="custom-profile",
+            include_pro_symbols=args.include_pro_symbols,
+            preference_memory_path=pref_mem,
+        )
+    return _handle_generate_mechanical_2d(
+        sandbox,
+        GenerateMechanical2DArgs(
+            spec=spec.model_dump(mode="json"),
+            standard_profile=args.standard_profile,
+            include_pro_symbols=args.include_pro_symbols,
+            include_image_base64=args.include_image_base64,
+        ),
+    )
+
+
+def _handle_manage_regressions(
+    sandbox: MCPWorkspaceSandbox, args: ManageRegressionsArgs
+) -> tuple[dict[str, Any], Path | None, bool]:
+    vault = sandbox.workspace_root / ".cad-memory" / "regressions"
+    if args.action == "list":
+        return {"status": "ok", "vault_dir": str(vault), "cases": list_regression_cases(vault)}, None, False
+    if args.action == "replay":
+        rep = replay_regression_vault(vault)
+        return {"status": "replayed", **rep}, None, not rep["all_passed"]
+    if not args.case_id or not args.prompt:
+        raise ValueError("case_id and prompt are required when action='record'")
+    src_dxf = _resolve_dxf_source(sandbox, args.dxf_path, args.task_id, args.artifact_name)
+    recorded = record_regression_case(
+        vault,
+        case_id=args.case_id,
+        title=args.title or args.case_id,
+        source_dxf_path=src_dxf,
+        prompt=args.prompt,
+        candidate_handles=args.candidate_handles,
+        region_box=args.region_box,
+        structured_ir=args.structured_ir,
+        must_reject=args.must_reject,
+        expected_post_conditions=args.expected_post_conditions,
+        bug_note=args.bug_note,
+    )
+    return recorded, None, False
+
+
 TOOLS: tuple[ToolDefinition, ...] = (
     ToolDefinition(
         "cad_doctor",
@@ -1378,6 +1564,25 @@ TOOLS: tuple[ToolDefinition, ...] = (
         "Compute handle-level red/green vector primitive overlay diff between before and after DXF drawings.",
         VectorDiffArgs,
         _handle_vector_diff,
+    ),
+    ToolDefinition(
+        "cad_manage_preferences",
+        "List, teach, learn from sample DXFs, confirm, or reject project-level drafting preferences (hole callout style, leader side, default Ra, notes) with provenance.",
+        ManagePreferencesArgs,
+        _handle_manage_preferences,
+    ),
+    ToolDefinition(
+        "cad_generate_feature_graph",
+        "Generate an audited non-standard 2D/3-view GB/T drawing from a composable FeatureGraphSpec ('cad-feature-graph/v1': polygon/rect/stadium + corner mods + holes/grids/slots).",
+        GenerateFeatureGraphArgs,
+        _handle_generate_feature_graph,
+        meta={"ui": {"resourceUri": MCP_APP_RESOURCE_URI}},
+    ),
+    ToolDefinition(
+        "cad_manage_regressions",
+        "Record failed/corrected DXF revision cases + post-conditions into a permanent regression vault and replay all cases automatically.",
+        ManageRegressionsArgs,
+        _handle_manage_regressions,
     ),
 )
 

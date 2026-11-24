@@ -17,6 +17,7 @@ import json
 from math import hypot, isclose, isfinite
 from pathlib import Path
 import re
+import tempfile
 from typing import Any
 
 import ezdxf
@@ -26,6 +27,15 @@ from ezdxf.math import Matrix44
 from .common import RevisionError, compare_untouched, sha256_file, snapshot_modelspace
 from .edits import _DELETE
 from .ir_engine import _split_feature_clauses, compile_nl_to_feature_ir, execute_revision_ir
+from .post_verify import (
+    CircleDiameterEqualsCheck,
+    HandlesAbsentCheck,
+    HandlesTranslatedCheck,
+    LinearSpanEqualsCheck,
+    PostConditionSpec,
+    TextContainsCheck,
+    verify_revision_post_conditions,
+)
 from .transaction import DocumentCheckpoint
 from .workflow import apply_revision, inventory_drawing
 
@@ -134,10 +144,10 @@ def _is_question_only(prompt: str, *, has_structured_ir: bool = False) -> bool:
         return True
     edit_verbs = (
         "删", "去掉", "移除", "清除", "改", "变", "设为", "设置", "调整", "放大", "缩小",
-        "移", "偏", "替换", "新增", "添加", "增加", "新开", "加一", "打一", "倒角", "倒圆",
-        "圆角", "导圆", "倒斜角", "斜角", "镜像", "对称复制",
+        "移", "偏", "替换", "新增", "添加", "增加", "新开", "开", "钻", "打", "加一", "倒角", "倒圆",
+        "圆角", "导圆", "倒斜角", "斜角", "镜像", "对称复制", "旋转", "翻转", "缩放", "修剪", "延伸",
         "delete", "remove", "change", "set", "resize", "move", "shift",
-        "add", "chamfer", "fillet", "mirror",
+        "add", "chamfer", "fillet", "mirror", "rotate", "scale", "trim", "extend",
     )
     return not any(v in txt.lower() for v in edit_verbs)
 
@@ -440,12 +450,18 @@ def execute_nl_region_revision(
             plan_file.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
             rev_res = apply_revision(src_path, plan_file, out_dir, dry_run=dry_run)
             new_sha = sha256_file(Path(rev_res["output_path"])) if not dry_run else current_sha
+            ver = (
+                verify_revision_post_conditions(src_path, Path(rev_res["output_path"]), [HandlesAbsentCheck(handles=targets)])
+                if not dry_run
+                else {"passed": True, "checked_count": 1, "failed_count": 0, "items": [{"index": 1, "check": "handles_absent", "label": "handles_absent", "passed": True, "detail": "dry-run simulated"}]}
+            )
             return {
                 "mode": "revision",
                 "action": "delete_entities",
                 "status": rev_res["status"],
                 "dry_run": dry_run,
                 "prompt": prompt_clean,
+                "verification": ver,
                 "baseline_sha256": current_sha,
                 "new_sha256": new_sha,
                 "modified_handles": targets,
@@ -454,6 +470,7 @@ def execute_nl_region_revision(
             }
 
         return _atomic_doc_mutation(
+            src_path=src_path,
             doc=doc,
             out_dxf=out_dxf,
             dry_run=dry_run,
@@ -462,6 +479,7 @@ def execute_nl_region_revision(
             action="delete_entities",
             handles=targets,
             mutator=lambda d, hs: [d.modelspace().delete_entity(e) for e in list(d.modelspace()) if str(e.dxf.handle).upper() in set(hs)],
+            post_checks=[HandlesAbsentCheck(handles=targets)],
             summary_zh=f"已精准删除框内 {len(targets)} 个目标图元",
         )
 
@@ -480,6 +498,7 @@ def execute_nl_region_revision(
         dy = dist if d_tok in {"上", "up"} else (-dist if d_tok in {"下", "down"} else 0.0)
         mat = Matrix44.translate(dx, dy, 0.0)
         return _atomic_doc_mutation(
+            src_path=src_path,
             doc=doc,
             out_dxf=out_dxf,
             dry_run=dry_run,
@@ -488,6 +507,7 @@ def execute_nl_region_revision(
             action="translate_entities",
             handles=working_handles,
             mutator=lambda d, hs: [e.transform(mat) for e in d.modelspace() if str(e.dxf.handle).upper() in set(hs)],
+            post_checks=[HandlesTranslatedCheck(handles=working_handles, dx=dx, dy=dy)],
             summary_zh=f"已将框内 {len(working_handles)} 个图元平移 ({dx:+g}, {dy:+g}){unit_suffix}",
         )
 
@@ -537,12 +557,22 @@ def execute_nl_region_revision(
             plan_file.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
             rev_res = apply_revision(src_path, plan_file, out_dir, dry_run=dry_run)
             new_sha = sha256_file(Path(rev_res["output_path"])) if not dry_run else current_sha
+            ver_p = (
+                verify_revision_post_conditions(
+                    src_path,
+                    Path(rev_res["output_path"]),
+                    [LinearSpanEqualsCheck(handles=[polys_in_box[0]], length=new_span, axis="vertical" if axis == "y" else "horizontal")],
+                )
+                if not dry_run
+                else {"passed": True, "checked_count": 1, "failed_count": 0, "items": []}
+            )
             return {
                 "mode": "revision",
                 "action": "resize_fixed_edge",
                 "status": rev_res["status"],
                 "dry_run": dry_run,
                 "prompt": prompt_clean,
+                "verification": ver_p,
                 "baseline_sha256": current_sha,
                 "new_sha256": new_sha,
                 "modified_handles": [polys_in_box[0]],
@@ -568,12 +598,22 @@ def execute_nl_region_revision(
             plan_file.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
             rev_res = apply_revision(src_path, plan_file, out_dir, dry_run=dry_run)
             new_sha = sha256_file(Path(rev_res["output_path"])) if not dry_run else current_sha
+            ver_l = (
+                verify_revision_post_conditions(
+                    src_path,
+                    Path(rev_res["output_path"]),
+                    [LinearSpanEqualsCheck(handles=[lines_in_box[0]], length=new_span)],
+                )
+                if not dry_run
+                else {"passed": True, "checked_count": 1, "failed_count": 0, "items": []}
+            )
             return {
                 "mode": "revision",
                 "action": "set_length",
                 "status": rev_res["status"],
                 "dry_run": dry_run,
                 "prompt": prompt_clean,
+                "verification": ver_l,
                 "baseline_sha256": current_sha,
                 "new_sha256": new_sha,
                 "modified_handles": [lines_in_box[0]],
@@ -667,6 +707,7 @@ def execute_nl_region_revision(
                         pass
 
         return _atomic_doc_mutation(
+            src_path=src_path,
             doc=doc,
             out_dxf=out_dxf,
             dry_run=dry_run,
@@ -675,6 +716,7 @@ def execute_nl_region_revision(
             action="resize_circle",
             handles=all_touched_handles,
             mutator=_mutate_circles,
+            post_checks=[CircleDiameterEqualsCheck(handles=target_circles, diameter=new_diam)],
             summary_zh=(
                 f"已将框内 {len(target_circles)} 处圆孔更新为 ⌀{new_diam:g}{unit_suffix}（原 ⌀{old_diam:g}{unit_suffix}）"
                 + (f"，并同步更新 {len(assoc_dims)} 处关联标注" if assoc_dims else "")
@@ -699,6 +741,7 @@ def execute_nl_region_revision(
             if "ra" in (str(by_handle[h].dxf.get("text", "")) if by_handle[h].dxftype() == "TEXT" else by_handle[h].plain_text()).lower()
         ] or [texts_in_box[0]]
         return _atomic_doc_mutation(
+            src_path=src_path,
             doc=doc,
             out_dxf=out_dxf,
             dry_run=dry_run,
@@ -707,6 +750,7 @@ def execute_nl_region_revision(
             action="edit_text",
             handles=ra_cands,
             mutator=lambda d, hs: [setattr(e.dxf, "text", new_ra) for e in d.modelspace() if str(e.dxf.handle).upper() in set(hs) and e.dxftype() == "TEXT"],
+            post_checks=[TextContainsCheck(handles=ra_cands, expected_substring=new_ra)],
             summary_zh=f"已将框内粗糙度数值更新为「{new_ra}」",
         )
 
@@ -733,6 +777,7 @@ def execute_nl_region_revision(
                             ent.text = ent.text.replace(old_sub, new_sub)
 
             return _atomic_doc_mutation(
+                src_path=src_path,
                 doc=doc,
                 out_dxf=out_dxf,
                 dry_run=dry_run,
@@ -741,6 +786,7 @@ def execute_nl_region_revision(
                 action="edit_text",
                 handles=matched_t,
                 mutator=_rep_sub,
+                post_checks=[TextContainsCheck(handles=matched_t, expected_substring=new_sub)],
                 summary_zh=f"已将框内 {len(matched_t)} 处文字「{old_sub}」更新为「{new_sub}」",
             )
 
@@ -766,6 +812,7 @@ def execute_nl_region_revision(
                         ent.text = new_val
 
         return _atomic_doc_mutation(
+            src_path=src_path,
             doc=doc,
             out_dxf=out_dxf,
             dry_run=dry_run,
@@ -774,6 +821,7 @@ def execute_nl_region_revision(
             action="edit_text",
             handles=target_t,
             mutator=_set_txt,
+            post_checks=[TextContainsCheck(handles=target_t, expected_substring=new_val)],
             summary_zh=f"已将框内目标文字更新为「{new_val}」",
         )
 
@@ -784,6 +832,7 @@ def execute_nl_region_revision(
 
 def _atomic_doc_mutation(
     *,
+    src_path: Path,
     doc: ezdxf.document.Drawing,
     out_dxf: Path,
     dry_run: bool,
@@ -792,6 +841,7 @@ def _atomic_doc_mutation(
     action: str,
     handles: list[str],
     mutator: Any,
+    post_checks: Sequence[PostConditionSpec] = (),
     summary_zh: str,
 ) -> dict[str, Any]:
     scratch = deepcopy(doc)
@@ -815,12 +865,20 @@ def _atomic_doc_mutation(
         raise
 
     if dry_run:
+        with tempfile.TemporaryDirectory() as tmp_d:
+            sim_path = Path(tmp_d) / "sim.dxf"
+            scratch.saveas(sim_path)
+            ver = verify_revision_post_conditions(src_path, sim_path, post_checks)
+        if not ver["passed"]:
+            failed_msgs = [it["detail"] for it in ver["items"] if not it["passed"]]
+            raise RevisionError(f"Dry-Run 事后重读 DXF 核验未通过: {'；'.join(failed_msgs)}")
         return {
             "mode": "revision",
             "action": action,
             "status": "verified",
             "dry_run": True,
             "prompt": prompt,
+            "verification": ver,
             "baseline_sha256": baseline_sha,
             "new_sha256": baseline_sha,
             "modified_handles": handles,
@@ -829,7 +887,14 @@ def _atomic_doc_mutation(
         }
 
     out_dxf.parent.mkdir(parents=True, exist_ok=True)
-    scratch.saveas(out_dxf)
+    tmp_out = out_dxf.with_name(f".{out_dxf.name}.tmp")
+    scratch.saveas(tmp_out)
+    ver = verify_revision_post_conditions(src_path, tmp_out, post_checks)
+    if not ver["passed"]:
+        tmp_out.unlink(missing_ok=True)
+        failed_msgs = [it["detail"] for it in ver["items"] if not it["passed"]]
+        raise RevisionError(f"事后重读 DXF 物理核验未通过，已拦截输出: {'；'.join(failed_msgs)}")
+    tmp_out.replace(out_dxf)
     new_sha = sha256_file(out_dxf)
     return {
         "mode": "revision",
@@ -837,6 +902,7 @@ def _atomic_doc_mutation(
         "status": "applied",
         "dry_run": False,
         "prompt": prompt,
+        "verification": ver,
         "baseline_sha256": baseline_sha,
         "new_sha256": new_sha,
         "modified_handles": handles,
