@@ -7,7 +7,7 @@
   </defs>
   <rect x="1" y="1" width="218" height="78" rx="10" fill="url(#g_card_2d_gbt_svg)" stroke="#38bdf8" stroke-opacity="0.45" stroke-width="1.4"/>
   <rect x="16" y="20" width="38" height="42" rx="4" fill="none" stroke="#7dd3fc" stroke-width="2"/><circle cx="35" cy="41" r="11" fill="none" stroke="#38bdf8" stroke-width="2"/><line x1="20" y1="41" x2="50" y2="41" stroke="#f87171" stroke-width="1.3" stroke-dasharray="4 2"/>
-  <text x="66" y="36" font-family="'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif" font-size="14.5" font-weight="800" fill="#ffffff" letter-spacing="0.4">2D BLUEPRINTS</text>
-  <rect x="66" y="45" width="138" height="20" rx="4" fill="#090d16" fill-opacity="0.42"/>
-  <text x="73" y="59" font-family="Consolas, 'JetBrains Mono', monospace" font-size="11" font-weight="600" fill="#38bdf8">GB/T · ISO · Ra · GD&T</text>
+  <text x="66" y="36" font-family="Segoe UI, -apple-system, BlinkMacSystemFont, sans-serif" font-size="14.5" font-weight="800" fill="#ffffff" letter-spacing="0.4">2D BLUEPRINTS</text>
+  <rect x="66" y="45" width="142" height="20" rx="4" fill="#090d16" fill-opacity="0.42"/>
+  <text x="72" y="59" font-family="Consolas, monospace" font-size="10.8" font-weight="600" fill="#38bdf8">GB/T · ISO · Ra · GD&amp;T</text>
 </svg>

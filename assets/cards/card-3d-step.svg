@@ -7,7 +7,7 @@
   </defs>
   <rect x="1" y="1" width="218" height="78" rx="10" fill="url(#g_card_3d_step_svg)" stroke="#818cf8" stroke-opacity="0.45" stroke-width="1.4"/>
   <polygon points="35,17 54,28 54,50 35,61 16,50 16,28" fill="#312e81" stroke="#a5b4fc" stroke-width="1.8"/><polyline points="16,28 35,39 54,28" fill="none" stroke="#c7d2fe" stroke-width="1.8"/><line x1="35" y1="39" x2="35" y2="61" stroke="#c7d2fe" stroke-width="1.8"/>
-  <text x="66" y="36" font-family="'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif" font-size="14.5" font-weight="800" fill="#ffffff" letter-spacing="0.4">3D STEP & CAM</text>
-  <rect x="66" y="45" width="138" height="20" rx="4" fill="#090d16" fill-opacity="0.42"/>
-  <text x="73" y="59" font-family="Consolas, 'JetBrains Mono', monospace" font-size="11" font-weight="600" fill="#818cf8">Manifold · GLB · STL</text>
+  <text x="66" y="36" font-family="Segoe UI, -apple-system, BlinkMacSystemFont, sans-serif" font-size="14.5" font-weight="800" fill="#ffffff" letter-spacing="0.4">3D STEP &amp; CAM</text>
+  <rect x="66" y="45" width="142" height="20" rx="4" fill="#090d16" fill-opacity="0.42"/>
+  <text x="72" y="59" font-family="Consolas, monospace" font-size="10.8" font-weight="600" fill="#818cf8">Manifold · GLB · STL</text>
 </svg>

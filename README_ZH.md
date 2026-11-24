@@ -10,24 +10,24 @@
 
 <!-- 语言切换胶囊 -->
 <p>
-  <a href="README.md"><img src="https://img.shields.io/badge/lang-English-0284c7?style=flat-square" alt="English"></a>
-  <a href="README_ZH.md"><img src="https://img.shields.io/badge/%E8%AF%AD%E8%A8%80-%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87-10b981?style=flat-square" alt="简体中文"></a>
+  <a href="README.md"><img src="assets/badges/lang-en.svg" alt="English"></a>
+  <a href="README_ZH.md"><img src="assets/badges/lang-zh.svg" alt="简体中文"></a>
 </p>
 
 <!-- 状态与核心能力徽章墙 -->
 <p>
   <a href="https://github.com/XiaoGuai23/cad-operations-skill/actions/workflows/smoke-test.yml"><img src="https://github.com/XiaoGuai23/cad-operations-skill/actions/workflows/smoke-test.yml/badge.svg" alt="CI Tests"></a>
-  <a href="https://github.com/XiaoGuai23/cad-operations-skill/releases"><img src="https://img.shields.io/badge/release-v2.2.0-0ea5e9" alt="Release v2.2.0"></a>
-  <img src="https://img.shields.io/badge/tests-1%2C024%2B%20passed-10b981" alt="1,024+ Tests Passed">
-  <img src="https://img.shields.io/badge/python-3.12-2563eb?logo=python&logoColor=white" alt="Python 3.12">
-  <a href="references/mcp-server-guide.md"><img src="https://img.shields.io/badge/MCP_Server-23_Tools-7e22ce" alt="MCP 23 Tools"></a>
-  <a href="SKILL.md"><img src="https://img.shields.io/badge/Agent-Skill-111827" alt="Agent Skill"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-f59e0b" alt="MIT License"></a>
+  <a href="https://github.com/XiaoGuai23/cad-operations-skill/releases"><img src="assets/badges/release.svg" alt="Release v2.2.0"></a>
+  <img src="assets/badges/tests.svg" alt="1,024+ Tests Passed">
+  <img src="assets/badges/python.svg" alt="Python 3.12">
+  <a href="references/mcp-server-guide.md"><img src="assets/badges/mcp-tools.svg" alt="MCP 23 Tools"></a>
+  <a href="SKILL.md"><img src="assets/badges/agent-skill.svg" alt="Agent Skill"></a>
+  <a href="LICENSE"><img src="assets/badges/license.svg" alt="MIT License"></a>
 </p>
 
 <p>
-  <img src="https://img.shields.io/badge/%E4%BA%A4%E4%BB%98%E6%A0%BC%E5%BC%8F-DXF%20%7C%20DWG%20%7C%20STEP%20%7C%20GLB%20%7C%20STL%20%7C%20SVG%20%7C%20PDF-334155" alt="交付格式">
-  <img src="https://img.shields.io/badge/%E9%A9%B1%E5%8A%A8%E5%85%BC%E5%AE%B9-AutoCAD%20%7C%20%E4%B8%AD%E6%9C%9BCAD%20%7C%20%E6%B5%A9%E8%BE%B0CAD%20%7C%20FreeCAD%20%7C%20ODA-0f766e" alt="驱动兼容">
+  <img src="assets/badges/formats-zh.svg" alt="交付格式">
+  <img src="assets/badges/drivers-zh.svg" alt="驱动兼容">
 </p>
 
 <!-- 快捷锚点导航 -->

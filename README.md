@@ -10,24 +10,24 @@
 
 <!-- Language Switcher Pills -->
 <p>
-  <a href="README.md"><img src="https://img.shields.io/badge/lang-English-0284c7?style=flat-square" alt="English"></a>
-  <a href="README_ZH.md"><img src="https://img.shields.io/badge/%E8%AF%AD%E8%A8%80-%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87-10b981?style=flat-square" alt="简体中文"></a>
+  <a href="README.md"><img src="assets/badges/lang-en.svg" alt="English"></a>
+  <a href="README_ZH.md"><img src="assets/badges/lang-zh.svg" alt="简体中文"></a>
 </p>
 
 <!-- Primary Status & Capability Badges -->
 <p>
   <a href="https://github.com/XiaoGuai23/cad-operations-skill/actions/workflows/smoke-test.yml"><img src="https://github.com/XiaoGuai23/cad-operations-skill/actions/workflows/smoke-test.yml/badge.svg" alt="CI Tests"></a>
-  <a href="https://github.com/XiaoGuai23/cad-operations-skill/releases"><img src="https://img.shields.io/badge/release-v2.2.0-0ea5e9" alt="Release v2.2.0"></a>
-  <img src="https://img.shields.io/badge/tests-1%2C024%2B%20passed-10b981" alt="1,024+ Tests Passed">
-  <img src="https://img.shields.io/badge/python-3.12-2563eb?logo=python&logoColor=white" alt="Python 3.12">
-  <a href="references/mcp-server-guide.md"><img src="https://img.shields.io/badge/MCP_Server-23_Tools-7e22ce" alt="MCP 23 Tools"></a>
-  <a href="SKILL.md"><img src="https://img.shields.io/badge/Agent-Skill-111827" alt="Agent Skill"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-f59e0b" alt="MIT License"></a>
+  <a href="https://github.com/XiaoGuai23/cad-operations-skill/releases"><img src="assets/badges/release.svg" alt="Release v2.2.0"></a>
+  <img src="assets/badges/tests.svg" alt="1,024+ Tests Passed">
+  <img src="assets/badges/python.svg" alt="Python 3.12">
+  <a href="references/mcp-server-guide.md"><img src="assets/badges/mcp-tools.svg" alt="MCP 23 Tools"></a>
+  <a href="SKILL.md"><img src="assets/badges/agent-skill.svg" alt="Agent Skill"></a>
+  <a href="LICENSE"><img src="assets/badges/license.svg" alt="MIT License"></a>
 </p>
 
 <p>
-  <img src="https://img.shields.io/badge/Formats-DXF%20%7C%20DWG%20%7C%20STEP%20%7C%20GLB%20%7C%20STL%20%7C%20SVG%20%7C%20PDF-334155" alt="Supported Formats">
-  <img src="https://img.shields.io/badge/Drivers-AutoCAD%20%7C%20ZWCAD%20%7C%20GstarCAD%20%7C%20FreeCAD%20%7C%20ODA-0f766e" alt="CAD Drivers">
+  <img src="assets/badges/formats.svg" alt="Supported Formats">
+  <img src="assets/badges/drivers.svg" alt="CAD Drivers">
 </p>
 
 <!-- Quick Anchor Navigation Bar -->
