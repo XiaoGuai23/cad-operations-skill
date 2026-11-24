@@ -27,6 +27,10 @@ output/
 *.sldasm
 *.slddrw
 *.FCStd
+!assets/
+!assets/**/
+!assets/**/*.svg
+!assets/**/*.png
 
 # OS/editor
 .DS_Store

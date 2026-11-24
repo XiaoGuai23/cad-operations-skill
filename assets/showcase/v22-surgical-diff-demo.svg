@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 290" width="100%" height="290">
+  <defs>
+    <pattern id="gridDiff" width="18" height="18" patternUnits="userSpaceOnUse">
+      <path d="M 18 0 L 0 0 0 18" fill="none" stroke="#e2e8f0" stroke-width="0.7"/>
+    </pattern>
+  </defs>
+  <rect x="4" y="4" width="912" height="282" rx="14" fill="#0f172a" stroke="#334155" stroke-width="1.5"/>
+  <!-- Top Studio 2.2 Toolbar Mock -->
+  <rect x="5" y="5" width="910" height="38" rx="13" fill="#1e293b"/>
+  <circle cx="24" cy="24" r="5.5" fill="#ef4444"/>
+  <circle cx="42" cy="24" r="5.5" fill="#f59e0b"/>
+  <circle cx="60" cy="24" r="5.5" fill="#10b981"/>
+  <text x="82" y="28" font-family="'Segoe UI', sans-serif" font-size="12.5" font-weight="700" fill="#e2e8f0">CAD Studio 2.2 · Vector Click-Select · Red/Green Diff · Legacy Audit</text>
+  <rect x="530" y="12" width="76" height="24" rx="5" fill="#0f172a" stroke="#475569"/>
+  <text x="568" y="28" text-anchor="middle" font-family="'Segoe UI', sans-serif" font-size="11" fill="#cbd5e1">↶ Undo v2/3</text>
+  <rect x="614" y="12" width="142" height="24" rx="5" fill="#064e3b" stroke="#10b981"/>
+  <text x="685" y="28" text-anchor="middle" font-family="'Segoe UI', sans-serif" font-size="11" font-weight="700" fill="#6ee7b7">🔴🟢 Vector Diff ON</text>
+  <rect x="764" y="12" width="136" height="24" rx="5" fill="#7c2d12" stroke="#f59e0b"/>
+  <text x="832" y="28" text-anchor="middle" font-family="'Segoe UI', sans-serif" font-size="11" font-weight="700" fill="#fde68a">🩺 Legacy Audit !2</text>
+
+  <!-- Left Panel: Surgical Vector Diff -->
+  <rect x="18" y="54" width="432" height="218" rx="10" fill="#ffffff"/>
+  <rect x="18" y="54" width="432" height="218" rx="10" fill="url(#gridDiff)" opacity="0.7"/>
+  <text x="32" y="76" font-family="'Segoe UI', sans-serif" font-size="12.5" font-weight="800" fill="#0f172a">1. Surgical Feature IR &amp; Red/Green Vector Diff</text>
+
+  <!-- Unchanged plate contour (dimmed slate) -->
+  <path d="M 90 230 L 370 230 L 370 105 L 130 105" fill="none" stroke="#94a3b8" stroke-width="2"/>
+  <line x1="90" y1="230" x2="90" y2="145" stroke="#94a3b8" stroke-width="2"/>
+
+  <!-- Old sharp corner & old Ø12 hole in Crimson Red Dashed -->
+  <polyline points="90,145 90,105 130,105" fill="none" stroke="#ef4444" stroke-width="2.2" stroke-dasharray="6 4"/>
+  <circle cx="235" cy="168" r="22" fill="none" stroke="#ef4444" stroke-width="2.2" stroke-dasharray="6 4"/>
+
+  <!-- New Fillet R8 arc & resized Ø18 hole + 4x bolt holes in Crisp Emerald Green -->
+  <path d="M 90 145 A 40 40 0 0 1 130 105" fill="none" stroke="#10b981" stroke-width="3"/>
+  <circle cx="235" cy="168" r="34" fill="none" stroke="#10b981" stroke-width="3"/>
+  <circle cx="170" cy="168" r="8" fill="none" stroke="#10b981" stroke-width="2.3"/>
+  <circle cx="300" cy="168" r="8" fill="none" stroke="#10b981" stroke-width="2.3"/>
+  <circle cx="235" cy="122" r="8" fill="none" stroke="#10b981" stroke-width="2.3"/>
+  <circle cx="235" cy="214" r="8" fill="none" stroke="#10b981" stroke-width="2.3"/>
+
+  <!-- Blue Marquee + Floating Capsule -->
+  <rect x="76" y="93" width="68" height="64" rx="4" fill="#0ea5e9" fill-opacity="0.09" stroke="#0284c7" stroke-width="1.8" stroke-dasharray="5 3"/>
+  <circle cx="144" cy="93" r="10" fill="#0284c7"/>
+  <text x="144" y="97" text-anchor="middle" font-family="sans-serif" font-size="10" font-weight="800" fill="#fff">1</text>
+  <rect x="86" y="240" width="336" height="24" rx="12" fill="#0f172a"/>
+  <text x="254" y="256" text-anchor="middle" font-family="Consolas, 'Microsoft YaHei', monospace" font-size="11" fill="#e2e8f0">💬 "Fillet corner R8, resize bore Ø18, add 4×Ø8 PCD"</text>
+
+  <!-- Right Panel: Legacy DXF Tampering & Gap Audit -->
+  <rect x="470" y="54" width="432" height="218" rx="10" fill="#ffffff"/>
+  <rect x="470" y="54" width="432" height="218" rx="10" fill="url(#gridDiff)" opacity="0.7"/>
+  <text x="484" y="76" font-family="'Segoe UI', sans-serif" font-size="12.5" font-weight="800" fill="#0f172a">2. Standalone Legacy DXF Tampering &amp; Gap Audit</text>
+
+  <!-- Part with micro-gap and tampered dimension -->
+  <polyline points="535,195 535,115 795,115 795,182" fill="none" stroke="#1e293b" stroke-width="2.2"/>
+  <line x1="535" y1="195" x2="795" y2="195" stroke="#1e293b" stroke-width="2.2"/>
+
+  <!-- Highlight !1 Tampered Dimension -->
+  <line x1="535" y1="226" x2="795" y2="226" stroke="#dc2626" stroke-width="1.6"/>
+  <line x1="535" y1="198" x2="535" y2="232" stroke="#64748b" stroke-width="1.1"/>
+  <line x1="795" y1="198" x2="795" y2="232" stroke="#64748b" stroke-width="1.1"/>
+  <rect x="614" y="208" width="104" height="24" rx="4" fill="#fef2f2" stroke="#ef4444" stroke-width="1.6" stroke-dasharray="4 3"/>
+  <text x="666" y="224" text-anchor="middle" font-family="Consolas, monospace" font-size="13" font-weight="800" fill="#dc2626">"125" (≠100!)</text>
+  <circle cx="724" cy="206" r="10.5" fill="#ef4444"/>
+  <text x="724" y="210" text-anchor="middle" font-family="sans-serif" font-size="10.5" font-weight="800" fill="#fff">!1</text>
+
+  <!-- Highlight !2 Open Contour Gap -->
+  <rect x="776" y="175" width="38" height="30" rx="4" fill="#fffbeb" stroke="#f59e0b" stroke-width="1.8" stroke-dasharray="4 3"/>
+  <circle cx="820" cy="173" r="10.5" fill="#f59e0b"/>
+  <text x="820" y="177" text-anchor="middle" font-family="sans-serif" font-size="10.5" font-weight="800" fill="#fff">!2</text>
+
+  <rect x="492" y="242" width="390" height="22" rx="6" fill="#fef2f2" stroke="#fecaca"/>
+  <text x="687" y="257" text-anchor="middle" font-family="Consolas, sans-serif" font-size="10.8" font-weight="700" fill="#b91c1c">!1 TAMPERED_DIMENSION_TEXT (125 vs 100.0) · !2 OPEN_CONTOUR_GAP (0.35mm)</text>
+</svg>
