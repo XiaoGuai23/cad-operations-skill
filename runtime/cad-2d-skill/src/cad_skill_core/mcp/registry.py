@@ -16,6 +16,19 @@ from cad_skill_core.benchmark.regression_flywheel import (
     record_regression_case,
     replay_regression_vault,
 )
+from cad_skill_core.civil.bridge_calc import (
+    audit_bridge_design_consistency,
+    compute_hydrology_and_span,
+    compute_lateral_distribution,
+    compute_polygon_section_properties,
+    compute_prestress_estimation_and_loss,
+    compute_superstructure_envelopes,
+    compute_t_girder_section,
+    ingest_and_audit_calc_table,
+    run_full_bridge_calculation,
+    solve_continuous_cap_beam_1d,
+)
+from cad_skill_core.civil.bridge_drawings import CivilDrawingType, generate_civil_bridge_bundle
 from cad_skill_core.documents.spec_compiler import (
     PartFamily,
     compile_spec_from_feature_graph,
@@ -407,6 +420,55 @@ class ManageRegressionsArgs(StrictInputModel):
     must_reject: bool = Field(default=False)
     expected_post_conditions: list[dict[str, Any]] = Field(default_factory=list)
     bug_note: str = Field(default="")
+
+
+class CivilBridgeCalcArgs(StrictInputModel):
+    mode: Literal[
+        "full",
+        "hydrology",
+        "polygon_section",
+        "t_girder_section",
+        "lateral_distribution",
+        "superstructure_envelopes",
+        "prestress",
+        "cap_beam_1d",
+        "consistency_audit",
+        "table_audit",
+    ] = Field(
+        default="full",
+        description="Calculation or QA audit mode under JTG D60-2015 / JTG 3362-2018.",
+    )
+    params: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Input engineering parameters dictionary for the selected calculation mode.",
+    )
+    table_text: str | None = Field(
+        default=None,
+        description="Inline Markdown/CSV/TSV limit-state table when mode='table_audit'.",
+    )
+    table_path: str | None = Field(
+        default=None,
+        description="Path to a CSV/TSV/Markdown calculation check table inside allowed roots when mode='table_audit'.",
+    )
+
+
+class GenerateCivilBridgeArgs(StrictInputModel):
+    drawing_type: CivilDrawingType = Field(
+        description=(
+            "Target Civil & Bridge CAD sheet type: 'bridge_elevation' (桥型总体布置图), "
+            "'t_girder_section' (标准横断面及T梁一般构造图), 'tendon_layout' (预应力钢束布置图), "
+            "'pier_and_abutment' (桥墩/桥台一般构造及支座布置图), or 'mechanics_diagrams' (横向影响线及内力包络图)."
+        )
+    )
+    spec: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Parametric dimensions and labels for the requested civil/bridge sheet.",
+    )
+    stem: str | None = Field(default=None, description="Optional safe output filename stem.")
+    include_image_base64: bool = Field(
+        default=False,
+        description="Attach rendered high-DPI sheet PNG as an MCP ImageContent block.",
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1409,6 +1471,67 @@ def _handle_manage_regressions(
     return recorded, None, False
 
 
+def _handle_civil_bridge_calc(
+    sandbox: MCPWorkspaceSandbox, args: CivilBridgeCalcArgs
+) -> tuple[dict[str, Any], Path | None, bool]:
+    mode = args.mode
+    p = args.params
+    if mode == "full":
+        result = run_full_bridge_calculation(p)
+    elif mode == "hydrology":
+        result = compute_hydrology_and_span(**p)
+    elif mode == "polygon_section":
+        if "vertices" not in p:
+            raise ValueError("params['vertices'] is required when mode='polygon_section'")
+        result = compute_polygon_section_properties(p["vertices"])
+    elif mode == "t_girder_section":
+        result = compute_t_girder_section(**p)
+    elif mode == "lateral_distribution":
+        result = compute_lateral_distribution(**p)
+    elif mode == "superstructure_envelopes":
+        result = compute_superstructure_envelopes(**p)
+    elif mode == "prestress":
+        result = compute_prestress_estimation_and_loss(**p)
+    elif mode == "cap_beam_1d":
+        result = solve_continuous_cap_beam_1d(**p)
+    elif mode == "consistency_audit":
+        result = audit_bridge_design_consistency(p)
+    else:
+        resolved_table = sandbox.resolve_readable_file(args.table_path) if args.table_path else None
+        result = ingest_and_audit_calc_table(
+            table_text=args.table_text or p.get("table_text"),
+            file_path=resolved_table,
+        )
+    return {"domain": "civil_bridge_calc", "mode": mode, "result": result}, None, False
+
+
+def _handle_generate_civil_bridge(
+    sandbox: MCPWorkspaceSandbox, args: GenerateCivilBridgeArgs
+) -> tuple[dict[str, Any], Path | None, bool]:
+    task_id, task_dir = sandbox.allocate_task_dir("civil")
+    out_dir = task_dir / "output"
+    clean_stem = validate_safe_single_name(args.stem, label="stem") if args.stem else None
+    bundle = generate_civil_bridge_bundle(
+        args.drawing_type,
+        args.spec,
+        out_dir,
+        stem=clean_stem,
+        render_lock=sandbox.render_lock,
+    )
+    png_path = bundle.pop("preview_png_path")
+    payload = {
+        "task_id": task_id,
+        "domain": "civil_bridge",
+        **bundle,
+    }
+    sandbox.write_task_metadata(task_id, payload)
+    return (
+        payload,
+        (png_path if args.include_image_base64 and png_path.is_file() else None),
+        bundle["status"] == "failed",
+    )
+
+
 TOOLS: tuple[ToolDefinition, ...] = (
     ToolDefinition(
         "cad_doctor",
@@ -1583,6 +1706,19 @@ TOOLS: tuple[ToolDefinition, ...] = (
         "Record failed/corrected DXF revision cases + post-conditions into a permanent regression vault and replay all cases automatically.",
         ManageRegressionsArgs,
         _handle_manage_regressions,
+    ),
+    ToolDefinition(
+        "cad_civil_bridge_calc",
+        "Zero-dependency highway bridge & civil structural calculation and QA engine (hydrology, polygonal/T-girder section properties, Lever/Courbon lateral distribution, Highway-I M/Q envelopes, prestress loss, 1D cap-beam FEM, and cross-sheet consistency/table audit).",
+        CivilBridgeCalcArgs,
+        _handle_civil_bridge_calc,
+    ),
+    ToolDefinition(
+        "cad_generate_civil_bridge",
+        "Generate audited Civil & Bridge Engineering CAD drawings (bridge_elevation, t_girder_section, tendon_layout, pier_and_abutment, mechanics_diagrams) with native ARCHTICK dimensions, pile S-breaks, ground lines, and 100-point rubric score.",
+        GenerateCivilBridgeArgs,
+        _handle_generate_civil_bridge,
+        meta={"ui": {"resourceUri": MCP_APP_RESOURCE_URI}},
     ),
 )
 

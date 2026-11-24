@@ -57,6 +57,8 @@ D:\Python312\python.exe -B -m cad_skill_core.cli mcp-http --host 127.0.0.1 --por
 | `/api/v1/tasks/revise-nl` | `POST` | 基于蓝色虚线框选坐标（或图元 Handle）执行口语化自然语言直接改图并联动刷新画布 |
 | `/api/v1/tasks/score` | `POST` | 对任务图纸或任意 DXF 执行 100 分制五维工程审图打分（兼容 `cad-1000-hours` `rubrics.json`） |
 | `/api/v1/benchmark/cad1k` | `POST` | 运行免视频 `cad-1000-hours` 离线工程基准评测套件并返回成绩单 |
+| `/api/v1/civil/calc` | `POST` | 运行零商业软件依赖的公路桥梁水文、截面特性、横向分布、10 单元包络、预应力损失、1D 盖梁有限元与跨图/表格校核 |
+| `/api/v1/civil/generate` | `POST` | 生成土木与桥梁 5 类审计级 CAD 图纸（总体布置、T 梁横断面、钢束布置、桥墩桥台及支座、力学影响线与包络图） |
 | `/api/v1/tasks/{task_id}` | `GET` | 查询任务状态、审计摘要与产物清单 |
 | `/api/v1/tasks/{task_id}/artifacts/{filename}` | `GET` | 安全下载 `.dxf` / `.svg` / `.png` / `.pdf` / `.step` / `.stl` / `.obj` / `.glb` / `audit.json` |
 | `/api/v1/jobs` | `POST` / `GET` | 提交或列出 **独立子进程隔离的异步出图任务**（`queued` → `running` → `completed`） |
@@ -70,7 +72,7 @@ D:\Python312\python.exe -B -m cad_skill_core.cli mcp-http --host 127.0.0.1 --por
 
 ---
 
-## 3. 已暴露的 26 个 MCP Tools（二维 + 三维 + 统一改图核验 + 项目偏好记忆 + 非标特征组合 + 回归飞轮全闭环）
+## 3. 已暴露的 28 个 MCP Tools（二维 + 三维 + 土木桥梁计算与出图 + 统一改图核验 + 项目偏好记忆 + 非标特征组合 + 回归飞轮全闭环）
 
 1. `cad_doctor`：诊断 Python 渲染栈、本机中文字体覆盖率、三维内核能力与多厂商 CAD 驱动状态。
 2. `cad_compile_spec`：解析项目书/手册/CSV/DOCX/PDF，编译 `DrawingSpec`（自动融合已确认的项目制图偏好记忆）并拦截缺失尺寸与冲突参数。
@@ -98,6 +100,8 @@ D:\Python312\python.exe -B -m cad_skill_core.cli mcp-http --host 127.0.0.1 --por
 24. `cad_manage_preferences`：查询、口语教学、从样图提取、确认或停用项目级制图偏好记忆（`.cad-memory/project-preferences.json`）。
 25. `cad_generate_feature_graph`：基于自由轮廓 + 可组合特征图谱（`cad-feature-graph/v1`：多边形/T 型板/圆角倒角/阵列孔/腰形槽/矩形方槽）生成非标异形件国标三视图。
 26. `cad_manage_regressions`：将错题或审图修正案例（基线 DXF + 指令 + 物理验收断言）沉淀为永久回归测试集并一键回放核验。
+27. `cad_civil_bridge_calc`：零外部软件依赖的公路桥梁结构计算与跨图一致性/电算表超限校核引擎（`JTG D60-2015` / `JTG 3362-2018`）。
+28. `cad_generate_civil_bridge`：生成 5 类公路桥梁与结构力学审计级 CAD 图纸（原生 `ARCHTICK` 建筑斜线标注、圆柱桩 S 折断符、地面线、100 分制审图评分）。
 
 ## 4. MCP Resources 与 Prompts
 

@@ -67,7 +67,14 @@ class WebCompile3DRequest(BaseModel):
 class WebGenerateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    domain: Literal["mechanical_2d", "electrical_sld", "pavement", "model_3d"] = "mechanical_2d"
+    domain: Literal["mechanical_2d", "electrical_sld", "pavement", "civil_bridge", "model_3d"] = "mechanical_2d"
+    drawing_type: Literal[
+        "bridge_elevation",
+        "t_girder_section",
+        "tendon_layout",
+        "pier_and_abutment",
+        "mechanics_diagrams",
+    ] = "bridge_elevation"
     spec: dict[str, Any] | None = None
     markdown_brief: str | None = None
     standard_profile: str | None = None
@@ -213,6 +220,40 @@ class WebRegressionsRequest(BaseModel):
     bug_note: str = ""
 
 
+class WebCivilCalcRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal[
+        "full",
+        "hydrology",
+        "polygon_section",
+        "t_girder_section",
+        "lateral_distribution",
+        "superstructure_envelopes",
+        "prestress",
+        "cap_beam_1d",
+        "consistency_audit",
+        "table_audit",
+    ] = "full"
+    params: dict[str, Any] = Field(default_factory=dict)
+    table_text: str | None = None
+    table_path: str | None = None
+
+
+class WebCivilGenerateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    drawing_type: Literal[
+        "bridge_elevation",
+        "t_girder_section",
+        "tendon_layout",
+        "pier_and_abutment",
+        "mechanics_diagrams",
+    ] = "bridge_elevation"
+    spec: dict[str, Any] = Field(default_factory=dict)
+    stem: str | None = None
+
+
 def _attach_download_urls(payload: dict[str, Any]) -> dict[str, Any]:
     task_id = payload.get("task_id")
     if not task_id or "artifacts" not in payload:
@@ -255,6 +296,14 @@ def _map_generate_to_tool(req: WebGenerateRequest) -> tuple[str, dict[str, Any]]
                 "with_2d_sheet": req.with_2d_sheet,
                 "run_native_cad": req.run_native_cad,
                 "driver_preference": req.driver_preference,
+            },
+        )
+    if req.domain == "civil_bridge":
+        return (
+            "cad_generate_civil_bridge",
+            {
+                "drawing_type": req.drawing_type,
+                "spec": req.spec or {},
             },
         )
     if req.spec is None:
@@ -528,6 +577,19 @@ def create_mcp_http_app(
         res = call_mcp_tool(sandbox, "cad_manage_regressions", req.model_dump())
         status_code = 400 if res["isError"] else 200
         return JSONResponse(status_code=status_code, content=res["structuredContent"])
+
+    @app.post("/api/v1/civil/calc")
+    def web_civil_calc(req: WebCivilCalcRequest) -> JSONResponse:
+        res = call_mcp_tool(sandbox, "cad_civil_bridge_calc", req.model_dump())
+        status_code = 400 if res["isError"] else 200
+        return JSONResponse(status_code=status_code, content=res["structuredContent"])
+
+    @app.post("/api/v1/civil/generate")
+    def web_civil_generate(req: WebCivilGenerateRequest) -> JSONResponse:
+        res = call_mcp_tool(sandbox, "cad_generate_civil_bridge", req.model_dump())
+        structured = _attach_download_urls(res["structuredContent"])
+        status_code = 422 if res["isError"] else 200
+        return JSONResponse(status_code=status_code, content=structured)
 
     @app.get("/api/v1/tasks/{task_id}")
     def get_task(task_id: str) -> dict[str, Any]:

@@ -1,6 +1,6 @@
 ---
 name: cad-operations
-description: Unified local CAD operations skill for creating, editing, validating, and exporting CAD deliverables. Use when the user asks for CAD/DWG/DXF/PDF/SVG/PNG drafting, AutoCAD/Core Console, FreeCAD/FreeCAD MCP, SolidWorks/SolidWorks MCP/COM/VBA/C# automation, SLDPRT/SLDASM/STEP/STL files, electrical main single-line diagrams/电气主接线图/一次接线图/SLD, pavement structure drawings/路面结构图, or any local CAD workflow that should use installed CAD tools, scripts, and MCP assets.
+description: Unified local CAD operations skill for creating, editing, validating, and exporting CAD deliverables. Use when the user asks for CAD/DWG/DXF/PDF/SVG/PNG drafting, AutoCAD/Core Console, FreeCAD/FreeCAD MCP, SolidWorks/SolidWorks MCP/COM/VBA/C# automation, SLDPRT/SLDASM/STEP/STL files, electrical main single-line diagrams/电气主接线图/一次接线图/SLD, pavement structure drawings/路面结构图, civil & highway bridge engineering calculations and drawings/桥梁总体布置图/T梁构造图/预应力钢束图/桥墩桥台构造图/影响线与内力包络图, or any local CAD workflow that should use installed CAD tools, scripts, and MCP assets.
 ---
 
 # CAD Operations
@@ -20,6 +20,7 @@ edit the current authoritative drawing; for new drawings use a validated spec.
 | General AutoCAD/FreeCAD editing, plotting, conversion | [AutoCAD / FreeCAD](references/autocad-freecad.md) |
 | Electrical main wiring / SLD | [Electrical workflow](references/electrical-main-sld.md) |
 | Pavement / road layer sections | [Pavement workflow](references/pavement-structure-cad.md) |
+| Civil & highway bridge calculations, cross-sheet QA & CAD drawings (`bridge-calc`, `generate-civil`) | [Civil & bridge workflow](references/civil-bridge-engineering.md) |
 | SolidWorks parts, assemblies or drawings | [SolidWorks workflow](references/solidworks-mcp.md) |
 | Machine paths, MCP availability or setup | [Local environment](references/local-cad-environment.md) |
 | MCP Server (`stdio` / HTTP), Web Auto-Drafting Studio (`/studio`), 3D modeling & domestic CAD drivers | [MCP & Web Studio guide](references/mcp-server-guide.md) and [command examples](references/command-examples.md) |

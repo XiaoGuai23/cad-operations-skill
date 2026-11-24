@@ -175,6 +175,20 @@ def _parser() -> argparse.ArgumentParser:
     run_reg.add_argument('--vault', type=Path, default=Path('tests/regressions'), dest='vault_dir')
     run_reg.add_argument('--json', action='store_true', dest='as_json')
 
+    bcalc = commands.add_parser('bridge-calc', help='run zero-dependency highway bridge calculations, 1D cap-beam FEM, or table QA audit')
+    bcalc.add_argument('--mode', choices=('full', 'hydrology', 'section', 'lateral', 'envelopes', 'prestress', 'cap-beam', 'consistency', 'table-audit'), default='full')
+    bcalc.add_argument('--params', type=Path, default=None, dest='params_path')
+    bcalc.add_argument('--table', type=Path, default=None, dest='table_path')
+    bcalc.add_argument('--out', type=Path, default=None, dest='output_path')
+    bcalc.add_argument('--json', action='store_true', dest='as_json')
+
+    gcivil = commands.add_parser('generate-civil', help='generate audited Civil & Bridge CAD sheets (DXF + PNG + rubric + audit.json)')
+    gcivil.add_argument('drawing_type', choices=('bridge_elevation', 't_girder_section', 'tendon_layout', 'pier_and_abutment', 'mechanics_diagrams'))
+    gcivil.add_argument('--spec', type=Path, default=None, dest='spec_path')
+    gcivil.add_argument('--out', type=Path, required=True, dest='output_dir')
+    gcivil.add_argument('--stem', default=None)
+    gcivil.add_argument('--json', action='store_true', dest='as_json')
+
     for name, help_text in (
         ("generate", "generate and audit core DXF and previews"),
         ("inspect", "run a fresh zero-repair inspection generation"),
@@ -222,6 +236,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _cad1k_command(arguments)
     if arguments.command in {'preferences', 'record-regression', 'run-regressions'}:
         return _learning_command(arguments)
+    if arguments.command in {'bridge-calc', 'generate-civil'}:
+        return _civil_command(arguments)
 
     from .pipeline import PipelineInputError, PipelineOptions, run_task
     try:
@@ -564,6 +580,83 @@ def _learning_command(arguments: argparse.Namespace) -> int:
         return 2
     except Exception as error:
         _write_error(f"learning/regression failure: {type(error).__name__}: {error}", arguments.as_json)
+        return 1
+
+
+def _civil_command(arguments: argparse.Namespace) -> int:
+    try:
+        if arguments.command == "bridge-calc":
+            from .civil.bridge_calc import (
+                audit_bridge_design_consistency,
+                compute_hydrology_and_span,
+                compute_lateral_distribution,
+                compute_prestress_estimation_and_loss,
+                compute_superstructure_envelopes,
+                compute_t_girder_section,
+                ingest_and_audit_calc_table,
+                run_full_bridge_calculation,
+                solve_continuous_cap_beam_1d,
+            )
+
+            params = (
+                json.loads(arguments.params_path.read_text(encoding="utf-8-sig"))
+                if arguments.params_path is not None
+                else {}
+            )
+            mode = arguments.mode
+            if mode == "full":
+                res = run_full_bridge_calculation(params)
+            elif mode == "hydrology":
+                res = compute_hydrology_and_span(**params)
+            elif mode == "section":
+                res = compute_t_girder_section(**params)
+            elif mode == "lateral":
+                res = compute_lateral_distribution(**params)
+            elif mode == "envelopes":
+                res = compute_superstructure_envelopes(**params)
+            elif mode == "prestress":
+                res = compute_prestress_estimation_and_loss(**params)
+            elif mode == "cap-beam":
+                res = solve_continuous_cap_beam_1d(**params)
+            elif mode == "consistency":
+                res = audit_bridge_design_consistency(params)
+            else:
+                if arguments.table_path is None and "table_text" not in params:
+                    raise ValueError("--table or params['table_text'] is required for --mode table-audit")
+                res = ingest_and_audit_calc_table(
+                    table_text=params.get("table_text"),
+                    file_path=arguments.table_path,
+                )
+
+            payload = {"command": "bridge-calc", "mode": mode, "result": res}
+            if arguments.output_path is not None:
+                arguments.output_path.parent.mkdir(parents=True, exist_ok=True)
+                arguments.output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            print(_stable_json(payload) if arguments.as_json else json.dumps(payload, ensure_ascii=False, indent=2))
+            return 0
+
+        from .civil.bridge_drawings import generate_civil_bridge_bundle
+
+        spec_obj = (
+            json.loads(arguments.spec_path.read_text(encoding="utf-8-sig"))
+            if arguments.spec_path is not None
+            else {}
+        )
+        bundle = generate_civil_bridge_bundle(
+            arguments.drawing_type,
+            spec_obj,
+            arguments.output_dir,
+            stem=arguments.stem,
+        )
+        bundle.pop("preview_png_path", None)
+        payload = {"command": "generate-civil", **bundle}
+        print(_stable_json(payload) if arguments.as_json else json.dumps(payload, ensure_ascii=False, indent=2))
+        return 0 if bundle["status"] == "passed" else 1
+    except (ValueError, KeyError, FileNotFoundError, TypeError, OSError) as error:
+        _write_error(f"user/validation error: {error}", arguments.as_json)
+        return 2
+    except Exception as error:
+        _write_error(f"civil calculation/generation failure: {type(error).__name__}: {error}", arguments.as_json)
         return 1
 
 
