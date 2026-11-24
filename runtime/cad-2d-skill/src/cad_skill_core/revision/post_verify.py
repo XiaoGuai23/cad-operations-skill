@@ -381,7 +381,14 @@ def verify_revision_post_conditions(
                 dt = ent.dxftype()
                 if dt == "LINE":
                     s, e = ent.dxf.start, ent.dxf.end
-                    act_l = hypot(float(e.x) - float(s.x), float(e.y) - float(s.y)) * scale_mm
+                    dx_mm = abs(float(e.x) - float(s.x)) * scale_mm
+                    dy_mm = abs(float(e.y) - float(s.y)) * scale_mm
+                    if item.axis == "horizontal":
+                        act_l = dx_mm
+                    elif item.axis == "vertical":
+                        act_l = dy_mm
+                    else:
+                        act_l = hypot(dx_mm, dy_mm)
                     ok_l = abs(act_l - exp_len) <= item.tolerance_mm
                 else:
                     ext = bbox.extents([ent])

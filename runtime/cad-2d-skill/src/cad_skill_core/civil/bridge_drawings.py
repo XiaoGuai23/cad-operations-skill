@@ -65,8 +65,38 @@ def _safe_stem(raw: str) -> str:
     return cleaned.strip() or "civil_bridge_drawing"
 
 
+_STANDARD_ELEV_SCALES: tuple[int, ...] = (
+    100, 150, 200, 250, 300, 400, 500, 600, 750, 800, 1000, 1250, 1500, 2000, 2500, 3000, 4000, 5000
+)
+
+
+def _resolve_scale_denom(raw_scale: Any, total_bridge_mm: float, total_vert_mm: float, max_w_mm: float, max_h_mm: float) -> float:
+    if raw_scale is not None and str(raw_scale).strip().lower() not in {"", "auto"}:
+        s_txt = str(raw_scale).strip()
+        if ":" in s_txt:
+            num_s, den_s = s_txt.split(":", 1)
+            denom = float(den_s) / float(num_s)
+        else:
+            denom = float(s_txt)
+        if denom <= 0:
+            raise ValueError(f"invalid scale {raw_scale!r}")
+        if total_bridge_mm / denom > max_w_mm + 1e-6:
+            raise ValueError(
+                f"bridge length {total_bridge_mm/1000.0:g}m at scale 1:{denom:g} ({total_bridge_mm/denom:.1f}mm) "
+                f"exceeds printable sheet width ({max_w_mm:.1f}mm)"
+            )
+        return denom
+
+    for cand in _STANDARD_ELEV_SCALES:
+        if (total_bridge_mm / cand) <= max_w_mm and (total_vert_mm / cand) <= max_h_mm:
+            return float(cand)
+    return float(math.ceil((total_bridge_mm / max_w_mm) / 100.0) * 100)
+
+
 def _draw_bridge_elevation(spec: dict[str, Any]) -> ezdxf.document.Drawing:
     n_spans = int(spec.get("n_spans", 4))
+    if n_spans < 1:
+        raise ValueError("n_spans must be >= 1")
     span_cm = float(spec.get("span_cm", 2500.0))
     girder_depth_cm = float(spec.get("girder_depth_cm", 170.0))
     barrier_h_cm = float(spec.get("barrier_height_cm", 100.0))
@@ -79,28 +109,47 @@ def _draw_bridge_elevation(spec: dict[str, Any]) -> ezdxf.document.Drawing:
 
     total_span_cm = n_spans * span_cm
     total_bridge_cm = total_span_cm + 2.0 * abutment_len_cm
+    total_bridge_mm = total_bridge_cm * 10.0
+    est_vert_mm = (barrier_h_cm + girder_depth_cm + 950.0 + pile_len_cm) * 10.0
+
+    sheet_size = str(spec.get("sheet_size", "A3")).upper()
+    from .symbols import SHEET_SIZES_MM
+    if sheet_size not in SHEET_SIZES_MM:
+        raise ValueError(f"unsupported sheet_size {sheet_size!r}")
+    sw_mm, sh_mm = SHEET_SIZES_MM[sheet_size]
+    max_bridge_paper_w = sw_mm - 80.0
+    max_bridge_paper_h = sh_mm - 145.0
+
+    scale_denom = _resolve_scale_denom(
+        spec.get("scale"),
+        total_bridge_mm=total_bridge_mm,
+        total_vert_mm=est_vert_mm,
+        max_w_mm=max_bridge_paper_w,
+        max_h_mm=max_bridge_paper_h,
+    )
+    scale_str = f"1:{int(scale_denom)}" if abs(scale_denom - round(scale_denom)) < 1e-6 else f"1:{scale_denom:g}"
 
     doc, msp, b = setup_civil_dxf_document(
-        sheet_size=str(spec.get("sheet_size", "A3")),
+        sheet_size=sheet_size,
         title=str(spec.get("title", f"{n_spans}×{span_cm/100:g}m 预应力混凝土简支T梁桥总体布置图")),
         project=str(spec.get("project", "公路桥梁工程设计")),
         drawing_no=str(spec.get("drawing_no", "QL-01")),
         organization=str(spec.get("organization", "土木与交通工程设计院")),
         unit_note="cm（高程以m计）",
-        scale_label="1:400",
+        scale_label=scale_str,
     )
 
-    # Map horizontal real cm -> paper mm [42 .. 388]
-    px_left, px_right = 42.0, 388.0
-    avail_w = px_right - px_left
-    hs = avail_w / total_bridge_cm
-    # Vertical exaggerated/readable civil elevation scale
-    vs = hs * 1.65
+    # Exact physical scale: 1 cm in real bridge = (10.0 / scale_denom) mm on paper (isotropic hs == vs)
+    hs = 10.0 / scale_denom
+    vs = hs
 
-    x_abut_l = px_left
+    bridge_paper_w = total_bridge_cm * hs
+    cx_sheet = 0.5 * (b["ix0"] + b["ix1"])
+    x_abut_l = cx_sheet - 0.5 * bridge_paper_w
     x_span_0 = x_abut_l + abutment_len_cm * hs
     x_span_end = x_span_0 + total_span_cm * hs
     x_abut_r = x_span_end + abutment_len_cm * hs
+    px_left, px_right = x_abut_l, x_abut_r
 
     y_deck = 205.0
     y_girder_bot = y_deck - girder_depth_cm * vs
@@ -116,7 +165,7 @@ def _draw_bridge_elevation(spec: dict[str, Any]) -> ezdxf.document.Drawing:
     for k in range(1, n_posts):
         xp = x_abut_l + (x_abut_r - x_abut_l) * (k / n_posts)
         msp.add_line((xp, y_deck), (xp, y_barrier_top), dxfattribs={"layer": "THIN"})
-    add_civil_text(msp, "防撞护栏", x_span_0 + 16.0, y_barrier_top + 1.8, height=2.3)
+    add_civil_text(msp, "防撞护栏", x_span_0 + 12.0, y_barrier_top + 1.8, height=2.3)
 
     # Spans (individual simply supported T-girders with expansion joint gap)
     pier_xs: list[float] = []
@@ -124,7 +173,7 @@ def _draw_bridge_elevation(spec: dict[str, Any]) -> ezdxf.document.Drawing:
         xs0 = x_span_0 + s_idx * span_cm * hs
         xs1 = xs0 + span_cm * hs
         pier_xs.append(xs0)
-        gap = 0.35
+        gap = min(0.25, 0.02 * span_cm * hs)
         msp.add_lwpolyline(
             [(xs0 + gap, y_girder_bot), (xs1 - gap, y_girder_bot), (xs1 - gap, y_deck), (xs0 + gap, y_deck)],
             close=True,
@@ -132,8 +181,8 @@ def _draw_bridge_elevation(spec: dict[str, Any]) -> ezdxf.document.Drawing:
         )
     pier_xs.append(x_span_end)
 
-    # Left & Right Abutments + Abutment Piles
-    abut_h_mm = 11.0
+    # Left & Right Abutments + Abutment Piles (drawn to true 1:scale_denom)
+    abut_h_mm = 420.0 * vs
     for xa0, xa1 in ((x_abut_l, x_span_0), (x_span_end, x_abut_r)):
         msp.add_lwpolyline(
             [(xa0, y_deck - abut_h_mm), (xa1, y_deck - abut_h_mm), (xa1, y_deck), (xa0, y_deck)],
@@ -141,39 +190,40 @@ def _draw_bridge_elevation(spec: dict[str, Any]) -> ezdxf.document.Drawing:
             dxfattribs={"layer": "OUTLINE"},
         )
         xc_p = 0.5 * (xa0 + xa1)
-        pw = max(2.2, pile_d_cm * hs * 2.2)
+        pw = pile_d_cm * hs
         y_p_top = y_deck - abut_h_mm
-        y_p_bot = y_p_top - min(42.0, pile_len_cm * vs * 0.65)
+        y_p_bot = y_p_top - pile_len_cm * vs * 0.72
         msp.add_line((xc_p - 0.5 * pw, y_p_top), (xc_p - 0.5 * pw, y_p_bot), dxfattribs={"layer": "OUTLINE"})
         msp.add_line((xc_p + 0.5 * pw, y_p_top), (xc_p + 0.5 * pw, y_p_bot), dxfattribs={"layer": "OUTLINE"})
-        draw_pile_s_break(msp, xc_p, y_p_bot, pw)
+        draw_pile_s_break(msp, xc_p, y_p_bot, max(1.6, pw))
 
     # Natural riverbed valley profile
-    terrain_pts: list[tuple[float, float]] = [(px_left - 8.0, y_deck - 8.0)]
+    terrain_pts: list[tuple[float, float]] = [(px_left - 8.0, y_deck - 340.0 * vs)]
     pier_ground_ys: list[float] = []
     for idx, xp in enumerate(pier_xs):
         t_norm = idx / max(1, n_spans)
-        depth_mm = 9.0 + 26.0 * math.sin(math.pi * t_norm)
-        yg = y_deck - depth_mm
+        depth_cm = 360.0 + 580.0 * math.sin(math.pi * t_norm)
+        yg = y_deck - depth_cm * vs
         pier_ground_ys.append(yg)
         terrain_pts.append((xp, yg))
-    terrain_pts.append((px_right + 8.0, y_deck - 8.5))
+    terrain_pts.append((px_right + 8.0, y_deck - 350.0 * vs))
     msp.add_lwpolyline(terrain_pts, close=False, dxfattribs={"layer": "TERRAIN"})
-    draw_ground_line(msp, terrain_pts[1][0] - 8.0, terrain_pts[1][1] - 2.0, terrain_pts[-2][0] + 8.0, terrain_pts[-2][1] - 2.0, label="河床地面线", scale=0.85)
+    draw_ground_line(msp, terrain_pts[1][0] - 6.0, terrain_pts[1][1] - 1.5, terrain_pts[-2][0] + 6.0, terrain_pts[-2][1] - 1.5, label="河床地面线", scale=0.85)
 
-    # Design flood water line (dashed cyan)
-    y_water = y_deck - 19.0
-    msp.add_line((x_span_0 + 10.0, y_water), (x_span_end - 10.0, y_water), dxfattribs={"layer": "CENTER"})
-    draw_elevation_marker(msp, x_span_0 + 18.0, y_water, flood_elev_m, prefix="设计洪水位 ", scale=0.85)
-    draw_elevation_marker(msp, x_abut_l + 4.0, y_deck, deck_elev_m, prefix="桥面 ", scale=0.85)
+    # Design flood water line
+    y_water = y_deck - max(8.0, (deck_elev_m - flood_elev_m) * 100.0 * vs)
+    msp.add_line((x_span_0 + 8.0, y_water), (x_span_end - 8.0, y_water), dxfattribs={"layer": "CENTER"})
+    draw_elevation_marker(msp, x_span_0 + 14.0, y_water, flood_elev_m, prefix="设计洪水位 ", scale=0.85)
+    draw_elevation_marker(msp, x_abut_l + 2.0, y_deck, deck_elev_m, prefix="桥面 ", scale=0.85)
 
-    # Intermediate Piers: cap beam + column + tie beam + bored pile + S-break
+    # Intermediate Piers: cap beam + column + tie collar + bored pile + S-break
     for idx in range(1, n_spans):
         xp = pier_xs[idx]
         yg = pier_ground_ys[idx]
-        cap_w, cap_h = 6.5, 3.2
-        col_w = max(2.2, pier_col_d_cm * hs * 2.2)
-        pile_w = max(2.8, pile_d_cm * hs * 2.4)
+        cap_w = max(3.6, 170.0 * hs)
+        cap_h = max(2.2, 150.0 * vs)
+        col_w = pier_col_d_cm * hs
+        pile_w = pile_d_cm * hs
 
         y_cap_bot = y_girder_bot - cap_h
         msp.add_lwpolyline(
@@ -181,22 +231,22 @@ def _draw_bridge_elevation(spec: dict[str, Any]) -> ezdxf.document.Drawing:
             close=True,
             dxfattribs={"layer": "OUTLINE"},
         )
-        y_tie = yg - 2.5
+        y_tie = min(y_cap_bot - 2.0, yg - 80.0 * vs)
         msp.add_lwpolyline(
             [(xp - 0.5 * col_w, y_tie), (xp + 0.5 * col_w, y_tie), (xp + 0.5 * col_w, y_cap_bot), (xp - 0.5 * col_w, y_cap_bot)],
             close=True,
             dxfattribs={"layer": "OUTLINE"},
         )
-        # Pile cap / tie collar
+        tie_h = max(1.8, 120.0 * vs)
         msp.add_lwpolyline(
-            [(xp - 0.65 * pile_w, y_tie - 2.4), (xp + 0.65 * pile_w, y_tie - 2.4), (xp + 0.65 * pile_w, y_tie), (xp - 0.65 * pile_w, y_tie)],
+            [(xp - 0.65 * pile_w, y_tie - tie_h), (xp + 0.65 * pile_w, y_tie - tie_h), (xp + 0.65 * pile_w, y_tie), (xp - 0.65 * pile_w, y_tie)],
             close=True,
             dxfattribs={"layer": "OUTLINE"},
         )
-        y_pile_bot = y_tie - 2.4 - min(52.0, pile_len_cm * vs * 0.85)
-        msp.add_line((xp - 0.5 * pile_w, y_tie - 2.4), (xp - 0.5 * pile_w, y_pile_bot), dxfattribs={"layer": "OUTLINE"})
-        msp.add_line((xp + 0.5 * pile_w, y_tie - 2.4), (xp + 0.5 * pile_w, y_pile_bot), dxfattribs={"layer": "OUTLINE"})
-        draw_pile_s_break(msp, xp, y_pile_bot, pile_w)
+        y_pile_bot = y_tie - tie_h - pile_len_cm * vs
+        msp.add_line((xp - 0.5 * pile_w, y_tie - tie_h), (xp - 0.5 * pile_w, y_pile_bot), dxfattribs={"layer": "OUTLINE"})
+        msp.add_line((xp + 0.5 * pile_w, y_tie - tie_h), (xp + 0.5 * pile_w, y_pile_bot), dxfattribs={"layer": "OUTLINE"})
+        draw_pile_s_break(msp, xp, y_pile_bot, max(1.6, pile_w))
         msp.add_line((xp, y_barrier_top + 6.0), (xp, y_pile_bot - 4.0), dxfattribs={"layer": "CENTER"})
 
     # Circled Pier / Abutment Axis Bubbles 0 .. n_spans
@@ -274,13 +324,13 @@ def _draw_t_girder_and_deck_section(spec: dict[str, Any]) -> ezdxf.document.Draw
         project=str(spec.get("project", "4×25m 预应力混凝土简支T梁桥")),
         drawing_no=str(spec.get("drawing_no", "QL-02")),
         unit_note="mm",
-        scale_label="1:50 / 1:25",
+        scale_label="1:40 / 1:25",
     )
 
-    # --- TOP VIEW: Full Single-Carriageway Bridge Deck Standard Cross-Section ---
+    # --- TOP VIEW: Full Single-Carriageway Bridge Deck Standard Cross-Section (exact 1:40) ---
     cx_deck = 212.0
     y_girder_top = 214.0
-    s_deck = 300.0 / deck_w_mm  # ~0.0255 mm/mm (~1:40)
+    s_deck = 1.0 / 40.0
 
     x_d_left = cx_deck - 0.5 * deck_w_mm * s_deck
     x_d_right = cx_deck + 0.5 * deck_w_mm * s_deck
@@ -361,16 +411,16 @@ def _draw_t_girder_and_deck_section(spec: dict[str, Any]) -> ezdxf.document.Draw
         )
     add_civil_text(msp, f"铺装：{asphalt_mm:g}mm沥青混凝土 + {concrete_pav_mm:g}mm C40防水混凝土", x_d_right - 4.0, y_girder_top + pav_h_paper + 9.0, height=2.2, align="RIGHT")
 
-    # --- BOTTOM LEFT: Detailed Mid-Span T-Girder Cross-Section (跨中截面) ---
-    s_det = 0.036  # ~1:28
-    cx_mid, y0_mid = 92.0, 44.0
+    # --- BOTTOM LEFT: Detailed Mid-Span T-Girder Cross-Section (exact 1:25) ---
+    s_det = 1.0 / 25.0
+    cx_mid, y0_mid = 88.0, 44.0
     mid_det_pts = [(cx_mid + px * s_det, y0_mid + py * s_det) for px, py in mid_poly]
     msp.add_lwpolyline(mid_det_pts, close=True, dxfattribs={"layer": "OUTLINE"})
     hatch_m = msp.add_hatch(color=9, dxfattribs={"layer": "HATCH"})
     hatch_m.set_pattern_fill("ANSI31", scale=0.8)
     hatch_m.paths.add_polyline_path(mid_det_pts, is_closed=True)
     msp.add_line((cx_mid, y0_mid - 5.0), (cx_mid, y0_mid + girder_h_mm * s_det + 6.0), dxfattribs={"layer": "CENTER"})
-    add_civil_text(msp, "T梁跨中截面 (1:28)", cx_mid, y0_mid - 11.0, height=2.8, align="CENTER")
+    add_civil_text(msp, "T梁跨中截面 (1:25)", cx_mid, y0_mid - 11.0, height=2.8, align="CENTER")
 
     # Detailed dimensions on Mid-Span T-Girder
     half_bf_p = 0.5 * flange_w_mm * s_det
@@ -378,17 +428,17 @@ def _draw_t_girder_and_deck_section(spec: dict[str, Any]) -> ezdxf.document.Draw
     top_y_p = y0_mid + girder_h_mm * s_det
     add_arch_dim(msp, (cx_mid - half_bf_p, top_y_p), (cx_mid + half_bf_p, top_y_p), (cx_mid, top_y_p + 8.0), f"{flange_w_mm:g}")
     add_arch_dim(msp, (cx_mid - half_bulb_p, y0_mid), (cx_mid + half_bulb_p, y0_mid), (cx_mid, y0_mid - 5.5), f"{bulb_w_mm:g}")
-    add_arch_dim(msp, (cx_mid + half_bf_p, y0_mid), (cx_mid + half_bf_p, top_y_p), (cx_mid + half_bf_p + 10.0, y0_mid + 0.5 * girder_h_mm * s_det), f"{girder_h_mm:g}", angle=90.0)
+    add_arch_dim(msp, (cx_mid + half_bf_p, y0_mid), (cx_mid + half_bf_p, top_y_p), (cx_mid + half_bf_p + 9.0, y0_mid + 0.5 * girder_h_mm * s_det), f"{girder_h_mm:g}", angle=90.0)
     add_arch_dim(msp, (cx_mid - half_bf_p, top_y_p - tip_t_mm * s_det), (cx_mid - half_bf_p, top_y_p), (cx_mid - half_bf_p - 8.0, top_y_p - 0.5 * tip_t_mm * s_det), f"{tip_t_mm:g}", angle=90.0)
     add_civil_text(msp, f"腹板厚 {web_t_mm:g}", cx_mid + 0.5 * web_t_mm * s_det + 3.0, y0_mid + 0.48 * girder_h_mm * s_det, height=2.2)
 
-    # --- BOTTOM CENTER: Girder-End Cross-Section (支点/梁端截面) ---
-    cx_end, y0_end = 205.0, 44.0
+    # --- BOTTOM CENTER: Girder-End Cross-Section (exact 1:25) ---
+    cx_end, y0_end = 204.0, 44.0
     end_poly = sec_calc["end_span_polygon_mm"]
     end_det_pts = [(cx_end + px * s_det, y0_end + py * s_det) for px, py in end_poly]
     msp.add_lwpolyline(end_det_pts, close=True, dxfattribs={"layer": "OUTLINE"})
     msp.add_line((cx_end, y0_end - 5.0), (cx_end, y0_end + girder_h_mm * s_det + 6.0), dxfattribs={"layer": "CENTER"})
-    add_civil_text(msp, "T梁支点截面 (1:28)", cx_end, y0_end - 11.0, height=2.8, align="CENTER")
+    add_civil_text(msp, "T梁支点截面 (1:25)", cx_end, y0_end - 11.0, height=2.8, align="CENTER")
     half_end_w = 0.5 * end_web_t_mm * s_det
     add_arch_dim(msp, (cx_end - half_end_w, y0_end), (cx_end + half_end_w, y0_end), (cx_end, y0_end - 5.5), f"{end_web_t_mm:g}")
 
@@ -422,9 +472,52 @@ def _draw_tendon_layout(spec: dict[str, Any]) -> ezdxf.document.Drawing:
     bulb_w_mm = float(spec.get("bulb_width_mm", 600.0))
     bulb_h_mm = float(spec.get("bulb_height_mm", 200.0))
     end_web_t_mm = float(spec.get("end_web_thick_mm", 600.0))
-    n_tendons = int(spec.get("n_tendons", 5))
+
+    raw_n_tendons = spec.get("n_tendons", 5)
+    if isinstance(raw_n_tendons, bool) or (isinstance(raw_n_tendons, float) and not raw_n_tendons.is_integer()):
+        raise ValueError(f"n_tendons must be an integer, got {raw_n_tendons!r}")
+    n_tendons = int(raw_n_tendons)
+    if n_tendons < 1 or n_tendons > 10:
+        raise ValueError(f"n_tendons must be between 1 and 10 (got {n_tendons}); refusing to silently alter tendon count")
+
     strands_per = int(spec.get("strands_per_tendon", 6))
+    if strands_per < 1:
+        raise ValueError(f"strands_per_tendon must be >= 1, got {strands_per}")
     half_span_mm = float(spec.get("half_beam_length_mm", 12303.0))
+
+    # Build exact mid-span duct positions (never clamping n_tendons!)
+    bulb_dx = min(120.0, max(60.0, 0.25 * bulb_w_mm))
+    if n_tendons == 1:
+        mid_ducts_mm: list[tuple[str, float, float]] = [("N1", 0.0, 100.0)]
+    elif n_tendons == 2:
+        mid_ducts_mm = [("N1", -bulb_dx, 100.0), ("N2", bulb_dx, 100.0)]
+    else:
+        mid_ducts_mm = [
+            ("N1", -bulb_dx, 100.0),
+            ("N2", bulb_dx, 100.0),
+            ("N3", 0.0, 100.0),
+        ]
+        for extra_idx in range(4, n_tendons + 1):
+            dy_mm = 100.0 + (extra_idx - 3) * 80.0
+            if dy_mm > girder_h_mm - 200.0:
+                raise ValueError(
+                    f"girder height {girder_h_mm:g}mm cannot accommodate {n_tendons} mid-span ducts"
+                )
+            mid_ducts_mm.append((f"N{extra_idx}", 0.0, dy_mm))
+
+    # Build exact girder-end anchorage vertical positions
+    if n_tendons == 1:
+        end_step_mm = 0.0
+        end_ys_mm = [round(0.35 * girder_h_mm, 1)]
+    else:
+        avail_end_mm = girder_h_mm - 420.0
+        end_step_mm = 300.0 if (n_tendons - 1) * 300.0 <= avail_end_mm else math.floor((avail_end_mm / (n_tendons - 1)) / 10.0) * 10.0
+        if end_step_mm < 110.0:
+            raise ValueError(
+                f"girder height {girder_h_mm:g}mm cannot accommodate {n_tendons} anchorage plates at >=110mm pitch"
+            )
+        base_end_y = 240.0
+        end_ys_mm = [base_end_y + i * end_step_mm for i in range(n_tendons)]
 
     doc, msp, b = setup_civil_dxf_document(
         sheet_size=str(spec.get("sheet_size", "A3")),
@@ -432,16 +525,16 @@ def _draw_tendon_layout(spec: dict[str, Any]) -> ezdxf.document.Drawing:
         project=str(spec.get("project", "4×25m 预应力混凝土简支T梁桥")),
         drawing_no=str(spec.get("drawing_no", "QL-03")),
         unit_note="mm",
-        scale_label="1:20 / 1:100",
+        scale_label="1:15 / 纵断示意",
     )
 
-    s_sec = 0.068  # crisp cross-section scale (~1:15)
+    s_sec = 1.0 / 15.0  # exact 1:15 section scale
     y_base = 88.0
 
     # 1. Left: Mid-Span Section (跨中钢束断面)
     cx_mid = 82.0
     mid_poly = build_t_girder_polygon_mm(
-        flange_width_mm=min(flange_w_mm, 1400.0),  # clipped flange width with break lines
+        flange_width_mm=min(flange_w_mm, 1400.0),
         height_mm=girder_h_mm,
         web_thick_mm=web_t_mm,
         bulb_width_mm=bulb_w_mm,
@@ -449,23 +542,15 @@ def _draw_tendon_layout(spec: dict[str, Any]) -> ezdxf.document.Drawing:
     )
     msp.add_lwpolyline([(cx_mid + px * s_sec, y_base + py * s_sec) for px, py in mid_poly], close=True, dxfattribs={"layer": "OUTLINE"})
     msp.add_line((cx_mid, y_base - 8.0), (cx_mid, y_base + girder_h_mm * s_sec + 8.0), dxfattribs={"layer": "CENTER"})
-    add_civil_text(msp, "跨中钢束断面", cx_mid, y_base - 15.0, height=3.0, align="CENTER")
+    add_civil_text(msp, "跨中钢束断面 (1:15)", cx_mid, y_base - 15.0, height=3.0, align="CENTER")
 
-    # Mid-span duct coordinates (mm from bottom fiber, x offset from centerline)
-    mid_ducts_mm = [
-        ("N1", -120.0, 100.0),
-        ("N2", 120.0, 100.0),
-        ("N3", 0.0, 100.0),
-        ("N4", 0.0, 180.0),
-        ("N5", 0.0, 260.0),
-    ][: max(2, min(5, n_tendons))]
-
+    tag_pitch = min(9.0, 82.0 / max(1, n_tendons))
     for idx, (tag, dx_mm, dy_mm) in enumerate(mid_ducts_mm):
         px = cx_mid + dx_mm * s_sec
         py = y_base + dy_mm * s_sec
-        msp.add_circle((px, py), 2.1, dxfattribs={"layer": "TENDON"})
+        msp.add_circle((px, py), 2.0, dxfattribs={"layer": "TENDON"})
         tag_x = cx_mid + (36.0 if dx_mm >= 0 else -36.0)
-        tag_y = y_base + (10.0 + idx * 9.5)
+        tag_y = y_base + (8.0 + idx * tag_pitch)
         draw_boxed_tag(msp, tag_x, tag_y, tag, leader_to=(px, py))
 
     add_arch_dim(msp, (cx_mid - 0.5 * bulb_w_mm * s_sec, y_base), (cx_mid + 0.5 * bulb_w_mm * s_sec, y_base), (cx_mid, y_base - 7.0), f"{bulb_w_mm:g}")
@@ -483,19 +568,33 @@ def _draw_tendon_layout(spec: dict[str, Any]) -> ezdxf.document.Drawing:
     )
     msp.add_lwpolyline([(cx_end + px * s_sec, y_base + py * s_sec) for px, py in end_poly], close=True, dxfattribs={"layer": "OUTLINE"})
     msp.add_line((cx_end, y_base - 8.0), (cx_end, y_base + girder_h_mm * s_sec + 8.0), dxfattribs={"layer": "CENTER"})
-    add_civil_text(msp, "梁端锚固断面", cx_end, y_base - 15.0, height=3.0, align="CENTER")
+    add_civil_text(msp, "梁端锚固断面 (1:15)", cx_end, y_base - 15.0, height=3.0, align="CENTER")
 
-    end_ys_mm: list[float] = []
-    for idx in range(len(mid_ducts_mm)):
+    for idx, ey_mm in enumerate(end_ys_mm):
         tag = mid_ducts_mm[idx][0]
-        ey_mm = 260.0 + idx * 300.0
-        end_ys_mm.append(ey_mm)
         py = y_base + ey_mm * s_sec
-        msp.add_circle((cx_end, py), 2.5, dxfattribs={"layer": "TENDON"})
-        draw_boxed_tag(msp, cx_end + 34.0, py, tag, leader_to=(cx_end + 2.5, py))
+        msp.add_circle((cx_end, py), 2.3, dxfattribs={"layer": "TENDON"})
+        draw_boxed_tag(msp, cx_end + 34.0, py, tag, leader_to=(cx_end + 2.3, py))
         if idx > 0:
             py_prev = y_base + end_ys_mm[idx - 1] * s_sec
-            add_arch_dim(msp, (cx_end - 0.5 * end_web_t_mm * s_sec, py_prev), (cx_end - 0.5 * end_web_t_mm * s_sec, py), (cx_end - 0.5 * end_web_t_mm * s_sec - 8.0, 0.5 * (py_prev + py)), "300", angle=90.0)
+            add_arch_dim(
+                msp,
+                (cx_end - 0.5 * end_web_t_mm * s_sec, py_prev),
+                (cx_end - 0.5 * end_web_t_mm * s_sec, py),
+                (cx_end - 0.5 * end_web_t_mm * s_sec - 8.0, 0.5 * (py_prev + py)),
+                f"{end_step_mm:g}",
+                angle=90.0,
+            )
+    if n_tendons == 1:
+        py0 = y_base + end_ys_mm[0] * s_sec
+        add_arch_dim(
+            msp,
+            (cx_end - 0.5 * end_web_t_mm * s_sec, y_base),
+            (cx_end - 0.5 * end_web_t_mm * s_sec, py0),
+            (cx_end - 0.5 * end_web_t_mm * s_sec - 8.0, 0.5 * (y_base + py0)),
+            f"{end_ys_mm[0]:g}",
+            angle=90.0,
+        )
 
     # 3. Right: Half-Span Parabolic Tendon Profile + Prestress Summary
     x_prof_end = 258.0
@@ -515,8 +614,7 @@ def _draw_tendon_layout(spec: dict[str, Any]) -> ezdxf.document.Drawing:
         ey_mm = end_ys_mm[idx]
         pts_curve: list[tuple[float, float]] = []
         for k in range(25):
-            u = k / 24.0  # u=0 at end, u=1 at mid-span
-            # Smooth tangent-flat parabola at mid-span: y(u) = mid_y + (end_y - mid_y)*(1 - u)^2
+            u = k / 24.0
             yk_mm = mid_y_mm + (ey_mm - mid_y_mm) * ((1.0 - u) ** 2)
             xk_p = x_prof_end + u * (x_prof_mid - x_prof_end)
             yk_p = y_prof_bot + (yk_mm / girder_h_mm) * h_prof
@@ -529,7 +627,7 @@ def _draw_tendon_layout(spec: dict[str, Any]) -> ezdxf.document.Drawing:
     ps_info = compute_prestress_estimation_and_loss(strands_per_tendon=strands_per)
     add_civil_text(
         msp,
-        f"钢束规格：{len(mid_ducts_mm)}束 Φs15.2-{strands_per} (fpk=1860MPa, σcon=1395MPa, 跨中有效预应力≈{ps_info['loss_profile'][5]['effective_prestress_mpa']:.0f}MPa)",
+        f"钢束规格：{n_tendons}束 Φs15.2-{strands_per} (fpk=1860MPa, σcon=1395MPa, 跨中有效预应力≈{ps_info['loss_profile'][5]['effective_prestress_mpa']:.0f}MPa)",
         b["ix0"] + 6.0,
         b["iy0"] + 16.0,
         height=2.3,
@@ -561,7 +659,7 @@ def _draw_pier_and_abutment(spec: dict[str, Any]) -> ezdxf.document.Drawing:
         scale_label="1:80",
     )
 
-    s_pier = 0.0135  # ~1:74
+    s_pier = 1.0 / 80.0  # exact 1:80 scale matching title block
     cx_elev = 112.0
     y_cap_top = 224.0
 

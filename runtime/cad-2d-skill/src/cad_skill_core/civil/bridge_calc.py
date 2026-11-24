@@ -64,7 +64,9 @@ def compute_hydrology_and_span(
     velocity_m_s = inv_n * (hydraulic_radius_m ** (2.0 / 3.0)) * math.sqrt(slope_i)
     channel_discharge_q_c = area_m2 * velocity_m_s
     total_discharge_q = channel_discharge_q_c + floodplain_area_m2 * floodplain_velocity_m_s
-    q_s = design_discharge_m3_s if design_discharge_m3_s is not None else total_discharge_q
+    if design_discharge_m3_s is not None and design_discharge_m3_s <= 0:
+        raise ValueError("design_discharge_m3_s must be > 0")
+    q_s = float(design_discharge_m3_s) if design_discharge_m3_s is not None else total_discharge_q
 
     net_opening_l_j = stability_k * ((q_s / channel_discharge_q_c) ** stability_exp_n) * channel_width_m
     recommended_spans = max(1, math.ceil(net_opening_l_j / standard_span_m))
@@ -76,7 +78,8 @@ def compute_hydrology_and_span(
         "slope_i": slope_i,
         "main_channel_velocity_m_s": round(velocity_m_s, 4),
         "channel_discharge_m3_s": round(channel_discharge_q_c, 3),
-        "design_discharge_m3_s": round(total_discharge_q, 3),
+        "natural_total_discharge_m3_s": round(total_discharge_q, 3),
+        "design_discharge_m3_s": round(q_s, 3),
         "net_opening_length_m": round(net_opening_l_j, 3),
         "standard_span_m": round(standard_span_m, 3),
         "recommended_spans": recommended_spans,
@@ -778,6 +781,19 @@ def solve_continuous_cap_beam_1d(
 
     if n_columns < 2:
         raise ValueError("n_columns must be >= 2")
+    if cap_length_m <= 0:
+        raise ValueError("cap_length_m must be > 0")
+    n_girders = len(girder_reactions_kn)
+    if n_girders < 1:
+        raise ValueError("girder_reactions_kn must contain at least 1 girder reaction")
+    if (n_girders - 1) * girder_spacing_m > cap_length_m + 1e-6:
+        raise ValueError(
+            f"girder span {(n_girders - 1) * girder_spacing_m:.3f}m exceeds cap_length_m {cap_length_m:.3f}m"
+        )
+    if (n_columns - 1) * column_spacing_m > cap_length_m + 1e-6:
+        raise ValueError(
+            f"column span {(n_columns - 1) * column_spacing_m:.3f}m exceeds cap_length_m {cap_length_m:.3f}m"
+        )
     half_cap = 0.5 * cap_length_m
 
     # Support coordinates (centered on cap beam [0, cap_length_m])
@@ -785,7 +801,6 @@ def solve_continuous_cap_beam_1d(
         round(half_cap + (i - 0.5 * (n_columns - 1)) * column_spacing_m, 6)
         for i in range(n_columns)
     ]
-    n_girders = len(girder_reactions_kn)
     girder_xs = [
         round(half_cap + (i - 0.5 * (n_girders - 1)) * girder_spacing_m, 6)
         for i in range(n_girders)
@@ -970,6 +985,17 @@ def audit_bridge_design_consistency(spec: dict[str, Any]) -> dict[str, Any]:
                 "message": f"主梁片数 ({n_girders}) 与 盖梁支座垫石数量 ({n_pier_pedestals}) 不一致",
             }
         )
+    cap_length_m = spec.get("cap_length_m")
+    if cap_length_m is not None and n_girders is not None and girder_spacing_mm is not None:
+        req_span_m = (int(n_girders) - 1) * (float(girder_spacing_mm) / 1000.0)
+        if float(cap_length_m) + 1e-6 < req_span_m:
+            issues.append(
+                {
+                    "code": "CAP_BEAM_LENGTH_INSUFFICIENT",
+                    "severity": "error",
+                    "message": f"盖梁长度 ({cap_length_m}m) 小于最外侧主梁中心距 ({req_span_m:.3f}m)",
+                }
+            )
 
     # 3. Deck pavement thickness 10x unit typo check (catches '110cm 厚沥青' / '100cm 厚混凝土')
     for layer in spec.get("pavement_layers", []):
@@ -1019,7 +1045,28 @@ def audit_bridge_design_consistency(spec: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-_NUM_RE = re.compile(r"[-+]?\d+(?:\.\d+)?")
+_STRICT_CELL_NUM_RE = re.compile(
+    r"^\s*([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)\s*(?:[a-zA-Z°%‰μµΩ/·⋅²³\-\(\)]+)?\s*$"
+)
+_CLAIM_TOKENS = frozenset({"是", "否", "满足", "不满足", "合格", "不合格", "PASS", "FAIL", "true", "false"})
+_PASS_TOKENS = frozenset({"是", "满足", "合格", "PASS", "true"})
+_STATUS_HEADER_RE = re.compile(r"是否|满足|合格|结论|结果|status|pass|verdict", re.IGNORECASE)
+
+
+def _parse_table_number(cell: str) -> float | None:
+    s = (cell or "").strip()
+    if not s:
+        return None
+    # Strip thousands commas like '1,250.5' while leaving non-numeric text untouched
+    s_norm = re.sub(r"(?<=\d),(?=\d{3}(?:\D|$))", "", s)
+    m = _STRICT_CELL_NUM_RE.match(s_norm)
+    if not m:
+        return None
+    try:
+        val = float(m.group(1))
+    except ValueError:
+        return None
+    return val if math.isfinite(val) else None
 
 
 def ingest_and_audit_calc_table(
@@ -1059,46 +1106,110 @@ def ingest_and_audit_calc_table(
         raise ValueError("table requires a header row and at least one data row")
 
     headers = rows[0]
+    data_rows = rows[1:]
+    max_cols = max(len(r) for r in rows)
+
+    # Determine expected column groups [(val_col, lim_col, status_col_or_None), ...] after section col 0
+    col_groups: list[tuple[int, int, int | None]] = []
+    col_i = 1
+    while col_i + 1 < max_cols:
+        has_status_col = False
+        if col_i + 2 < max_cols:
+            hdr_c2 = headers[col_i + 2] if col_i + 2 < len(headers) else ""
+            if _STATUS_HEADER_RE.search(hdr_c2) or any(
+                (col_i + 2 < len(dr) and dr[col_i + 2] in _CLAIM_TOKENS) for dr in data_rows
+            ):
+                has_status_col = True
+        if has_status_col:
+            col_groups.append((col_i, col_i + 1, col_i + 2))
+            col_i += 3
+        else:
+            col_groups.append((col_i, col_i + 1, None))
+            col_i += 2
+
     parsed_checks: list[dict[str, Any]] = []
-    for r_idx, r in enumerate(rows[1:], start=1):
-        if len(r) < 2:
+    unverified_rows: list[dict[str, Any]] = []
+    table_issues: list[dict[str, Any]] = []
+
+    for r_idx, r in enumerate(data_rows, start=1):
+        sec_label = r[0] if r else f"row-{r_idx}"
+        if not col_groups or len(r) < 3:
+            unverified_rows.append({"row": r_idx, "section": sec_label, "reason": "insufficient_columns"})
+            table_issues.append(
+                {
+                    "code": "UNVERIFIED_TABLE_ROW",
+                    "severity": "error",
+                    "message": f"第 {r_idx} 行截面 {sec_label!r} 缺少完整的（计算值, 容许限值）列，未完成校核",
+                }
+            )
             continue
-        sec_label = r[0]
-        # Pair up (value, allowable, optional pass/fail) columns
-        i = 1
-        pair_idx = 1
-        while i + 1 < len(r):
-            m1 = _NUM_RE.search(r[i])
-            m2 = _NUM_RE.search(r[i + 1])
-            if m1 and m2:
-                val = float(m1.group(0))
-                lim = float(m2.group(0))
-                claimed: bool | None = None
-                step = 2
-                if i + 2 < len(r) and r[i + 2] in {"是", "否", "满足", "不满足", "PASS", "FAIL", "true", "false"}:
-                    claimed = r[i + 2] in {"是", "满足", "PASS", "true"}
-                    step = 3
-                metric_name = headers[i] if i < len(headers) else f"check_{pair_idx}"
-                parsed_checks.append(
+
+        for g_idx, (c_val, c_lim, c_claim) in enumerate(col_groups, start=1):
+            raw_val = r[c_val] if c_val < len(r) else ""
+            raw_lim = r[c_lim] if c_lim < len(r) else ""
+            metric_name = headers[c_val] if c_val < len(headers) and headers[c_val] else f"check_{g_idx}"
+            val = _parse_table_number(raw_val)
+            lim = _parse_table_number(raw_lim)
+            if val is None or lim is None:
+                unverified_rows.append(
                     {
+                        "row": r_idx,
                         "section": sec_label,
                         "metric": metric_name,
-                        "value": val,
-                        "allowable": lim,
-                        "claimed_pass": claimed,
+                        "raw_value": raw_val,
+                        "raw_allowable": raw_lim,
                     }
                 )
-                pair_idx += 1
-                i += step
-            else:
-                i += 1
+                table_issues.append(
+                    {
+                        "code": "UNVERIFIED_TABLE_VALUE",
+                        "severity": "error",
+                        "message": (
+                            f"第 {r_idx} 行截面 {sec_label!r} [{metric_name}] 存在缺失或不可解析数据 "
+                            f"(计算值={raw_val!r}, 容许值={raw_lim!r})，拒绝判为通过"
+                        ),
+                    }
+                )
+                continue
+
+            claimed: bool | None = None
+            if c_claim is not None and c_claim < len(r) and r[c_claim] in _CLAIM_TOKENS:
+                claimed = r[c_claim] in _PASS_TOKENS
+            parsed_checks.append(
+                {
+                    "section": sec_label,
+                    "metric": metric_name,
+                    "value": val,
+                    "allowable": lim,
+                    "claimed_pass": claimed,
+                }
+            )
+
+    if not parsed_checks and not table_issues:
+        table_issues.append(
+            {
+                "code": "EMPTY_VERIFIED_CHECKS",
+                "severity": "error",
+                "message": "计算表中未解析出任何有效校核项，拒绝判为通过",
+            }
+        )
 
     audit_res = audit_bridge_design_consistency({"limit_checks": parsed_checks})
+    merged_issues = [*table_issues, *audit_res["issues"]]
+    err_cnt = sum(1 for item in merged_issues if item["severity"] == "error")
+    merged_audit = {
+        "status": "passed" if (err_cnt == 0 and len(parsed_checks) > 0) else "failed",
+        "error_count": err_cnt,
+        "issue_count": len(merged_issues),
+        "issues": merged_issues,
+    }
     return {
-        "row_count": len(rows) - 1,
+        "row_count": len(data_rows),
         "parsed_check_count": len(parsed_checks),
+        "unverified_count": len(unverified_rows),
+        "unverified_rows": unverified_rows,
         "parsed_checks": parsed_checks,
-        "audit": audit_res,
+        "audit": merged_audit,
     }
 
 
@@ -1114,18 +1225,32 @@ def run_full_bridge_calculation(params: dict[str, Any] | None = None) -> dict[st
         "channel_width_m": 103.08,
         "standard_span_m": 25.0,
     }))
-    section = compute_t_girder_section(**cfg.get("t_girder", {}))
-    lateral = compute_lateral_distribution(**cfg.get("lateral", {}))
+    t_cfg = dict(cfg.get("t_girder", {}))
+    lat_cfg = dict(cfg.get("lateral", {}))
+    if "girder_spacing_m" in lat_cfg and "girder_spacing_mm" not in t_cfg:
+        t_cfg["girder_spacing_mm"] = float(lat_cfg["girder_spacing_m"]) * 1000.0
+    elif "girder_spacing_mm" in t_cfg and "girder_spacing_m" not in lat_cfg:
+        lat_cfg["girder_spacing_m"] = float(t_cfg["girder_spacing_mm"]) / 1000.0
+
+    # Auto-adapt default deck width when n_girders != 5 and deck_width_m was not explicitly supplied
+    n_g_req = int(lat_cfg.get("n_girders", 5))
+    sp_m_req = float(lat_cfg.get("girder_spacing_m", 2.348))
+    if "deck_width_m" not in lat_cfg and (n_g_req != 5 or abs(sp_m_req - 2.348) > 1e-6):
+        lat_cfg["deck_width_m"] = round((n_g_req - 1) * sp_m_req + 2.358, 4)
+
+    section = compute_t_girder_section(**t_cfg)
+    lateral = compute_lateral_distribution(**lat_cfg)
 
     m_oq_gov = max(item["m_oq"] for item in lateral["lever_rule"])
     m_cq_gov = max(item["m_cq"] for item in lateral["eccentric_compression"])
 
+    sup_cfg = dict(cfg.get("superstructure", {}))
     envelopes = compute_superstructure_envelopes(
         section_area_m2=section["mid_span_m"]["area_m2"],
         section_ix_m4=section["mid_span_m"]["ix_m4"],
         m_oq=m_oq_gov,
         m_cq=m_cq_gov,
-        **cfg.get("superstructure", {}),
+        **sup_cfg,
     )
     prestress = compute_prestress_estimation_and_loss(
         m_sls_char_knm=envelopes["mid_span_summary"]["m_sls_char_knm"],
@@ -1135,28 +1260,56 @@ def run_full_bridge_calculation(params: dict[str, Any] | None = None) -> dict[st
         kern_upper_ks_m=section["mid_span_mm"]["kern_upper_ks"] * 1e-3,
         **cfg.get("prestress", {}),
     )
-    cap_beam = solve_continuous_cap_beam_1d(**cfg.get("cap_beam", {}))
-    consistency = audit_bridge_design_consistency(
-        cfg.get(
-            "consistency",
-            {
-                "n_carriageways": 2,
-                "single_deck_width_m": lateral["deck_width_m"],
-                "roadway_width_m": lateral["roadway_width_m"],
-                "barrier_width_m": 0.50,
-                "median_width_m": 1.00,
-                "total_deck_width_m": 2.0 * lateral["deck_width_m"] + 1.00,
-                "n_girders": lateral["n_girders"],
-                "girder_spacing_mm": lateral["girder_spacing_m"] * 1000.0,
-                "pier_bearing_spacing_mm": lateral["girder_spacing_m"] * 1000.0,
-                "n_pier_pedestals": lateral["n_girders"],
-                "pavement_layers": [
-                    {"name": "沥青混凝土面层", "thickness": 110, "unit": "mm"},
-                    {"name": "C40混凝土铺装层", "thickness": 100, "unit": "mm"},
-                ],
-            },
+
+    # Derive per-girder support reactions and geometry for the pier cap beam unless overridden
+    per_girder_reactions_kn: list[float] = []
+    for g_idx in range(lateral["n_girders"]):
+        g_env = compute_superstructure_envelopes(
+            section_area_m2=section["mid_span_m"]["area_m2"],
+            section_ix_m4=section["mid_span_m"]["ix_m4"],
+            m_oq=lateral["lever_rule"][g_idx]["m_oq"],
+            m_cq=lateral["eccentric_compression"][g_idx]["m_cq"],
+            **sup_cfg,
         )
+        per_girder_reactions_kn.append(round(abs(g_env["support_summary"]["q_uls_gov_kn"]), 2))
+
+    cap_cfg = dict(cfg.get("cap_beam", {}))
+    cap_cfg.setdefault("girder_reactions_kn", per_girder_reactions_kn)
+    cap_cfg.setdefault("girder_spacing_m", lateral["girder_spacing_m"])
+    default_cap_len = round((len(cap_cfg["girder_reactions_kn"]) - 1) * float(cap_cfg["girder_spacing_m"]) + 1.558, 4)
+    cap_cfg.setdefault("cap_length_m", default_cap_len)
+    cap_cfg.setdefault("column_spacing_m", round(max(2.0, float(cap_cfg["cap_length_m"]) - 4.30), 4))
+
+    cap_beam = solve_continuous_cap_beam_1d(**cap_cfg)
+
+    actual_pedestals = len(cap_beam["girder_positions_m"])
+    actual_ped_spacing_mm = (
+        round((cap_beam["girder_positions_m"][1] - cap_beam["girder_positions_m"][0]) * 1000.0, 3)
+        if actual_pedestals >= 2
+        else lateral["girder_spacing_m"] * 1000.0
     )
+    default_consistency = {
+        "n_carriageways": 2,
+        "single_deck_width_m": lateral["deck_width_m"],
+        "roadway_width_m": lateral["roadway_width_m"],
+        "barrier_width_m": 0.50,
+        "median_width_m": 1.00,
+        "total_deck_width_m": 2.0 * lateral["deck_width_m"] + 1.00,
+        "n_girders": lateral["n_girders"],
+        "girder_spacing_mm": lateral["girder_spacing_m"] * 1000.0,
+        "pier_bearing_spacing_mm": actual_ped_spacing_mm,
+        "n_pier_pedestals": actual_pedestals,
+        "cap_length_m": cap_beam["cap_length_m"],
+        "pavement_layers": [
+            {"name": "沥青混凝土面层", "thickness": 110, "unit": "mm"},
+            {"name": "C40混凝土铺装层", "thickness": 100, "unit": "mm"},
+        ],
+    }
+    if "consistency" in cfg:
+        merged_cons = {**default_consistency, **cfg["consistency"]}
+    else:
+        merged_cons = default_consistency
+    consistency = audit_bridge_design_consistency(merged_cons)
     return {
         "hydrology": hydro,
         "t_girder_section": section,

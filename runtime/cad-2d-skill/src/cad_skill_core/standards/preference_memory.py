@@ -91,9 +91,19 @@ def save_preference_store(store: ProjectPreferenceStore, memory_path: Path | str
     return p
 
 
-def _make_pref_id(part_family: str, key: str) -> str:
+def _make_pref_id(part_family: str, key: str, value_slug: str | None = None) -> str:
     fam_slug = "all" if part_family in {"*", "auto", ""} else re.sub(r"[^a-z0-9_-]", "-", part_family.lower())
-    return f"pref-{fam_slug}-{key}"
+    base = f"pref-{fam_slug}-{key}"
+    return f"{base}-{value_slug}" if value_slug else base
+
+
+def _slugify_pref_value(value: Any) -> str:
+    raw = json.dumps(value, ensure_ascii=False, sort_keys=True) if isinstance(value, (list, dict)) else str(value)
+    ascii_slug = re.sub(r"[^a-z0-9]+", "-", raw.lower()).strip("-")
+    if ascii_slug and len(ascii_slug) <= 24:
+        return ascii_slug
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:8]
+    return f"{ascii_slug[:14]}-{digest}".strip("-")
 
 
 def record_preference_observation(
@@ -106,11 +116,11 @@ def record_preference_observation(
     source_sha256: str | None = None,
     note: str = "",
     confirm: bool = False,
+    reject: bool = False,
     auto_confirm_threshold: int | None = None,
 ) -> PreferenceEntry:
-    """Record or update a drafting preference observation in the project memory store."""
+    """Record or update a drafting preference observation without clobbering confirmed conflicting entries."""
     norm_fam = "*" if part_family in {"*", "auto", ""} else part_family.strip().lower()
-    pid = _make_pref_id(norm_fam, key)
     store = load_preference_store(memory_path)
 
     ev = PreferenceEvidence(
@@ -119,11 +129,83 @@ def record_preference_observation(
         note=note,
     )
 
-    existing = next((e for e in store.entries if e.pref_id == pid), None)
-    if existing is None:
-        status: PreferenceStatus = "confirmed" if confirm else "candidate"
-        if auto_confirm_threshold is not None and 1 >= auto_confirm_threshold:
+    siblings = [e for e in store.entries if e.part_family == norm_fam and e.key == key]
+    same_val_entry = next((e for e in siblings if e.value == value), None)
+    conflicting_siblings = [e for e in siblings if e.value != value]
+    has_confirmed_conflict = any(s.status == "confirmed" for s in conflicting_siblings)
+
+    if reject:
+        if same_val_entry is not None:
+            same_val_entry.status = "rejected"
+            same_val_entry.evidence.append(ev)
+            entry = same_val_entry
+        else:
+            pid = (
+                _make_pref_id(norm_fam, key)
+                if not siblings
+                else _make_pref_id(norm_fam, key, _slugify_pref_value(value))
+            )
+            entry = PreferenceEntry(
+                pref_id=pid,
+                part_family=norm_fam,
+                key=key,
+                value=value,
+                status="rejected",
+                occurrences=1,
+                evidence=[ev],
+            )
+            store.entries.append(entry)
+        save_preference_store(store, memory_path)
+        return entry
+
+    if same_val_entry is not None:
+        already_same_src = any(
+            item.source_drawing == ev.source_drawing
+            and (ev.source_sha256 is None or item.source_sha256 == ev.source_sha256)
+            for item in same_val_entry.evidence
+        )
+        if not already_same_src:
+            same_val_entry.occurrences += 1
+            same_val_entry.evidence.append(ev)
+        elif confirm and same_val_entry.status != "confirmed":
+            same_val_entry.evidence.append(ev)
+
+        if confirm:
+            same_val_entry.status = "confirmed"
+            for sib in conflicting_siblings:
+                if sib.status == "confirmed":
+                    sib.status = "candidate"
+        elif (
+            auto_confirm_threshold is not None
+            and same_val_entry.occurrences >= auto_confirm_threshold
+            and same_val_entry.status == "candidate"
+            and not has_confirmed_conflict
+        ):
+            same_val_entry.status = "confirmed"
+        entry = same_val_entry
+    else:
+        # Keep existing conflicting entries intact; allocate a disambiguated pref_id when siblings exist
+        base_pid = _make_pref_id(norm_fam, key)
+        if not any(e.pref_id == base_pid for e in store.entries):
+            pid = base_pid
+        else:
+            val_slug = _slugify_pref_value(value)
+            pid = _make_pref_id(norm_fam, key, val_slug)
+            suffix_idx = 2
+            while any(e.pref_id == pid for e in store.entries):
+                pid = _make_pref_id(norm_fam, key, f"{val_slug}-{suffix_idx}")
+                suffix_idx += 1
+
+        if confirm:
+            status: PreferenceStatus = "confirmed"
+            for sib in conflicting_siblings:
+                if sib.status == "confirmed":
+                    sib.status = "candidate"
+        elif auto_confirm_threshold is not None and 1 >= auto_confirm_threshold and not has_confirmed_conflict:
             status = "confirmed"
+        else:
+            status = "candidate"
+
         entry = PreferenceEntry(
             pref_id=pid,
             part_family=norm_fam,
@@ -134,35 +216,6 @@ def record_preference_observation(
             evidence=[ev],
         )
         store.entries.append(entry)
-    else:
-        if existing.value == value:
-            # Count distinct source drawings or explicit observations
-            already_same_src = any(
-                item.source_drawing == ev.source_drawing
-                and (ev.source_sha256 is None or item.source_sha256 == ev.source_sha256)
-                for item in existing.evidence
-            )
-            if not already_same_src:
-                existing.occurrences += 1
-                existing.evidence.append(ev)
-            elif confirm and existing.status != "confirmed":
-                existing.evidence.append(ev)
-        else:
-            existing.value = value
-            existing.occurrences = 1
-            existing.evidence = [ev]
-            if not confirm:
-                existing.status = "candidate"
-
-        if confirm:
-            existing.status = "confirmed"
-        elif (
-            auto_confirm_threshold is not None
-            and existing.occurrences >= auto_confirm_threshold
-            and existing.status == "candidate"
-        ):
-            existing.status = "confirmed"
-        entry = existing
 
     save_preference_store(store, memory_path)
     return entry
@@ -178,8 +231,24 @@ def set_preference_status(
     if target is None:
         raise KeyError(f"preference id not found: {pref_id}")
     target.status = status
+    if status == "confirmed":
+        for other in store.entries:
+            if (
+                other.pref_id != target.pref_id
+                and other.part_family == target.part_family
+                and other.key == target.key
+                and other.status == "confirmed"
+            ):
+                other.status = "candidate"
     save_preference_store(store, memory_path)
     return target
+
+
+_CLAUSE_NEGATION_RE = re.compile(
+    r"(?:不要|别|禁止|严禁|切勿|不得|不可|不能|避免|取消|停用|禁用|不用|不采用|不按|不设|莫|勿|"
+    r"\bdo\s+not\b|\bdon'?t\b|\bnever\b|\bavoid\b|\bforbid\b|\bno\s+longer\b|\bnot\b)",
+    re.IGNORECASE,
+)
 
 
 def teach_preferences_from_text(
@@ -190,7 +259,7 @@ def teach_preferences_from_text(
     source_drawing: str = "user-instruction",
     force_confirm: bool | None = None,
 ) -> list[PreferenceEntry]:
-    """Parse natural-language drafting preference statements and persist them."""
+    """Parse natural-language drafting preference statements (respecting clause-level negation) and persist them."""
     txt = (instruction_text or "").strip()
     if not txt:
         return []
@@ -210,93 +279,129 @@ def teach_preferences_from_text(
         else:
             inferred_fam = "*"
 
-    is_confirmed = (
-        force_confirm
-        if force_confirm is not None
-        else bool(re.search(r"以后|沿用|记住|默认|统一按|确认|均采用|always|remember|confirm", txt, re.IGNORECASE))
+    sentence_has_confirm = bool(
+        re.search(r"以后|沿用|记住|默认|统一|确认|均采用|always|remember|confirm", txt, re.IGNORECASE)
     )
+    topic_has_leader = bool(re.search(r"引线|基准|标注引出|leader", txt, re.IGNORECASE))
+    topic_has_ra = bool(re.search(r"其余|默认粗糙度|未注粗糙度|roughness", txt, re.IGNORECASE))
 
+    clauses = [c.strip() for c in re.split(r"[，,。；;\n]+", txt) if c.strip()]
     recorded: list[PreferenceEntry] = []
 
-    # 1. Hole callout style
-    if re.search(r"(?:数量\s*[×xX*]\s*孔径.*(?:另标|单独标).*节圆)|(?:分开标.*节圆)", txt, re.IGNORECASE):
-        recorded.append(
-            record_preference_observation(
-                memory_path,
-                part_family=inferred_fam,
-                key="hole_callout_style",
-                value="count_x_dia_separate_pcd",
-                source_drawing=source_drawing,
-                note=txt[:120],
-                confirm=is_confirmed,
-            )
-        )
-    elif re.search(r"(?:合并标注|合标|均布于|同一条标注.*节圆|孔数和孔径合并)", txt, re.IGNORECASE):
-        recorded.append(
-            record_preference_observation(
-                memory_path,
-                part_family=inferred_fam,
-                key="hole_callout_style",
-                value="combined_with_pcd",
-                source_drawing=source_drawing,
-                note=txt[:120],
-                confirm=is_confirmed,
+    for clause in clauses:
+        directive_head = re.split(r"[:：]", clause, maxsplit=1)[0]
+        is_negated = bool(_CLAUSE_NEGATION_RE.search(directive_head))
+        clause_confirm = (
+            False
+            if is_negated
+            else (
+                force_confirm
+                if force_confirm is not None
+                else (
+                    sentence_has_confirm
+                    or bool(re.search(r"以后|沿用|记住|默认|统一|确认|均采用|改成|改为|设为", clause, re.IGNORECASE))
+                )
             )
         )
 
-    # 2. Leader / datum side preference
-    if re.search(r"(?:引线|基准|标注引出)[^，。；]{0,12}(?:右侧|右边|右边侧|right)", txt, re.IGNORECASE):
-        recorded.append(
-            record_preference_observation(
-                memory_path,
-                part_family=inferred_fam,
-                key="leader_side",
-                value="right",
-                source_drawing=source_drawing,
-                note=txt[:120],
-                confirm=is_confirmed,
+        # 1. Hole callout style
+        if re.search(r"(?:数量\s*[×xX*]\s*孔径.*(?:另标|单独标).*节圆)|(?:分开标.*节圆)", clause, re.IGNORECASE):
+            recorded.append(
+                record_preference_observation(
+                    memory_path,
+                    part_family=inferred_fam,
+                    key="hole_callout_style",
+                    value="count_x_dia_separate_pcd",
+                    source_drawing=source_drawing,
+                    note=clause[:120],
+                    confirm=clause_confirm,
+                    reject=is_negated,
+                )
             )
-        )
-    elif re.search(r"(?:引线|基准|标注引出)[^，。；]{0,12}(?:左侧|左边|left)", txt, re.IGNORECASE):
-        recorded.append(
-            record_preference_observation(
-                memory_path,
-                part_family=inferred_fam,
-                key="leader_side",
-                value="left",
-                source_drawing=source_drawing,
-                note=txt[:120],
-                confirm=is_confirmed,
+        elif re.search(r"(?:合并标注|合标|均布于|同一条标注.*节圆|孔数和孔径合并)", clause, re.IGNORECASE):
+            recorded.append(
+                record_preference_observation(
+                    memory_path,
+                    part_family=inferred_fam,
+                    key="hole_callout_style",
+                    value="combined_with_pcd",
+                    source_drawing=source_drawing,
+                    note=clause[:120],
+                    confirm=clause_confirm,
+                    reject=is_negated,
+                )
             )
-        )
 
-    # 3. General surface roughness habit
-    m_ra = re.search(r"(?:其余(?:表面)?|默认(?:粗糙度)?|未注粗糙度)[^0-9]{0,10}Ra\s*(\d+(?:\.\d+)?)", txt, re.IGNORECASE)
-    if m_ra:
-        recorded.append(
-            record_preference_observation(
-                memory_path,
-                part_family=inferred_fam,
-                key="default_general_roughness",
-                value=f"Ra {m_ra.group(1)}",
-                source_drawing=source_drawing,
-                note=txt[:120],
-                confirm=is_confirmed,
+        # 2. Leader / datum side preference
+        has_leader_ctx = bool(re.search(r"引线|基准|标注引出|leader", clause, re.IGNORECASE)) or topic_has_leader
+        if has_leader_ctx and re.search(r"(?:右侧|右边|右边侧|\bright\b)", clause, re.IGNORECASE):
+            recorded.append(
+                record_preference_observation(
+                    memory_path,
+                    part_family=inferred_fam,
+                    key="leader_side",
+                    value="right",
+                    source_drawing=source_drawing,
+                    note=clause[:120],
+                    confirm=clause_confirm,
+                    reject=is_negated,
+                )
             )
-        )
+        elif has_leader_ctx and re.search(r"(?:左侧|左边|\bleft\b)", clause, re.IGNORECASE):
+            recorded.append(
+                record_preference_observation(
+                    memory_path,
+                    part_family=inferred_fam,
+                    key="leader_side",
+                    value="left",
+                    source_drawing=source_drawing,
+                    note=clause[:120],
+                    confirm=clause_confirm,
+                    reject=is_negated,
+                )
+            )
 
-    # 4. Default technical note
-    m_note = re.search(r"(?:默认技术要求|固定技术要求|统一加注)\s*[:：]?\s*([^。；\n]+)", txt)
-    if m_note:
+        # 3. General surface roughness habit
+        m_ra = re.search(
+            r"(?:其余(?:表面)?|默认(?:粗糙度)?|未注粗糙度)[^0-9]{0,16}Ra\s*(\d+(?:\.\d+)?)",
+            clause,
+            re.IGNORECASE,
+        )
+        if not m_ra and topic_has_ra:
+            m_ra = re.search(r"Ra\s*(\d+(?:\.\d+)?)", clause, re.IGNORECASE)
+        if m_ra:
+            recorded.append(
+                record_preference_observation(
+                    memory_path,
+                    part_family=inferred_fam,
+                    key="default_general_roughness",
+                    value=f"Ra {m_ra.group(1)}",
+                    source_drawing=source_drawing,
+                    note=clause[:120],
+                    confirm=clause_confirm,
+                    reject=is_negated,
+                )
+            )
+
+        # 4. Default technical note (handled after clause loop to preserve commas inside note text)
+
+    for m_note in re.finditer(r"([^。；;\n]*?(?:默认技术要求|固定技术要求|统一加注)\s*[:：]?\s*)([^。；;\n]+)", txt):
+        note_prefix = m_note.group(1)
+        note_body = m_note.group(2).strip()
+        # Check negation only in the last clause segment immediately preceding the note keyword
+        local_head = re.split(r"[，,]", note_prefix)[-1]
+        note_neg = bool(_CLAUSE_NEGATION_RE.search(local_head))
+        note_conf = False if note_neg else (force_confirm if force_confirm is not None else True)
         recorded.append(
             record_preference_observation(
                 memory_path,
                 part_family=inferred_fam,
                 key="default_technical_notes",
-                value=[m_note.group(1).strip()],
+                value=[note_body],
                 source_drawing=source_drawing,
-                note=txt[:120],
-                confirm=is_confirmed,
+                note=m_note.group(0)[:120],
+                confirm=note_conf,
+                reject=note_neg,
             )
         )
 
@@ -462,6 +567,7 @@ def apply_project_preferences_to_spec(
 
     # Family-specific entries take precedence over wildcard "*"
     matching = [e for e in store.entries if e.part_family in {norm_fam, "*"} and e.status != "rejected"]
+    rejected_matching = [e for e in store.entries if e.part_family in {norm_fam, "*"} and e.status == "rejected"]
     matching.sort(key=lambda e: (0 if e.part_family == norm_fam else 1, e.pref_id))
 
     by_key_confirmed: dict[str, PreferenceEntry] = {}
@@ -481,12 +587,33 @@ def apply_project_preferences_to_spec(
                 }
             )
 
-    if not by_key_confirmed:
+    if not by_key_confirmed and not rejected_matching:
         return spec, [], candidates_out
 
     updated = spec.model_copy(deep=True)
     applied_out: list[dict[str, Any]] = []
     primary_src_id = updated.provenance[0].id if updated.provenance else "src-pref"
+
+    # Enforce rejected prohibitions against auto-synthesized defaults when no positive override is confirmed
+    if "default_general_roughness" not in by_key_confirmed and not flags.get("explicit_general_ra", False):
+        forbidden_ras = {str(e.value) for e in rejected_matching if e.key == "default_general_roughness"}
+        if forbidden_ras:
+            updated.surface_finishes = [
+                sf for sf in updated.surface_finishes
+                if not (sf.is_general and str(sf.value) in forbidden_ras)
+            ]
+    if "leader_side" not in by_key_confirmed:
+        forbidden_sides = {str(e.value) for e in rejected_matching if e.key == "leader_side"}
+        if "right" in forbidden_sides and "left" not in forbidden_sides:
+            updated.geometry.parameters["preferred_leader_side"] = "left"
+            for dat in updated.datums:
+                if dat.placement == "right-center":
+                    dat.placement = "left-center"
+        elif "left" in forbidden_sides and "right" not in forbidden_sides:
+            updated.geometry.parameters["preferred_leader_side"] = "right"
+            for dat in updated.datums:
+                if dat.placement == "left-center":
+                    dat.placement = "right-center"
 
     for key, entry in by_key_confirmed.items():
         srcs_str = ", ".join(dict.fromkeys(ev.source_drawing for ev in entry.evidence)) or "project-memory"
