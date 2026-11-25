@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+import json
 import math
-from typing import Literal
+from typing import Any, Literal
 
 import ezdxf
 from ezdxf.document import Drawing
@@ -11,6 +14,14 @@ from ezdxf.enums import TextEntityAlignment
 from ezdxf.layouts import Modelspace
 
 FORBIDDEN_GB_AXIS_LETTERS = frozenset({"I", "O", "Z"})
+VIEW_XDATA_APPID = "CAD_SKILL_VIEW"
+META_XDATA_APPID = "CAD_SKILL_META"
+
+_UNIT_TO_MM: dict[str, float] = {
+    "mm": 1.0,
+    "cm": 10.0,
+    "m": 1000.0,
+}
 
 SHEET_SIZES_MM: dict[str, tuple[float, float]] = {
     "A0": (1189.0, 841.0),
@@ -19,6 +30,87 @@ SHEET_SIZES_MM: dict[str, tuple[float, float]] = {
     "A3": (420.0, 297.0),
     "A4": (297.0, 210.0),
 }
+
+
+@dataclass(frozen=True, slots=True)
+class ViewBox:
+    """Isotropic true-scale coordinate mapper from physical engineering units to paper mm."""
+
+    view_id: str
+    origin_x: float
+    origin_y: float
+    scale_denom: float
+    real_unit: Literal["mm", "cm", "m"] = "mm"
+
+    def __post_init__(self) -> None:
+        if self.scale_denom <= 0:
+            raise ValueError(f"scale_denom must be > 0, got {self.scale_denom}")
+        if self.real_unit not in _UNIT_TO_MM:
+            raise ValueError(f"unsupported real_unit {self.real_unit!r}")
+
+    @property
+    def paper_per_real(self) -> float:
+        return _UNIT_TO_MM[self.real_unit] / float(self.scale_denom)
+
+    @property
+    def paper_per_mm(self) -> float:
+        return 1.0 / float(self.scale_denom)
+
+    def x(self, real_x: float) -> float:
+        return self.origin_x + float(real_x) * self.paper_per_real
+
+    def y(self, real_y: float) -> float:
+        return self.origin_y + float(real_y) * self.paper_per_real
+
+    def pt(self, real_x: float, real_y: float) -> tuple[float, float]:
+        s = self.paper_per_real
+        return (self.origin_x + float(real_x) * s, self.origin_y + float(real_y) * s)
+
+    def span(self, real_len: float) -> float:
+        return float(real_len) * self.paper_per_real
+
+    def register(
+        self,
+        doc: Drawing,
+        msp: Modelspace,
+        *,
+        paper_bounds: tuple[float, float, float, float] | None = None,
+    ) -> None:
+        """Persist machine-readable viewport scale metadata on the sheet FRAME for reopen-DXF verification."""
+        payload = {
+            "view_id": self.view_id,
+            "origin_x": round(self.origin_x, 6),
+            "origin_y": round(self.origin_y, 6),
+            "scale_denom": float(self.scale_denom),
+            "real_unit": self.real_unit,
+            "paper_bounds": [round(v, 4) for v in paper_bounds] if paper_bounds is not None else None,
+        }
+        _append_xdata_json(doc, msp, VIEW_XDATA_APPID, payload)
+
+
+def _find_carrier_entity(msp: Modelspace):
+    for ent in msp:
+        if ent.dxftype() == "LWPOLYLINE" and str(ent.dxf.get("layer", "")).upper() == "FRAME":
+            return ent
+    return next(iter(msp), None)
+
+
+def _append_xdata_json(doc: Drawing, msp: Modelspace, appid: str, obj: Mapping[str, Any]) -> None:
+    if appid not in doc.appids:
+        doc.appids.add(appid)
+    carrier = _find_carrier_entity(msp)
+    if carrier is None:
+        return
+    raw = json.dumps(dict(obj), ensure_ascii=False)
+    # Encode one JSON record as chunked 1000 strings separated by a 1002 control brace or sentinel prefix
+    chunks = [(1000, ("@@REC@@" if i == 0 else "@@CONT@@") + raw[i : i + 190]) for i in range(0, len(raw), 190)]
+    existing = list(carrier.get_xdata(appid)) if carrier.has_xdata(appid) else []
+    carrier.set_xdata(appid, [*existing, *chunks])
+
+
+def attach_sheet_metadata(doc: Drawing, msp: Modelspace, key: str, data: Mapping[str, Any]) -> None:
+    """Attach structured sheet/calc/schedule metadata onto the sheet FRAME so reopen-DXF audits are self-contained."""
+    _append_xdata_json(doc, msp, META_XDATA_APPID, {"key": key, "data": dict(data)})
 
 
 def setup_civil_dxf_document(
@@ -31,8 +123,15 @@ def setup_civil_dxf_document(
     organization: str = "土木与交通工程设计院",
     unit_note: str = "mm",
     scale_label: str = "图示比例",
+    style_overrides: Mapping[str, Any] | None = None,
 ) -> tuple[Drawing, Modelspace, dict[str, float]]:
     """Create a GB/T civil construction DXF with ARCHTICK dimstyle, lineweights, and title block."""
+
+    overrides = dict(style_overrides or {})
+    eff_font = str(overrides.get("font") or font)
+    layer_color_map = {str(k).upper(): int(v) for k, v in dict(overrides.get("layer_colors") or {}).items()}
+    dim_stack_step = float(overrides.get("dim_stack_step_mm", 8.5))
+    schedule_dock = str(overrides.get("schedule_dock", "bottom_right"))
 
     size_key = sheet_size.upper()
     if size_key not in SHEET_SIZES_MM:
@@ -43,10 +142,10 @@ def setup_civil_dxf_document(
     doc.units = ezdxf.units.MM
 
     if "CIVIL_TEXT" not in doc.styles:
-        st = doc.styles.add("CIVIL_TEXT", font=font)
+        st = doc.styles.add("CIVIL_TEXT", font=eff_font)
         st.dxf.width = 0.80
     if "CIVIL_TITLE" not in doc.styles:
-        st_t = doc.styles.add("CIVIL_TITLE", font=font)
+        st_t = doc.styles.add("CIVIL_TITLE", font=eff_font)
         st_t.dxf.width = 0.85
 
     # Explicit millimeter lineweights (in 1/100 mm) matching gb-civil-construction.yaml
@@ -64,11 +163,12 @@ def setup_civil_dxf_document(
         ("TERRAIN", 32, "CONTINUOUS", 35),
     ]
     for name, color, ltype, lw in layer_defs:
+        eff_color = layer_color_map.get(name, color)
         if name not in doc.layers:
-            doc.layers.add(name, color=color, linetype=ltype, lineweight=lw)
+            doc.layers.add(name, color=eff_color, linetype=ltype, lineweight=lw)
         else:
             lyr = doc.layers.get(name)
-            lyr.dxf.color = color
+            lyr.dxf.color = eff_color
             lyr.dxf.lineweight = lw
 
     if "CIVIL_ARCH" not in doc.dimstyles:
@@ -145,7 +245,24 @@ def setup_civil_dxf_document(
     doc.header["$EXTMIN"] = (0.0, 0.0, 0.0)
     doc.header["$EXTMAX"] = (sheet_w, sheet_h, 0.0)
 
-    bounds = {
+    attach_sheet_metadata(
+        doc,
+        msp,
+        "sheet_identity",
+        {
+            "drawing_no": drawing_no,
+            "title": title,
+            "project": project,
+            "sheet_size": size_key,
+            "unit_note": unit_note,
+            "scale_label": scale_label,
+            "font": eff_font,
+            "dim_stack_step_mm": dim_stack_step,
+            "schedule_dock": schedule_dock,
+        },
+    )
+
+    bounds: dict[str, Any] = {
         "sheet_w": sheet_w,
         "sheet_h": sheet_h,
         "ix0": ix0,
@@ -155,6 +272,8 @@ def setup_civil_dxf_document(
         "tb_x0": tb_x0,
         "tb_y1": tb_y0 + tb_h,
         "content_top": iy1 - 16.0,
+        "dim_stack_step": dim_stack_step,
+        "schedule_dock": schedule_dock,
     }
     return doc, msp, bounds
 
@@ -441,3 +560,223 @@ def draw_bearing_symbol(
         ext = 0.90 * size
         msp.add_line((x - ext, y), (x + ext, y), dxfattribs={"layer": "REBAR"})
         msp.add_line((x, y - ext), (x, y + ext), dxfattribs={"layer": "REBAR"})
+
+
+def draw_comb_leader(
+    msp: Modelspace,
+    probe_x: float,
+    layer_ys: Sequence[float],
+    labels: Sequence[str],
+    *,
+    shelf_x: float,
+    shelf_top_y: float,
+    shelf_width: float = 46.0,
+    row_pitch: float = 4.6,
+    layer: str = "DIM",
+) -> None:
+    """Draw a GB/T multi-layer comb callout piercing thin pavement/structural layers without text overlap."""
+    if not layer_ys or not labels:
+        return
+    y_lo = min(layer_ys) - 0.8
+    y_hi = max(max(layer_ys), shelf_top_y)
+    msp.add_line((probe_x, y_lo), (probe_x, y_hi), dxfattribs={"layer": layer})
+    for py in layer_ys:
+        msp.add_line((probe_x - 0.85, py - 0.85), (probe_x + 0.85, py + 0.85), dxfattribs={"layer": layer})
+
+    sign = 1.0 if shelf_x >= probe_x else -1.0
+    msp.add_line((probe_x, shelf_top_y), (shelf_x, shelf_top_y), dxfattribs={"layer": layer})
+    for idx, txt in enumerate(labels):
+        ry = shelf_top_y - idx * row_pitch
+        if idx > 0:
+            msp.add_line((shelf_x, shelf_top_y), (shelf_x, ry), dxfattribs={"layer": layer})
+        x_end = shelf_x + sign * shelf_width
+        msp.add_line((shelf_x, ry), (x_end, ry), dxfattribs={"layer": layer})
+        tx = shelf_x + 1.2 if sign > 0 else shelf_x - 1.2
+        add_civil_text(msp, txt, tx, ry + 0.7, height=2.1, align="LEFT" if sign > 0 else "RIGHT")
+
+
+def draw_detail_callout(
+    msp: Modelspace,
+    cx: float,
+    cy: float,
+    radius: float,
+    label: str,
+    *,
+    leader_to: tuple[float, float],
+    layer: str = "HIDDEN",
+) -> None:
+    """Draw a dashed detail zoom ring with an external callout shelf (e.g. 'I (见1:10详图)')."""
+    msp.add_circle((cx, cy), radius, dxfattribs={"layer": layer})
+    lx, ly = leader_to
+    dx, dy = lx - cx, ly - cy
+    dist = max(1e-4, math.hypot(dx, dy))
+    sx, sy = cx + dx * (radius / dist), cy + dy * (radius / dist)
+    msp.add_line((sx, sy), (lx, ly), dxfattribs={"layer": "DIM"})
+    sign = 1.0 if lx >= cx else -1.0
+    msp.add_line((lx, ly), (lx + sign * 16.0, ly), dxfattribs={"layer": "DIM"})
+    add_civil_text(
+        msp,
+        label,
+        lx + (1.0 if sign > 0 else -1.0),
+        ly + 0.8,
+        height=2.1,
+        align="LEFT" if sign > 0 else "RIGHT",
+    )
+
+
+def _draw_mini_rebar_shape(
+    msp: Modelspace,
+    shape: str,
+    cx: float,
+    cy: float,
+    w: float,
+    h: float,
+) -> None:
+    hw, hh = 0.42 * w, 0.34 * h
+    st = (shape or "straight_hook").lower()
+    if st == "stirrup_rect":
+        msp.add_lwpolyline(
+            [(cx - 0.55 * hw, cy - hh), (cx + 0.55 * hw, cy - hh), (cx + 0.55 * hw, cy + hh), (cx - 0.55 * hw, cy + hh)],
+            close=True,
+            dxfattribs={"layer": "REBAR"},
+        )
+    elif st == "bent_up":
+        msp.add_lwpolyline(
+            [
+                (cx - hw, cy + 0.75 * hh),
+                (cx - 0.62 * hw, cy + 0.75 * hh),
+                (cx - 0.28 * hw, cy - 0.75 * hh),
+                (cx + 0.28 * hw, cy - 0.75 * hh),
+                (cx + 0.62 * hw, cy + 0.75 * hh),
+                (cx + hw, cy + 0.75 * hh),
+            ],
+            close=False,
+            dxfattribs={"layer": "REBAR"},
+        )
+    elif st == "u_hairpin":
+        msp.add_lwpolyline(
+            [(cx - 0.75 * hw, cy + hh), (cx - 0.75 * hw, cy - hh), (cx + 0.75 * hw, cy - hh), (cx + 0.75 * hw, cy + hh)],
+            close=False,
+            dxfattribs={"layer": "REBAR"},
+        )
+    elif st == "spiral_hoop":
+        msp.add_circle((cx, cy), min(0.45 * hw, hh), dxfattribs={"layer": "REBAR"})
+    else:
+        msp.add_lwpolyline(
+            [(cx - hw, cy + 0.65 * hh), (cx - hw, cy - 0.35 * hh), (cx + hw, cy - 0.35 * hh), (cx + hw, cy + 0.65 * hh)],
+            close=False,
+            dxfattribs={"layer": "REBAR"},
+        )
+
+
+def draw_rebar_schedule_table(
+    doc: Drawing,
+    msp: Modelspace,
+    items: Sequence[Mapping[str, Any]],
+    *,
+    x0: float,
+    y0: float,
+    width: float = 180.0,
+    title: str = "钢筋数量明细表",
+) -> dict[str, float]:
+    """Render a standard JTG bridge rebar schedule table with miniature bar shapes and attach traceability metadata."""
+    rows = list(items)
+    hdr_h = 6.2
+    title_h = 6.6
+    row_h = 5.4
+    sum_h = 5.6
+    total_h = title_h + hdr_h + len(rows) * row_h + sum_h
+
+    # Outer table border
+    msp.add_lwpolyline(
+        [(x0, y0), (x0 + width, y0), (x0 + width, y0 + total_h), (x0, y0 + total_h)],
+        close=True,
+        dxfattribs={"layer": "FRAME"},
+    )
+    y_title_bot = y0 + total_h - title_h
+    y_hdr_bot = y_title_bot - hdr_h
+    msp.add_line((x0, y_title_bot), (x0 + width, y_title_bot), dxfattribs={"layer": "FRAME"})
+    msp.add_line((x0, y_hdr_bot), (x0 + width, y_hdr_bot), dxfattribs={"layer": "THIN"})
+
+    add_civil_text(msp, title, x0 + 0.5 * width, y_title_bot + 1.8, height=2.5, align="CENTER")
+
+    col_fracs = (0.11, 0.13, 0.22, 0.14, 0.10, 0.14, 0.16)
+    col_headers = ("编号", "规格(mm)", "大样简图", "单长(cm)", "根数", "总长(m)", "总重(kg)")
+    col_xs = [x0]
+    acc = x0
+    for f in col_fracs[:-1]:
+        acc += f * width
+        col_xs.append(acc)
+    col_xs.append(x0 + width)
+
+    y_sum_top = y0 + sum_h
+    for cx in col_xs[1:-1]:
+        msp.add_line((cx, y_sum_top), (cx, y_title_bot), dxfattribs={"layer": "THIN"})
+    msp.add_line((x0, y_sum_top), (x0 + width, y_sum_top), dxfattribs={"layer": "THIN"})
+
+    for c_i, h_txt in enumerate(col_headers):
+        mcx = 0.5 * (col_xs[c_i] + col_xs[c_i + 1])
+        add_civil_text(msp, h_txt, mcx, y_hdr_bot + 1.8, height=1.95, align="CENTER")
+
+    total_kg = 0.0
+    serialized_rows: list[dict[str, Any]] = []
+    for r_i, item in enumerate(rows):
+        ry_top = y_hdr_bot - r_i * row_h
+        ry_bot = ry_top - row_h
+        if r_i > 0:
+            msp.add_line((x0, ry_top), (x0 + width, ry_top), dxfattribs={"layer": "THIN"})
+        bar_id = str(item.get("bar_id", f"N{r_i+1}"))
+        grade = str(item.get("grade", "HRB400"))
+        dia = float(item.get("dia_mm", 16.0))
+        shape = str(item.get("shape", "straight_hook"))
+        single_cm = float(item.get("single_length_cm", round(float(item.get("single_length_m", 1.0)) * 100.0, 1)))
+        cnt = int(item.get("count", 1))
+        tot_m = round((single_cm / 100.0) * cnt, 2)
+        unit_kg_m = float(item.get("unit_weight_kg_m", round(0.00617 * dia * dia, 3)))
+        wt_kg = float(item.get("total_weight_kg", round(tot_m * unit_kg_m, 1)))
+        total_kg += wt_kg
+        prefix_sym = "%%c" if grade.upper() == "HPB300" else "Φ"
+        cells = (
+            bar_id,
+            f"{prefix_sym}{dia:g}",
+            "",
+            f"{single_cm:.1f}",
+            f"{cnt}",
+            f"{tot_m:.2f}",
+            f"{wt_kg:.1f}",
+        )
+        for c_i, val_s in enumerate(cells):
+            mcx = 0.5 * (col_xs[c_i] + col_xs[c_i + 1])
+            if c_i == 2:
+                _draw_mini_rebar_shape(msp, shape, mcx, 0.5 * (ry_bot + ry_top), col_xs[3] - col_xs[2], row_h)
+            else:
+                add_civil_text(msp, val_s, mcx, ry_bot + 1.5, height=1.9, align="CENTER")
+
+        serialized_rows.append(
+            {
+                "bar_id": bar_id,
+                "grade": grade,
+                "dia_mm": dia,
+                "single_length_cm": single_cm,
+                "count": cnt,
+                "total_length_m": tot_m,
+                "total_weight_kg": round(wt_kg, 2),
+                "calc_basis": str(item.get("calc_basis", "")),
+            }
+        )
+
+    add_civil_text(
+        msp,
+        f"本构件钢筋合计：{total_kg:.1f} kg",
+        x0 + 0.5 * width,
+        y0 + 1.6,
+        height=2.05,
+        align="CENTER",
+    )
+    attach_sheet_metadata(
+        doc,
+        msp,
+        "rebar_schedule",
+        {"title": title, "total_weight_kg": round(total_kg, 2), "items": serialized_rows},
+    )
+    return {"x0": x0, "y0": y0, "x1": x0 + width, "y1": y0 + total_h, "total_weight_kg": round(total_kg, 2)}

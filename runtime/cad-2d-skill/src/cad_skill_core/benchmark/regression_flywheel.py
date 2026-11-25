@@ -27,6 +27,7 @@ class RegressionCaseManifest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     schema_version: Literal["cad-regression-case/v1"] = "cad-regression-case/v1"
+    domain: Literal["revision", "civil_bridge"] = "revision"
     case_id: str
     title: str
     baseline_dxf: str = "baseline.dxf"
@@ -37,6 +38,10 @@ class RegressionCaseManifest(BaseModel):
     structured_ir: dict[str, Any] | None = None
     must_reject: bool = False
     expected_post_conditions: list[PostConditionSpec] = Field(default_factory=list)
+    civil_drawing_type: str | None = None
+    civil_spec: dict[str, Any] | None = None
+    civil_calc_params: dict[str, Any] | None = None
+    expected_bad_code: str | None = None
     bug_note: str = ""
     recorded_at: str = Field(
         default_factory=lambda: datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -149,6 +154,50 @@ def replay_regression_case(case_dir: Path | str) -> dict[str, Any]:
         }
 
     with tempfile.TemporaryDirectory() as tmp_d:
+        if manifest.domain == "civil_bridge":
+            from cad_skill_core.civil.bridge_calc import run_full_bridge_calculation
+            from cad_skill_core.civil.bridge_drawings import generate_civil_bridge_dxf
+            from cad_skill_core.civil.bridge_verify import verify_civil_dxf
+
+            calc = (
+                run_full_bridge_calculation(manifest.civil_calc_params)
+                if manifest.civil_calc_params is not None
+                else None
+            )
+            # 1. Verify the archived broken baseline DXF is flagged as expected
+            base_ver = verify_civil_dxf(base_dxf, calc_report=calc, expected_spec=manifest.civil_spec)
+            bad_caught = base_ver["status"] == "failed" and (
+                manifest.expected_bad_code is None
+                or any(i["code"] == manifest.expected_bad_code for i in base_ver["issues"])
+            )
+            if manifest.must_reject:
+                return {
+                    "case_id": manifest.case_id,
+                    "title": manifest.title,
+                    "passed": bad_caught,
+                    "mode": "civil_must_reject",
+                    "verification": base_ver,
+                }
+            # 2. Regenerate from corrected civil_spec and verify 0 errors on reopen
+            spec_run = dict(manifest.civil_spec or {})
+            if calc is not None:
+                spec_run["_calc_report"] = calc
+            regen_dxf = generate_civil_bridge_dxf(
+                manifest.civil_drawing_type or "t_girder_section",  # type: ignore[arg-type]
+                spec_run,
+                Path(tmp_d) / "civil_out",
+                stem="replayed",
+            )
+            fixed_ver = verify_civil_dxf(regen_dxf, calc_report=calc, expected_spec=spec_run)
+            return {
+                "case_id": manifest.case_id,
+                "title": manifest.title,
+                "passed": bool(bad_caught and fixed_ver["status"] == "passed"),
+                "mode": "civil_correction",
+                "baseline_caught": bad_caught,
+                "verification": fixed_ver,
+            }
+
         work_dxf = Path(tmp_d) / "work_baseline.dxf"
         shutil.copy2(base_dxf, work_dxf)
         out_dir = Path(tmp_d) / "out"
@@ -223,4 +272,57 @@ def replay_regression_vault(vault_dir: Path | str) -> dict[str, Any]:
         "failed": len(results) - passed_cnt,
         "all_passed": passed_cnt == len(results),
         "cases": results,
+    }
+
+
+def record_civil_correction_regression(
+    vault_dir: Path | str,
+    *,
+    case_id: str,
+    title: str,
+    faulty_dxf_path: Path | str,
+    drawing_type: str,
+    corrected_spec: dict[str, Any],
+    calc_params: dict[str, Any] | None = None,
+    expected_bad_code: str | None = None,
+    bug_note: str = "",
+) -> dict[str, Any]:
+    """Archive a user-corrected civil dimension/slope/scale error into the regression vault."""
+    vault = Path(vault_dir).expanduser().resolve()
+    slug = _slugify_case_id(case_id)
+    case_dir = vault / slug
+    case_dir.mkdir(parents=True, exist_ok=True)
+
+    src = Path(faulty_dxf_path).expanduser().resolve(strict=True)
+    dst_dxf = case_dir / "baseline.dxf"
+    if src != dst_dxf:
+        shutil.copy2(src, dst_dxf)
+    digest = sha256_file(dst_dxf)
+
+    manifest = RegressionCaseManifest(
+        domain="civil_bridge",
+        case_id=slug,
+        title=title.strip() or slug,
+        baseline_dxf="baseline.dxf",
+        baseline_sha256=digest,
+        prompt=bug_note or title,
+        civil_drawing_type=drawing_type,
+        civil_spec=dict(corrected_spec),
+        civil_calc_params=dict(calc_params) if calc_params is not None else None,
+        expected_bad_code=expected_bad_code,
+        bug_note=bug_note,
+    )
+    manifest_path = case_dir / "case.json"
+    manifest_path.write_text(
+        json.dumps(manifest.model_dump(mode="json"), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return {
+        "status": "recorded",
+        "domain": "civil_bridge",
+        "case_id": slug,
+        "case_dir": str(case_dir),
+        "manifest_path": str(manifest_path),
+        "baseline_sha256": digest,
+        "expected_bad_code": expected_bad_code,
     }

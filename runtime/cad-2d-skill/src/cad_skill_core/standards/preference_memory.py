@@ -35,6 +35,10 @@ PreferenceKey = Literal[
     "default_general_roughness",
     "preferred_views",
     "default_technical_notes",
+    "civil_text_font",
+    "civil_layer_colors",
+    "civil_dim_stack_step_mm",
+    "civil_schedule_dock",
 ]
 
 PreferenceStatus = Literal["candidate", "confirmed", "rejected"]
@@ -274,6 +278,8 @@ def teach_preferences_from_text(
             inferred_fam = "bearing-cap"
         elif re.search(r"阶梯轴|轴|shaft", txt, re.IGNORECASE):
             inferred_fam = "stepped-shaft"
+        elif re.search(r"桥梁|T梁|盖梁|桥墩|桥台|横断面|bridge|girder", txt, re.IGNORECASE):
+            inferred_fam = "civil_bridge"
         elif re.search(r"支座|支架|bracket", txt, re.IGNORECASE):
             inferred_fam = "ribbed-bracket"
         else:
@@ -376,6 +382,36 @@ def teach_preferences_from_text(
                     part_family=inferred_fam,
                     key="default_general_roughness",
                     value=f"Ra {m_ra.group(1)}",
+                    source_drawing=source_drawing,
+                    note=clause[:120],
+                    confirm=clause_confirm,
+                    reject=is_negated,
+                )
+            )
+
+        # 3b. Civil/Bridge font, dim-stack step & schedule dock habits
+        m_font = re.search(r"字体[^a-zA-Z0-9]{0,8}([a-zA-Z0-9_-]+\.(?:ttf|shx|otf))", clause, re.IGNORECASE)
+        if m_font:
+            recorded.append(
+                record_preference_observation(
+                    memory_path,
+                    part_family=inferred_fam,
+                    key="civil_text_font",
+                    value=m_font.group(1),
+                    source_drawing=source_drawing,
+                    note=clause[:120],
+                    confirm=clause_confirm,
+                    reject=is_negated,
+                )
+            )
+        m_step = re.search(r"(?:尺寸链(?:层距|间距)|标注层距)[^0-9]{0,8}(\d+(?:\.\d+)?)\s*(?:mm)?", clause, re.IGNORECASE)
+        if m_step:
+            recorded.append(
+                record_preference_observation(
+                    memory_path,
+                    part_family=inferred_fam,
+                    key="civil_dim_stack_step_mm",
+                    value=round(float(m_step.group(1)), 2),
                     source_drawing=source_drawing,
                     note=clause[:120],
                     confirm=clause_confirm,
@@ -493,8 +529,17 @@ def extract_habits_from_sample_dxf(
         habits["default_general_roughness"] = f"Ra {m_gen_ra.group(1)}"
 
     inferred_fam = part_family
+    layer_names_up = {str(lyr.dxf.name).upper() for lyr in doc.layers}
+    is_civil_sample = (
+        inferred_fam == "civil_bridge"
+        or bool(layer_names_up & {"REBAR", "TENDON", "TERRAIN"})
+        or ("CIVIL_TEXT" in doc.styles)
+        or any(any(k in s for k in ("T梁", "桥面", "横断面", "桥墩", "盖梁")) for s, _, _ in texts)
+    )
     if inferred_fam in {"auto", ""}:
-        if any("法兰" in s or "flange" in s.lower() for s, _, _ in texts):
+        if is_civil_sample:
+            inferred_fam = "civil_bridge"
+        elif any("法兰" in s or "flange" in s.lower() for s, _, _ in texts):
             inferred_fam = "flange"
         elif any("齿轮" in s or "gear" in s.lower() for s, _, _ in texts):
             inferred_fam = "spur-gear"
@@ -502,6 +547,29 @@ def extract_habits_from_sample_dxf(
             inferred_fam = "bearing-cap"
         else:
             inferred_fam = "*"
+
+    if is_civil_sample:
+        if "CIVIL_TEXT" in doc.styles:
+            f_name = str(doc.styles.get("CIVIL_TEXT").dxf.get("font", "")).strip()
+            if f_name:
+                habits["civil_text_font"] = f_name
+        palette: dict[str, int] = {}
+        for lname in ("OUTLINE", "DIM", "REBAR", "TENDON"):
+            if lname in doc.layers:
+                palette[lname] = int(doc.layers.get(lname).dxf.get("color", 7))
+        if palette:
+            habits["civil_layer_colors"] = palette
+        # Measure stacked horizontal DIMENSION chain vertical spacing if >=2 rows exist
+        horiz_dim_ys = sorted(
+            {
+                round(float(e.dxf.defpoint.y), 1)
+                for e in msp
+                if e.is_alive and e.dxftype() == "DIMENSION" and abs(float(e.dxf.get("angle", 0.0))) < 1.0
+            }
+        )
+        diffs = [round(horiz_dim_ys[i + 1] - horiz_dim_ys[i], 2) for i in range(len(horiz_dim_ys) - 1) if 5.0 <= (horiz_dim_ys[i + 1] - horiz_dim_ys[i]) <= 18.0]
+        if diffs:
+            habits["civil_dim_stack_step_mm"] = diffs[0]
 
     return {
         "source_drawing": p.name,
@@ -686,3 +754,36 @@ def apply_project_preferences_to_spec(
             )
 
     return updated, applied_out, candidates_out
+
+
+def resolve_civil_preferences(
+    memory_path: Path | str | None,
+    *,
+    part_family: str = "civil_bridge",
+) -> dict[str, Any]:
+    """Return ONLY `confirmed` reusable civil drafting habits without ever altering project dimensions."""
+    if memory_path is None:
+        return {}
+    p = Path(memory_path).expanduser().resolve()
+    if not p.is_file():
+        return {}
+    store = load_preference_store(p)
+    norm_fam = part_family.strip().lower() or "civil_bridge"
+    matching = [e for e in store.entries if e.part_family in {norm_fam, "*"} and e.status == "confirmed"]
+    matching.sort(key=lambda e: (0 if e.part_family == norm_fam else 1, e.pref_id))
+
+    by_key: dict[str, PreferenceEntry] = {}
+    for entry in matching:
+        if entry.key not in by_key:
+            by_key[entry.key] = entry
+
+    out: dict[str, Any] = {}
+    if "civil_text_font" in by_key:
+        out["font"] = str(by_key["civil_text_font"].value)
+    if "civil_layer_colors" in by_key and isinstance(by_key["civil_layer_colors"].value, dict):
+        out["layer_colors"] = dict(by_key["civil_layer_colors"].value)
+    if "civil_dim_stack_step_mm" in by_key:
+        out["dim_stack_step_mm"] = float(by_key["civil_dim_stack_step_mm"].value)
+    if "civil_schedule_dock" in by_key:
+        out["schedule_dock"] = str(by_key["civil_schedule_dock"].value)
+    return out

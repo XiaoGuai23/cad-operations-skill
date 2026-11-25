@@ -175,18 +175,35 @@ def _parser() -> argparse.ArgumentParser:
     run_reg.add_argument('--vault', type=Path, default=Path('tests/regressions'), dest='vault_dir')
     run_reg.add_argument('--json', action='store_true', dest='as_json')
 
-    bcalc = commands.add_parser('bridge-calc', help='run zero-dependency highway bridge calculations, 1D cap-beam FEM, or table QA audit')
-    bcalc.add_argument('--mode', choices=('full', 'hydrology', 'section', 'lateral', 'envelopes', 'prestress', 'cap-beam', 'consistency', 'table-audit'), default='full')
+    bcalc = commands.add_parser('bridge-calc', help='run zero-dependency highway bridge calculations, ULS/SLS checks, ledger/BOQ, or table QA audit')
+    bcalc.add_argument('--mode', choices=('full', 'wenchang', 'hydrology', 'section', 'lateral', 'envelopes', 'prestress', 'cap-beam', 'consistency', 'table-audit'), default='full')
     bcalc.add_argument('--params', type=Path, default=None, dest='params_path')
     bcalc.add_argument('--table', type=Path, default=None, dest='table_path')
     bcalc.add_argument('--out', type=Path, default=None, dest='output_path')
     bcalc.add_argument('--json', action='store_true', dest='as_json')
 
-    gcivil = commands.add_parser('generate-civil', help='generate audited Civil & Bridge CAD sheets (DXF + PNG + rubric + audit.json)')
-    gcivil.add_argument('drawing_type', choices=('bridge_elevation', 't_girder_section', 'tendon_layout', 'pier_and_abutment', 'mechanics_diagrams'))
+    gcivil = commands.add_parser('generate-civil', help='generate audited Civil & Bridge CAD sheets or full 18-sheet A3 suite')
+    gcivil.add_argument(
+        'drawing_type',
+        choices=(
+            'bridge_elevation',
+            'bridge_plan_section',
+            't_girder_section',
+            't_girder_general',
+            'tendon_layout',
+            'rebar_detail',
+            'bearing_layout',
+            'deck_ancillary',
+            'pier_and_abutment',
+            'notes_and_boq',
+            'mechanics_diagrams',
+            'full_set',
+        ),
+    )
     gcivil.add_argument('--spec', type=Path, default=None, dest='spec_path')
     gcivil.add_argument('--out', type=Path, required=True, dest='output_dir')
     gcivil.add_argument('--stem', default=None)
+    gcivil.add_argument('--memory', type=Path, default=None, dest='memory_path')
     gcivil.add_argument('--json', action='store_true', dest='as_json')
 
     for name, help_text in (
@@ -606,6 +623,8 @@ def _civil_command(arguments: argparse.Namespace) -> int:
             mode = arguments.mode
             if mode == "full":
                 res = run_full_bridge_calculation(params)
+            elif mode == "wenchang":
+                res = run_full_bridge_calculation({"preset": "wenchang", **params})
             elif mode == "hydrology":
                 res = compute_hydrology_and_span(**params)
             elif mode == "section":
@@ -635,13 +654,27 @@ def _civil_command(arguments: argparse.Namespace) -> int:
             print(_stable_json(payload) if arguments.as_json else json.dumps(payload, ensure_ascii=False, indent=2))
             return 0
 
-        from .civil.bridge_drawings import generate_civil_bridge_bundle
+        from .civil.bridge_drawings import generate_civil_bridge_bundle, generate_full_bridge_drawing_set
 
         spec_obj = (
             json.loads(arguments.spec_path.read_text(encoding="utf-8-sig"))
             if arguments.spec_path is not None
             else {}
         )
+        if arguments.memory_path is not None:
+            spec_obj.setdefault("preference_memory_path", str(arguments.memory_path))
+        if arguments.drawing_type == "full_set":
+            full_res = generate_full_bridge_drawing_set(
+                spec_obj or {"preset": "wenchang"},
+                arguments.output_dir,
+                render_png=False,
+                preference_memory_path=arguments.memory_path,
+            )
+            full_res.pop("calculation_report", None)
+            payload = {"command": "generate-civil", "drawing_type": "full_set", **full_res}
+            print(_stable_json(payload) if arguments.as_json else json.dumps(payload, ensure_ascii=False, indent=2))
+            return 0 if full_res["status"] == "passed" else 1
+
         bundle = generate_civil_bridge_bundle(
             arguments.drawing_type,
             spec_obj,

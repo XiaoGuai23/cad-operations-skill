@@ -394,10 +394,13 @@ def compute_lateral_distribution(
     deck_width_m: float = 11.75,
     left_barrier_m: float = 0.50,
     right_barrier_m: float = 0.50,
+    lateral_clearance_m: float = 0.0,
+    edge_cantilever_m: float | None = None,
     calc_span_m: float = 24.50,
     design_lanes: int = 2,
+    it_to_ix_ratio: float = 0.055,
 ) -> dict[str, Any]:
-    """Compute Lever Rule (m_oq) and Courbon Eccentric Compression (m_cq) lateral distribution factors."""
+    """Compute Lever Rule (m_oq), Courbon Eccentric Compression (m_cq), and Torsion-Corrected (G-M) factors."""
 
     if n_girders < 2:
         raise ValueError("n_girders must be >= 2")
@@ -406,14 +409,26 @@ def compute_lateral_distribution(
 
     # Transverse coordinate x measured from bridge/carriageway centerline [-B/2, +B/2]
     half_deck = deck_width_m / 2.0
-    x_road_left = -half_deck + left_barrier_m
-    x_road_right = half_deck - right_barrier_m
+    x_clear_left = -half_deck + left_barrier_m
+    x_clear_right = half_deck - right_barrier_m
+    clear_width_m = x_clear_right - x_clear_left
+    roadway_width_m = clear_width_m - 2.0 * lateral_clearance_m
+    inferred_cantilever_m = (
+        float(edge_cantilever_m)
+        if edge_cantilever_m is not None
+        else 0.5 * (deck_width_m - (n_girders - 1) * girder_spacing_m)
+    )
 
     # Girder coordinates: girder 1 at leftmost (-), girder n at rightmost (+)
     girder_x = [((i - 0.5 * (n_girders - 1)) * girder_spacing_m) for i in range(n_girders)]
     # In Courbon notation a_1 > 0 for girder 1: a_i = -girder_x[i]
     a_offsets = [-gx for gx in girder_x]
     sum_a2 = sum(a * a for a in a_offsets)
+
+    # Torsional stiffness correction beta = 1 / (1 + gamma) for rigid-jointed T-girders
+    b_eff = n_girders * girder_spacing_m
+    gamma_torsion = 5.8 * it_to_ix_ratio * ((b_eff / max(1.0, calc_span_m)) ** 2)
+    beta_torsion = 1.0 / (1.0 + gamma_torsion)
 
     lever_results: list[dict[str, Any]] = []
     courbon_results: list[dict[str, Any]] = []
@@ -445,7 +460,7 @@ def compute_lateral_distribution(
             return 0.0
 
         m_oq, wheels_oq, lanes_oq = _maximize_vehicle_wheels_on_influence_line(
-            _lever_eta, x_road_left, x_road_right, design_lanes
+            _lever_eta, x_clear_left, x_clear_right, design_lanes
         )
         lever_results.append(
             {
@@ -464,10 +479,16 @@ def compute_lateral_distribution(
         def _courbon_eta(x_pos: float, a_val: float = ai) -> float:
             return (1.0 / n_girders) + (a_val * (-x_pos)) / sum_a2
 
+        def _mod_courbon_eta(x_pos: float, a_val: float = ai) -> float:
+            return (1.0 / n_girders) + beta_torsion * (a_val * (-x_pos)) / sum_a2
+
         eta_at_g1 = _courbon_eta(girder_x[0])
         eta_at_gn = _courbon_eta(girder_x[-1])
         m_cq, wheels_cq, lanes_cq = _maximize_vehicle_wheels_on_influence_line(
-            _courbon_eta, x_road_left, x_road_right, design_lanes
+            _courbon_eta, x_clear_left, x_clear_right, design_lanes
+        )
+        m_cq_mod, _, _ = _maximize_vehicle_wheels_on_influence_line(
+            _mod_courbon_eta, x_clear_left, x_clear_right, design_lanes
         )
         courbon_results.append(
             {
@@ -476,6 +497,7 @@ def compute_lateral_distribution(
                 "eta_g1": round(eta_at_g1, 4),
                 "eta_gn": round(eta_at_gn, 4),
                 "m_cq": round(m_cq, 4),
+                "m_cq_torsion_corrected": round(m_cq_mod, 4),
                 "governing_lanes": lanes_cq,
                 "wheel_positions_m": wheels_cq,
                 "influence_line": [[round(xv, 4), round(_courbon_eta(xv), 4)] for xv in sample_xs],
@@ -488,9 +510,13 @@ def compute_lateral_distribution(
     return {
         "n_girders": n_girders,
         "girder_spacing_m": round(girder_spacing_m, 4),
+        "edge_cantilever_m": round(inferred_cantilever_m, 4),
         "deck_width_m": round(deck_width_m, 4),
-        "roadway_width_m": round(x_road_right - x_road_left, 4),
+        "clear_width_m": round(clear_width_m, 4),
+        "lateral_clearance_m": round(lateral_clearance_m, 4),
+        "roadway_width_m": round(roadway_width_m, 4),
         "sum_a2_m2": round(sum_a2, 4),
+        "torsion_beta": round(beta_torsion, 4),
         "width_to_span_ratio": round(width_span_ratio, 4),
         "eccentric_compression_applicable": bool(width_span_ratio <= 0.5),
         "lever_rule": lever_results,
@@ -732,6 +758,7 @@ def compute_prestress_estimation_and_loss(
         )
 
     return {
+        "sigma_con_mpa": round(sigma_con_mpa, 2),
         "eccentricity_ep_m": round(ep_ecc_m, 4),
         "required_strands_sls": round(n_strands_sls, 2),
         "required_strands_uls": round(n_strands_uls, 2),
@@ -912,39 +939,82 @@ def audit_bridge_design_consistency(spec: dict[str, Any]) -> dict[str, Any]:
 
     issues: list[dict[str, Any]] = []
 
-    # 1. Deck width consistency check (catches the 11.5m vs 11.75m / 24.0m vs 24.5m thesis discrepancy!)
+    # 1. Deck width consistency check (separates roadway_width, clear_width, and single/total deck_width!)
     n_decks = int(spec.get("n_carriageways", 2))
     single_deck_m = spec.get("single_deck_width_m")
+    clear_w_m = spec.get("clear_width_m")
     roadway_m = spec.get("roadway_width_m")
+    lat_clear_m = float(spec.get("lateral_clearance_m", 0.0))
     barrier_m = float(spec.get("barrier_width_m", 0.50))
     median_m = float(spec.get("median_width_m", 1.0 if n_decks == 2 else 0.0))
     total_deck_m = spec.get("total_deck_width_m")
 
+    if clear_w_m is not None and roadway_m is not None:
+        expected_clear = float(roadway_m) + 2.0 * lat_clear_m
+        if abs(float(clear_w_m) - expected_clear) > 0.01:
+            issues.append(
+                {
+                    "code": "DECK_CLEAR_WIDTH_MISMATCH",
+                    "severity": "error",
+                    "message": (
+                        f"护栏内净宽 ({clear_w_m}m) 与 行车道宽+两侧侧向余宽 "
+                        f"({roadway_m} + 2×{lat_clear_m} = {expected_clear:.3f}m) 不一致"
+                    ),
+                }
+            )
+
     if single_deck_m is not None and roadway_m is not None:
-        expected_single = float(roadway_m) + 2.0 * barrier_m
+        expected_single = float(roadway_m) + 2.0 * lat_clear_m + 2.0 * barrier_m
         if abs(float(single_deck_m) - expected_single) > 0.01:
             issues.append(
                 {
                     "code": "DECK_SINGLE_WIDTH_MISMATCH",
                     "severity": "error",
                     "message": (
-                        f"单幅桥面宽 ({single_deck_m}m) 与 行车道宽+两侧护栏 "
-                        f"({roadway_m} + 2×{barrier_m} = {expected_single:.3f}m) 不一致"
+                        f"单幅桥面宽 ({single_deck_m}m) 与 行车道+余宽+两侧护栏 "
+                        f"({roadway_m} + 2×{lat_clear_m} + 2×{barrier_m} = {expected_single:.3f}m) 不一致"
                     ),
                 }
             )
 
     if total_deck_m is not None and single_deck_m is not None:
-        expected_total = n_decks * float(single_deck_m) + median_m
+        expected_total = n_decks * float(single_deck_m) + (median_m if n_decks > 1 else 0.0)
         if abs(float(total_deck_m) - expected_total) > 0.01:
             issues.append(
                 {
                     "code": "DECK_TOTAL_WIDTH_MISMATCH",
                     "severity": "error",
                     "message": (
-                        f"桥梁总宽 ({total_deck_m}m) 与 {n_decks}×单幅({single_deck_m}m)+中央分隔带({median_m}m) "
+                        f"桥梁总宽 ({total_deck_m}m) 与 {n_decks}×单幅({single_deck_m}m)+中央分隔带({median_m if n_decks > 1 else 0.0}m) "
                         f"= {expected_total:.3f}m 冲突"
                     ),
+                }
+            )
+
+    # 1b. Girder structural width chain ((n-1)*spacing + 2*edge_cantilever == single_deck_width) & span hierarchy
+    edge_cant_mm = spec.get("edge_cantilever_mm")
+    if single_deck_m is not None and spec.get("n_girders") is not None and spec.get("girder_spacing_mm") is not None and edge_cant_mm is not None:
+        girder_total_mm = (int(spec["n_girders"]) - 1) * float(spec["girder_spacing_mm"]) + 2.0 * float(edge_cant_mm)
+        if abs(girder_total_mm - float(single_deck_m) * 1000.0) > 2.0:
+            issues.append(
+                {
+                    "code": "GIRDER_DECK_WIDTH_MISMATCH",
+                    "severity": "error",
+                    "message": (
+                        f"主梁横向总宽 ((n-1)×梁距+2×悬臂 = {girder_total_mm:g}mm) 与 桥面全宽 ({float(single_deck_m)*1000:g}mm) 不闭合"
+                    ),
+                }
+            )
+
+    std_span_m = spec.get("standard_span_m")
+    calc_span_m = spec.get("calc_span_m")
+    if std_span_m is not None and calc_span_m is not None:
+        if float(calc_span_m) <= 0 or float(calc_span_m) >= float(std_span_m):
+            issues.append(
+                {
+                    "code": "SPAN_HIERARCHY_INVALID",
+                    "severity": "error",
+                    "message": f"计算跨径 ({calc_span_m}m) 必须严格小于标准跨径 ({std_span_m}m)",
                 }
             )
 
@@ -1213,11 +1283,146 @@ def ingest_and_audit_calc_table(
     }
 
 
-def run_full_bridge_calculation(params: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Run an end-to-end Highway PC T-Girder Bridge calculation + consistency audit."""
+def wenchang_bridge_preset() -> dict[str, Any]:
+    """Opening-report parameters for 信阳市文昌中桥 (4×25m 装配式预应力混凝土简支T梁, 单幅9.00m双向两车道)."""
+    return {
+        "project_name": "信阳市文昌中桥设计（4×25m装配式预应力简支T梁）",
+        "n_spans": 4,
+        "standard_span_m": 25.0,
+        "beam_length_m": 24.96,
+        "calc_span_m": 24.0,
+        "n_carriageways": 1,
+        "cross_slope_pct": 2.0,
+        "asphalt_thick_mm": 100.0,
+        "concrete_paving_thick_mm": 80.0,
+        "hydrology": {
+            "area_m2": 325.0,
+            "wetted_perimeter_m": 64.5,
+            "roughness_inv": 25.0,
+            "slope_permille": 0.8,
+            "channel_width_m": 96.0,
+            "standard_span_m": 25.0,
+        },
+        "t_girder": {
+            "girder_spacing_mm": 1950.0,
+            "flange_width_mm": 1950.0,
+            "height_mm": 1750.0,
+            "flange_tip_thick_mm": 200.0,
+            "haunch_width_mm": 210.0,
+            "haunch_height_mm": 70.0,
+            "web_thick_mm": 200.0,
+            "bulb_width_mm": 560.0,
+            "bulb_height_mm": 200.0,
+            "end_web_thick_mm": 560.0,
+        },
+        "lateral": {
+            "n_girders": 5,
+            "girder_spacing_m": 1.95,
+            "edge_cantilever_m": 0.60,
+            "deck_width_m": 9.00,
+            "left_barrier_m": 0.50,
+            "right_barrier_m": 0.50,
+            "lateral_clearance_m": 0.50,
+            "design_lanes": 2,
+        },
+        "superstructure": {
+            "diaphragm_equiv_kn_m": 2.35,
+            "superimposed_dead_kn_m": 8.60,
+            "load_grade": "highway-I",
+        },
+        "prestress": {
+            "sigma_con_mpa": 1395.0,
+            "strands_per_tendon": 6,
+            "beam_length_m": 24.96,
+        },
+        "cap_beam": {
+            "cap_length_m": 8.80,
+            "cap_width_m": 1.60,
+            "cap_height_m": 1.40,
+            "column_spacing_m": 5.20,
+        },
+        "substructure": {
+            "column_diameter_m": 1.20,
+            "column_height_m": 5.50,
+            "pile_diameter_m": 1.40,
+            "concrete_grade": "C30",
+        },
+    }
 
-    cfg = dict(params or {})
-    hydro = compute_hydrology_and_span(**cfg.get("hydrology", {
+
+def _deep_merge_dict(base: dict[str, Any], over: dict[str, Any]) -> dict[str, Any]:
+    out = dict(base)
+    for k, v in over.items():
+        if isinstance(v, dict) and isinstance(out.get(k), dict):
+            out[k] = _deep_merge_dict(out[k], v)
+        else:
+            out[k] = v
+    return out
+
+
+def run_full_bridge_calculation(params: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Run an end-to-end Highway PC T-Girder Bridge calculation, ULS/SLS checks, ledger, BOQ, and audit."""
+    from .bridge_checks import (
+        build_rebar_and_tendon_ledger,
+        check_deck_slab_and_diaphragm,
+        check_elastomeric_bearing,
+        check_substructure_cap_pier_pile,
+        check_t_girder_uls_sls,
+        compute_bridge_bill_of_quantities,
+    )
+
+    raw_cfg = dict(params or {})
+    preset_name = str(raw_cfg.get("preset", "")).strip().lower()
+    if preset_name == "wenchang":
+        cfg = _deep_merge_dict(wenchang_bridge_preset(), raw_cfg)
+    else:
+        cfg = raw_cfg
+
+    # Track unresolved / assumed site parameters explicitly so missing survey items are never hidden
+    unresolved_assumptions: list[dict[str, Any]] = []
+    if "flood_elevation_m" not in cfg:
+        unresolved_assumptions.append(
+            {
+                "field": "flood_elevation_m",
+                "assumed_value": 81.200,
+                "unit": "m",
+                "impact": "控制梁底最低标高与立面图设计洪水位线",
+                "required_source": "信阳桥位河道1/100洪水频率水文断面实测资料",
+            }
+        )
+    if "deck_elevation_m" not in cfg:
+        unresolved_assumptions.append(
+            {
+                "field": "deck_elevation_m",
+                "assumed_value": 86.500,
+                "unit": "m",
+                "impact": "控制桥面及墩柱高度",
+                "required_source": "路线纵断面设计高程表",
+            }
+        )
+    sub_user_cfg = dict(cfg.get("substructure", {}))
+    if "explicit_pile_length_m" not in sub_user_cfg and "pile_length_m" not in cfg:
+        unresolved_assumptions.append(
+            {
+                "field": "pile_length_m",
+                "assumed_value": "auto_friction_pile",
+                "unit": "m",
+                "impact": "钻孔灌注桩设计桩长及水下C30混凝土工程量（当前按JTG 3363-2019摩擦桩公式初算）",
+                "required_source": "桥位钻孔地质柱状图实测标高与分层摩阻力确认",
+            }
+        )
+    if "calc_span_m" not in cfg and "calc_span_m" not in cfg.get("superstructure", {}):
+        unresolved_assumptions.append(
+            {
+                "field": "calc_span_m",
+                "assumed_value": 24.0,
+                "unit": "m",
+                "impact": "主梁恒活载弯矩/剪力包络与挠度（由预制梁长扣除两端支座中心距决定）",
+                "required_source": "支座中心线距梁端构造距离确认",
+            }
+        )
+
+    hydro_cfg = dict(cfg.get("hydrology", {
         "area_m2": 898.525,
         "wetted_perimeter_m": 127.86,
         "roughness_inv": 22.22,
@@ -1225,12 +1430,25 @@ def run_full_bridge_calculation(params: dict[str, Any] | None = None) -> dict[st
         "channel_width_m": 103.08,
         "standard_span_m": 25.0,
     }))
+    if "standard_span_m" in cfg:
+        hydro_cfg.setdefault("standard_span_m", float(cfg["standard_span_m"]))
+    hydro = compute_hydrology_and_span(**hydro_cfg)
+    n_spans = int(cfg.get("n_spans", hydro["recommended_spans"]))
+    std_span_m = float(cfg.get("standard_span_m", hydro["standard_span_m"]))
+
+    sup_cfg = dict(cfg.get("superstructure", {}))
+    if "calc_span_m" in cfg:
+        sup_cfg["calc_span_m"] = float(cfg["calc_span_m"])
+    calc_span_m = float(sup_cfg.get("calc_span_m", 24.0))
+
     t_cfg = dict(cfg.get("t_girder", {}))
     lat_cfg = dict(cfg.get("lateral", {}))
     if "girder_spacing_m" in lat_cfg and "girder_spacing_mm" not in t_cfg:
         t_cfg["girder_spacing_mm"] = float(lat_cfg["girder_spacing_m"]) * 1000.0
     elif "girder_spacing_mm" in t_cfg and "girder_spacing_m" not in lat_cfg:
         lat_cfg["girder_spacing_m"] = float(t_cfg["girder_spacing_mm"]) / 1000.0
+    t_cfg.setdefault("calc_span_mm", calc_span_m * 1000.0)
+    lat_cfg.setdefault("calc_span_m", calc_span_m)
 
     # Auto-adapt default deck width when n_girders != 5 and deck_width_m was not explicitly supplied
     n_g_req = int(lat_cfg.get("n_girders", 5))
@@ -1244,7 +1462,6 @@ def run_full_bridge_calculation(params: dict[str, Any] | None = None) -> dict[st
     m_oq_gov = max(item["m_oq"] for item in lateral["lever_rule"])
     m_cq_gov = max(item["m_cq"] for item in lateral["eccentric_compression"])
 
-    sup_cfg = dict(cfg.get("superstructure", {}))
     envelopes = compute_superstructure_envelopes(
         section_area_m2=section["mid_span_m"]["area_m2"],
         section_ix_m4=section["mid_span_m"]["ix_m4"],
@@ -1252,17 +1469,26 @@ def run_full_bridge_calculation(params: dict[str, Any] | None = None) -> dict[st
         m_cq=m_cq_gov,
         **sup_cfg,
     )
+
+    ps_cfg = dict(cfg.get("prestress", {}))
+    if "sigma_con_mpa" in cfg:
+        ps_cfg["sigma_con_mpa"] = float(cfg["sigma_con_mpa"])
+    beam_len_m = float(cfg.get("beam_length_m", ps_cfg.get("beam_length_m", round(std_span_m - 0.04, 3))))
+    ps_cfg.setdefault("beam_length_m", beam_len_m)
+
     prestress = compute_prestress_estimation_and_loss(
         m_sls_char_knm=envelopes["mid_span_summary"]["m_sls_char_knm"],
         m_uls_knm=envelopes["mid_span_summary"]["m_uls_knm"],
         girder_height_m=section["mid_span_mm"]["height"] * 1e-3,
         y_bot_m=section["mid_span_mm"]["y_bot"] * 1e-3,
         kern_upper_ks_m=section["mid_span_mm"]["kern_upper_ks"] * 1e-3,
-        **cfg.get("prestress", {}),
+        **ps_cfg,
     )
 
     # Derive per-girder support reactions and geometry for the pier cap beam unless overridden
     per_girder_reactions_kn: list[float] = []
+    per_girder_sls_max_kn: list[float] = []
+    per_girder_sls_min_kn: list[float] = []
     for g_idx in range(lateral["n_girders"]):
         g_env = compute_superstructure_envelopes(
             section_area_m2=section["mid_span_m"]["area_m2"],
@@ -1272,6 +1498,8 @@ def run_full_bridge_calculation(params: dict[str, Any] | None = None) -> dict[st
             **sup_cfg,
         )
         per_girder_reactions_kn.append(round(abs(g_env["support_summary"]["q_uls_gov_kn"]), 2))
+        per_girder_sls_max_kn.append(round(abs(g_env["support_summary"]["q_sls_char_kn"]), 2))
+        per_girder_sls_min_kn.append(round(abs(g_env["support_summary"]["q_dead_kn"]), 2))
 
     cap_cfg = dict(cfg.get("cap_beam", {}))
     cap_cfg.setdefault("girder_reactions_kn", per_girder_reactions_kn)
@@ -1282,27 +1510,103 @@ def run_full_bridge_calculation(params: dict[str, Any] | None = None) -> dict[st
 
     cap_beam = solve_continuous_cap_beam_1d(**cap_cfg)
 
+    asphalt_mm = float(cfg.get("asphalt_thick_mm", 110.0))
+    conc_pav_mm = float(cfg.get("concrete_paving_thick_mm", 100.0))
+    girder_checks = check_t_girder_uls_sls(
+        section=section,
+        envelopes=envelopes,
+        prestress=prestress,
+        beam_length_m=beam_len_m,
+    )
+    slab_checks = check_deck_slab_and_diaphragm(
+        girder_spacing_m=lateral["girder_spacing_m"],
+        asphalt_thick_m=asphalt_mm * 1e-3,
+        concrete_pav_thick_m=conc_pav_mm * 1e-3,
+        impact_mu=envelopes["impact_factor_mu"],
+        calc_span_m=envelopes["calc_span_m"],
+    )
+    bearing_checks = check_elastomeric_bearing(
+        max_sls_reaction_kn=max(per_girder_sls_max_kn),
+        min_sls_reaction_kn=min(per_girder_sls_min_kn),
+        bearing_length_mm=450.0 if max(per_girder_sls_max_kn) > 880.0 else 400.0,
+        bearing_thick_mm=85.0 if max(per_girder_sls_max_kn) > 880.0 else 74.0,
+        calc_span_m=envelopes["calc_span_m"],
+    )
+    explicit_pile_m = cfg.get("pile_length_m", sub_user_cfg.get("explicit_pile_length_m"))
+    substructure_checks = check_substructure_cap_pier_pile(
+        cap_beam_1d=cap_beam,
+        cap_width_m=float(cap_cfg.get("cap_width_m", 1.70)),
+        cap_height_m=float(cap_cfg.get("cap_height_m", 1.50)),
+        column_diameter_m=float(sub_user_cfg.get("column_diameter_m", 1.20)),
+        column_height_m=float(sub_user_cfg.get("column_height_m", 6.00)),
+        pile_diameter_m=float(sub_user_cfg.get("pile_diameter_m", 1.40)),
+        concrete_grade=str(sub_user_cfg.get("concrete_grade", "C30")),
+        soil_layers=sub_user_cfg.get("soil_layers"),
+        explicit_pile_length_m=float(explicit_pile_m) if explicit_pile_m is not None else None,
+    )
+
+    ledger = build_rebar_and_tendon_ledger(
+        n_spans=n_spans,
+        n_girders_per_span=lateral["n_girders"],
+        beam_length_m=beam_len_m,
+        girder_height_m=section["mid_span_mm"]["height"] * 1e-3,
+        girder_spacing_m=lateral["girder_spacing_m"],
+        deck_width_m=lateral["deck_width_m"],
+        cap_length_m=cap_beam["cap_length_m"],
+        column_height_m=float(substructure_checks["pier_column"]["height_m"]),
+        pile_length_m=float(substructure_checks["bored_pile"]["design_length_m"]),
+        prestress=prestress,
+        girder_checks=girder_checks,
+        slab_checks=slab_checks,
+        sub_checks=substructure_checks,
+    )
+    boq = compute_bridge_bill_of_quantities(
+        n_spans=n_spans,
+        n_girders_per_span=lateral["n_girders"],
+        beam_length_m=beam_len_m,
+        section_area_m2=section["mid_span_m"]["area_m2"],
+        deck_width_m=lateral["deck_width_m"],
+        asphalt_thick_m=asphalt_mm * 1e-3,
+        concrete_pav_thick_m=conc_pav_mm * 1e-3,
+        cap_length_m=cap_beam["cap_length_m"],
+        cap_width_m=float(cap_cfg.get("cap_width_m", 1.70)),
+        cap_height_m=float(cap_cfg.get("cap_height_m", 1.50)),
+        column_diameter_m=float(substructure_checks["pier_column"]["diameter_m"]),
+        column_height_m=float(substructure_checks["pier_column"]["height_m"]),
+        pile_diameter_m=float(substructure_checks["bored_pile"]["diameter_m"]),
+        pile_length_m=float(substructure_checks["bored_pile"]["design_length_m"]),
+        bearing_model=bearing_checks["bearing_model"],
+        ledger=ledger,
+    )
+
     actual_pedestals = len(cap_beam["girder_positions_m"])
     actual_ped_spacing_mm = (
         round((cap_beam["girder_positions_m"][1] - cap_beam["girder_positions_m"][0]) * 1000.0, 3)
         if actual_pedestals >= 2
         else lateral["girder_spacing_m"] * 1000.0
     )
+    n_carr = int(cfg.get("n_carriageways", 2))
+    med_m = float(cfg.get("median_width_m", 1.00 if n_carr > 1 else 0.0))
     default_consistency = {
-        "n_carriageways": 2,
+        "n_carriageways": n_carr,
         "single_deck_width_m": lateral["deck_width_m"],
+        "clear_width_m": lateral["clear_width_m"],
+        "lateral_clearance_m": lateral["lateral_clearance_m"],
         "roadway_width_m": lateral["roadway_width_m"],
-        "barrier_width_m": 0.50,
-        "median_width_m": 1.00,
-        "total_deck_width_m": 2.0 * lateral["deck_width_m"] + 1.00,
+        "barrier_width_m": float(lat_cfg.get("left_barrier_m", 0.50)),
+        "median_width_m": med_m,
+        "total_deck_width_m": n_carr * lateral["deck_width_m"] + (med_m if n_carr > 1 else 0.0),
         "n_girders": lateral["n_girders"],
         "girder_spacing_mm": lateral["girder_spacing_m"] * 1000.0,
+        "edge_cantilever_mm": lateral["edge_cantilever_m"] * 1000.0,
+        "standard_span_m": std_span_m,
+        "calc_span_m": envelopes["calc_span_m"],
         "pier_bearing_spacing_mm": actual_ped_spacing_mm,
         "n_pier_pedestals": actual_pedestals,
         "cap_length_m": cap_beam["cap_length_m"],
         "pavement_layers": [
-            {"name": "沥青混凝土面层", "thickness": 110, "unit": "mm"},
-            {"name": "C40混凝土铺装层", "thickness": 100, "unit": "mm"},
+            {"name": "沥青混凝土面层", "thickness": asphalt_mm, "unit": "mm"},
+            {"name": "C40混凝土铺装层", "thickness": conc_pav_mm, "unit": "mm"},
         ],
     }
     if "consistency" in cfg:
@@ -1311,11 +1615,31 @@ def run_full_bridge_calculation(params: dict[str, Any] | None = None) -> dict[st
         merged_cons = default_consistency
     consistency = audit_bridge_design_consistency(merged_cons)
     return {
+        "project_summary": {
+            "project_name": str(cfg.get("project_name", f"{n_spans}×{std_span_m:g}m 预应力混凝土简支T梁桥")),
+            "n_spans": n_spans,
+            "standard_span_m": std_span_m,
+            "beam_length_m": beam_len_m,
+            "calc_span_m": envelopes["calc_span_m"],
+            "deck_width_m": lateral["deck_width_m"],
+            "clear_width_m": lateral["clear_width_m"],
+            "roadway_width_m": lateral["roadway_width_m"],
+            "cross_slope_pct": float(cfg.get("cross_slope_pct", 2.0)),
+            "flood_elevation_m": float(cfg.get("flood_elevation_m", 81.200)),
+            "deck_elevation_m": float(cfg.get("deck_elevation_m", 86.500)),
+        },
+        "unresolved_assumptions": unresolved_assumptions,
         "hydrology": hydro,
         "t_girder_section": section,
         "lateral_distribution": lateral,
         "superstructure_envelopes": envelopes,
         "prestress": prestress,
         "pier_cap_beam_1d": cap_beam,
+        "girder_checks": girder_checks,
+        "slab_and_diaphragm_checks": slab_checks,
+        "bearing_checks": bearing_checks,
+        "substructure_checks": substructure_checks,
+        "rebar_and_tendon_ledger": ledger,
+        "bill_of_quantities": boq,
         "consistency_audit": consistency,
     }

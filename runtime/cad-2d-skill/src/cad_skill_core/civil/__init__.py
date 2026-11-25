@@ -1,4 +1,4 @@
-"""Deterministic civil & bridge engineering calculations, native CAD symbols, and parametric sheets."""
+"""Deterministic civil & bridge engineering calculations, checks, reopen-DXF verifier, and CAD sheets."""
 
 from .bridge_calc import (
     audit_bridge_design_consistency,
@@ -11,26 +11,53 @@ from .bridge_calc import (
     ingest_and_audit_calc_table,
     run_full_bridge_calculation,
     solve_continuous_cap_beam_1d,
+    wenchang_bridge_preset,
+)
+from .bridge_checks import (
+    build_rebar_and_tendon_ledger,
+    check_deck_slab_and_diaphragm,
+    check_elastomeric_bearing,
+    check_substructure_cap_pier_pile,
+    check_t_girder_uls_sls,
+    compute_bridge_bill_of_quantities,
+    lookup_bar_or_tendon,
 )
 from .bridge_drawings import (
     CIVIL_DRAWING_TYPES,
+    TASK_BOOK_9_CATEGORIES,
+    audit_task_book_coverage,
     generate_civil_bridge_bundle,
     generate_civil_bridge_dxf,
+    generate_full_bridge_drawing_set,
 )
+from .bridge_verify import verify_civil_dxf
 from .symbols import (
+    ViewBox,
     draw_axis_bubble,
     draw_bearing_symbol,
     draw_boxed_tag,
+    draw_comb_leader,
+    draw_detail_callout,
     draw_elevation_marker,
     draw_ground_line,
     draw_pile_s_break,
+    draw_rebar_schedule_table,
     draw_slope_arrow,
     setup_civil_dxf_document,
 )
 
 __all__ = [
     "CIVIL_DRAWING_TYPES",
+    "TASK_BOOK_9_CATEGORIES",
+    "ViewBox",
     "audit_bridge_design_consistency",
+    "audit_task_book_coverage",
+    "build_rebar_and_tendon_ledger",
+    "check_deck_slab_and_diaphragm",
+    "check_elastomeric_bearing",
+    "check_substructure_cap_pier_pile",
+    "check_t_girder_uls_sls",
+    "compute_bridge_bill_of_quantities",
     "compute_hydrology_and_span",
     "compute_lateral_distribution",
     "compute_polygon_section_properties",
@@ -40,14 +67,21 @@ __all__ = [
     "draw_axis_bubble",
     "draw_bearing_symbol",
     "draw_boxed_tag",
+    "draw_comb_leader",
+    "draw_detail_callout",
     "draw_elevation_marker",
     "draw_ground_line",
     "draw_pile_s_break",
+    "draw_rebar_schedule_table",
     "draw_slope_arrow",
     "generate_civil_bridge_bundle",
     "generate_civil_bridge_dxf",
+    "generate_full_bridge_drawing_set",
     "ingest_and_audit_calc_table",
+    "lookup_bar_or_tendon",
     "run_full_bridge_calculation",
     "setup_civil_dxf_document",
     "solve_continuous_cap_beam_1d",
+    "verify_civil_dxf",
+    "wenchang_bridge_preset",
 ]
