@@ -683,7 +683,21 @@ def _draw_mini_rebar_shape(
 ) -> None:
     hw, hh = 0.42 * w, 0.34 * h
     st = (shape or "straight_hook").lower()
-    if st == "stirrup_rect":
+    if st == "stirrup_4leg":
+        # Outer 2-leg closed stirrup + inner 2-leg closed stirrup + 135-deg corner hooks
+        msp.add_lwpolyline(
+            [(cx - 0.62 * hw, cy - hh), (cx + 0.62 * hw, cy - hh), (cx + 0.62 * hw, cy + hh), (cx - 0.62 * hw, cy + hh)],
+            close=True,
+            dxfattribs={"layer": "REBAR_STIRRUP"},
+        )
+        msp.add_lwpolyline(
+            [(cx - 0.23 * hw, cy - hh), (cx + 0.23 * hw, cy - hh), (cx + 0.23 * hw, cy + hh), (cx - 0.23 * hw, cy + hh)],
+            close=True,
+            dxfattribs={"layer": "REBAR_STIRRUP"},
+        )
+        msp.add_line((cx + 0.62 * hw, cy + hh), (cx + 0.45 * hw, cy + 0.55 * hh), dxfattribs={"layer": "REBAR_STIRRUP"})
+        msp.add_line((cx + 0.23 * hw, cy + hh), (cx + 0.08 * hw, cy + 0.55 * hh), dxfattribs={"layer": "REBAR_STIRRUP"})
+    elif st == "stirrup_rect":
         msp.add_lwpolyline(
             [(cx - 0.55 * hw, cy - hh), (cx + 0.55 * hw, cy - hh), (cx + 0.55 * hw, cy + hh), (cx - 0.55 * hw, cy + hh)],
             close=True,

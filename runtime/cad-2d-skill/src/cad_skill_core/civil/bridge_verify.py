@@ -906,6 +906,26 @@ def verify_civil_dxf(
                     message=f"桥面附属详图 '{zh_name}' ({req_vid}) 缺少实体几何或控制尺寸标注",
                 )
 
+    # 6b. Title Block Scale vs Registered ViewBox Scale Consistency Check!
+    if views:
+        actual_scales = {int(round(float(v["scale_denom"]))) for v in views if "scale_denom" in v}
+        for s_tb, tx_tb, ty_tb in texts:
+            if s_tb.startswith("比例 ") and tx_tb >= 230.0 and ty_tb <= 46.0:
+                tb_ratios = {int(m_r.group(1)) for m_r in re.finditer(r"1\s*:\s*(\d+)", s_tb)}
+                if tb_ratios:
+                    checks_run += 1
+                    if tb_ratios != actual_scales:
+                        _fail(
+                            "TITLE_BLOCK_SCALE_CONFLICT",
+                            expected=sorted(actual_scales),
+                            measured=sorted(tb_ratios),
+                            delta=None,
+                            message=(
+                                f"标题栏标注比例 {sorted(f'1:{r}' for r in tb_ratios)} 与图面实际子图比例 "
+                                f"{sorted(f'1:{r}' for r in actual_scales)} 不一致（存在过期或遗漏比例）"
+                            ),
+                        )
+
     # ------------------------------------------------------------------
     # 7. Authoritative Calculation Report Cross-Checks & Failure Propagation
     # ------------------------------------------------------------------

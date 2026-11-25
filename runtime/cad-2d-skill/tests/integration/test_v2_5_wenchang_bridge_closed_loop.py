@@ -391,8 +391,10 @@ def test_delivery_audit_on_ql09_ql13_ql17_ql18_and_visible_table_entity_tamper_d
     dims_13 = " | ".join(str(e.dxf.get("text", "")) for e in doc_13.modelspace() if e.dxftype() == "DIMENSION")
     assert "排水方向" in txts_13 and "防水层收口" in txts_13 and "C50钢纤维砼槽口" in txts_13
     assert "250" in dims_13 and "无粘结层 500" in dims_13 and "牛腿宽 350" in dims_13 and "锚入 280" in dims_13
+    assert "构件总高 1000" in dims_13 and "铺装 180" in dims_13 and "外露净高 820" in dims_13
+    assert "比例 1:10 / 1:15 / 1:40 / 1:60" in txts_13
 
-    # 3. QL-17 & QL-18: Verify grouped substructure unit schedules, JTG §9.3.2 anchorage basis, and aligned A-A cut + backwall!
+    # 3. QL-17 & QL-18: Verify grouped substructure unit schedules, XL2 4-leg detail, QT4 pile spiral hoop, and aligned A-A cut!
     j_anch = calc["substructure_checks"]["joint_anchorage"]
     assert j_anch["passed"] is True
     assert j_anch["xl1_tie_beam_to_pier"]["design_la_mm"] == 780.0 >= j_anch["xl1_tie_beam_to_pier"]["req_35d_mm"]
@@ -406,14 +408,15 @@ def test_delivery_audit_on_ql09_ql13_ql17_ql18_and_visible_table_entity_tamper_d
         "bored_pile_section",
         "tie_beam_joint_detail",
         "tie_beam_section",
+        "tie_beam_stirrup_detail",
     } <= set(ql17_ver["registered_views"])
     doc_17 = ezdxf.readfile(sheets_by_no["QL-17"]["dxf_path"])
     dims_17 = " | ".join(str(e.dxf.get("text", "")) for e in doc_17.modelspace() if e.dxftype() == "DIMENSION")
     txts_17 = " ".join(str(e.dxf.get("text", "")) for e in doc_17.modelspace() if e.dxftype() == "TEXT")
     pile_mm = int(round(calc["substructure_checks"]["bored_pile"]["design_length_m"] * 1000.0))
-    for req_tok in ("5200", "1200", "5500", "1400", "780", str(pile_mm)):
+    for req_tok in ("5200", "1200", "5500", "1400", "780", "890", "340", "1090", str(pile_mm)):
         assert req_tok in dims_17
-    for req_unit_tok in ("构件部位", "单根墩柱", "单道系梁", "单根桩基", "每墩件数", "2柱", "1道", "2桩", "单座双柱墩钢筋合计"):
+    for req_unit_tok in ("构件部位", "单根墩柱", "单道系梁", "单根桩基", "每墩件数", "2柱", "1道", "2桩", "722.0", "单座双柱墩钢筋合计"):
         assert req_unit_tok in txts_17
 
     # Tamper "2柱" -> "1柱" on QL-17 without updating 每墩重(kg) -> verifier MUST catch VISIBLE_REBAR_UNIT_MULTIPLIER_MISMATCH!
@@ -444,7 +447,7 @@ def test_delivery_audit_on_ql09_ql13_ql17_ql18_and_visible_table_entity_tamper_d
     for req_tok_18 in ("9000", "5400", "2000", "1800", "550", "1750", "560", "1400"):
         assert req_tok_18 in dims_18
     assert "道路中心线" in txts_18 and "耳墙" in txts_18 and "弯钩朝内" in txts_18
-    assert "2#垫石" in txts_18 and "背墙" in txts_18 and "单座桥台钢筋合计" in txts_18
+    assert "2#垫石" in txts_18 and "背墙" in txts_18 and "QT4" in txts_18 and "单座桥台钢筋合计" in txts_18
 
     # Verify manifest sheet titles are all true Chinese titles (never raw python drawing_type identifiers!)
     for sh in suite["sheets"]:
