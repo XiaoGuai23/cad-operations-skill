@@ -39,12 +39,12 @@ def build_auto_style_font_map(dxf_path: Path) -> dict[str, str]:
     doc = ezdxf.readfile(dxf_path)
     win_fonts = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts"
     cjk_candidates = [
-        win_fonts / "simsun.ttc",
-        win_fonts / "simfang.ttf",
+        win_fonts / "Deng.ttf",
         win_fonts / "simhei.ttf",
         win_fonts / "msyh.ttc",
         win_fonts / "NotoSansSC-VF.ttf",
-        win_fonts / "Deng.ttf",
+        win_fonts / "simsun.ttc",
+        win_fonts / "simfang.ttf",
         win_fonts / "cad-ci-unifont-16.0.04.otf",
     ]
     default_cjk = next((p for p in cjk_candidates if p.is_file()), None)

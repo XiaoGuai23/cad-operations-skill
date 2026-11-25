@@ -1,8 +1,9 @@
-"""Integration tests for v2.5 Civil/Bridge Optimization Plan & Wenchang Bridge 18-Sheet Suite."""
+"""Integration tests for v2.5+ Civil/Bridge Optimization Plan, Review Counterexamples & 18-Sheet Suite."""
 
 from __future__ import annotations
 
 import math
+from pathlib import Path
 import re
 
 import ezdxf
@@ -28,6 +29,7 @@ from cad_skill_core.standards.preference_memory import (
 
 def test_wenchang_cross_section_7000_8000_9000_and_real_2pct_slope(tmp_path):
     calc = run_full_bridge_calculation({"preset": "wenchang"})
+    assert calc["status"] == "passed"
     assert calc["consistency_audit"]["status"] == "passed"
     assert calc["girder_checks"]["status"] == "passed"
     assert calc["substructure_checks"]["status"] == "passed"
@@ -43,7 +45,6 @@ def test_wenchang_cross_section_7000_8000_9000_and_real_2pct_slope(tmp_path):
     assert bundle["geometry_verification"]["error_count"] == 0
     assert bundle["rubric_score"]["grade"] == "S"
 
-    # Reopen DXF independently and check explicit 7000 / 8000 / 9000 & 4x1950+2x600=9000 dims
     doc = ezdxf.readfile(tmp_path / "wenchang_cross" / "QL-05_cross.dxf")
     dim_texts = [str(e.dxf.get("text", "")) for e in doc.modelspace() if e.dxftype() == "DIMENSION"]
     joined = " | ".join(dim_texts)
@@ -51,25 +52,70 @@ def test_wenchang_cross_section_7000_8000_9000_and_real_2pct_slope(tmp_path):
         assert token in joined, f"missing expected dimension token {token} in {joined}"
 
 
-def test_reactive_calc_span_and_sigma_con_propagation_plus_unresolved_items(tmp_path):
-    # Default Wenchang lists unresolved site items (flood elevation, deck elevation, pile length)
+def test_reactive_calc_span_paving_dead_load_and_strict_unresolved_basis(tmp_path):
+    # 1. Default Wenchang flags all unconfirmed survey & positioning basis items
     r_base = run_full_bridge_calculation({"preset": "wenchang"})
     unresolved_fields = {u["field"] for u in r_base["unresolved_assumptions"]}
-    assert {"flood_elevation_m", "deck_elevation_m", "pile_length_m"} <= unresolved_fields
+    assert {
+        "flood_elevation_m",
+        "deck_elevation_m",
+        "hydrology",
+        "soil_layers",
+        "pile_length_m",
+        "calc_span_m",
+    } <= unresolved_fields
 
-    # Supplying explicit survey values clears unresolved_assumptions
+    # 2. Supplying ONLY flood/deck elevations and pile_length_m MUST NOT clear soil_layers, hydrology, or calc_span_m!
+    r_partial = run_full_bridge_calculation(
+        {
+            "preset": "wenchang",
+            "flood_elevation_m": 80.600,
+            "deck_elevation_m": 86.200,
+            "pile_length_m": 22.0,
+        }
+    )
+    partial_fields = {u["field"] for u in r_partial["unresolved_assumptions"]}
+    assert {"soil_layers", "calc_span_m", "hydrology"} <= partial_fields
+
+    # 3. Supplying complete survey + borehole soil_layers + bearing_center_offset_m clears unresolved_assumptions,
+    #    while pending_graduation_deliverables still tracks thesis & E1/E2 seismic checks!
     r_confirmed = run_full_bridge_calculation(
         {
             "preset": "wenchang",
             "flood_elevation_m": 80.600,
             "deck_elevation_m": 86.200,
-            "pile_length_m": 18.0,
-            "calc_span_m": 24.16,
+            "pile_length_m": 22.0,
+            "bearing_center_offset_m": 0.40,
+            "hydrology": {
+                "area_m2": 325.0,
+                "wetted_perimeter_m": 64.5,
+                "roughness_inv": 25.0,
+                "slope_permille": 0.8,
+                "channel_width_m": 96.0,
+                "standard_span_m": 25.0,
+            },
+            "soil_layers": [
+                {"name": "①粉质黏土", "thickness_m": 5.0, "qik_kpa": 55.0, "fa0_kpa": 140.0},
+                {"name": "②密实砂砾石", "thickness_m": 20.0, "qik_kpa": 130.0, "fa0_kpa": 420.0},
+            ],
         }
     )
     assert r_confirmed["unresolved_assumptions"] == []
+    assert math.isclose(r_confirmed["project_summary"]["calc_span_m"], 24.96 - 0.80, abs_tol=1e-3)
+    pending_ids = {
+        d["id"] for d in r_confirmed["pending_graduation_deliverables"] if d["status"] == "pending"
+    }
+    assert {"design_specification_thesis", "seismic_e1_e2_verification"} <= pending_ids
 
-    # Changing sigma_con_mpa or calc_span_m updates both calculation report and tendon_layout DXF
+    # 4. Changing asphalt_thick_mm from 100mm -> 150mm updates BOTH BOQ (80 -> 120 m3) AND girder dead moment!
+    r_asp150 = run_full_bridge_calculation({"preset": "wenchang", "asphalt_thick_mm": 150.0})
+    assert math.isclose(r_base["bill_of_quantities"]["asphalt_paving_m3"], 80.0, abs_tol=0.01)
+    assert math.isclose(r_asp150["bill_of_quantities"]["asphalt_paving_m3"], 120.0, abs_tol=0.01)
+    m_dead_100 = r_base["superstructure_envelopes"]["mid_span_summary"]["m_dead_knm"]
+    m_dead_150 = r_asp150["superstructure_envelopes"]["mid_span_summary"]["m_dead_knm"]
+    assert m_dead_150 > m_dead_100 + 130.0
+
+    # 5. Changing sigma_con_mpa or calc_span_m updates both calculation report and tendon_layout DXF
     r_mod = run_full_bridge_calculation({"preset": "wenchang", "calc_span_m": 23.6, "sigma_con_mpa": 1335.0})
     pe_base = r_base["prestress"]["loss_profile"][5]["effective_prestress_mpa"]
     pe_mod = r_mod["prestress"]["loss_profile"][5]["effective_prestress_mpa"]
@@ -89,8 +135,75 @@ def test_reactive_calc_span_and_sigma_con_propagation_plus_unresolved_items(tmp_
     assert f"{pe_mod:.2f}MPa" in all_txt
 
 
+def test_intermediate_pier_two_span_reactions_and_failure_propagation_to_suite_and_ql12(tmp_path):
+    # 1. Intermediate pier on 4x25m carries BOTH left & right adjacent spans (~2x single-span dead load)
+    r_4span = run_full_bridge_calculation({"preset": "wenchang"})
+    r_1span = run_full_bridge_calculation({"preset": "wenchang", "n_spans": 1})
+    pr4 = r_4span["pier_reaction_summary"]
+    pr1 = r_1span["pier_reaction_summary"]
+    assert pr4["n_adjacent_spans"] == 2
+    assert pr1["n_adjacent_spans"] == 1
+    assert pr4["right_span_total_unfactored_dead_kn"] == pr4["left_span_total_unfactored_dead_kn"]
+    assert pr4["left_span_total_unfactored_dead_kn"] > 1900.0
+    assert math.isclose(
+        pr4["pier_total_unfactored_dead_kn"],
+        2.0 * pr4["left_span_total_unfactored_dead_kn"],
+        abs_tol=0.05,
+    )
+    assert r_4span["substructure_checks"]["pier_column"]["n_uls_kn"] > 1.50 * r_1span["substructure_checks"]["pier_column"]["n_uls_kn"]
+
+    # 2. Counterexample: pile_length_m = 1.0 -> substructure fails AND full 18-sheet manifest status MUST be "failed",
+    #    while still saving bridge_calculation_report.json and pinpointing failed component + related drawings!
+    fail_suite = generate_full_bridge_drawing_set(
+        {"preset": "wenchang", "pile_length_m": 1.0},
+        tmp_path / "pile_1m_counterexample",
+    )
+    assert fail_suite["status"] == "failed"
+    assert fail_suite["calculation_report"]["status"] == "failed"
+    assert Path(fail_suite["calculation_report_path"]).is_file()
+    pile_fc = next(fc for fc in fail_suite["failed_checks"] if fc["check_key"] == "substructure_checks.bored_pile")
+    assert pile_fc["demand"] > pile_fc["allowable"]
+    assert "QL-17" in pile_fc["related_drawings"]
+    assert "QL-17" in fail_suite["failed_drawings"]
+    sh_17 = next(s for s in fail_suite["sheets"] if s["drawing_no"] == "QL-17")
+    assert sh_17["verify_status"] == "failed"
+
+    # 3. Counterexample: overloaded small bearing -> QL-12 MUST display "> 10.0MPa" & "超限不合格", NEVER "≤ 10.0MPa"!
+    calc_bad_brg = run_full_bridge_calculation(
+        {"preset": "wenchang", "bearing": {"bearing_width_mm": 250.0, "bearing_length_mm": 250.0}}
+    )
+    assert calc_bad_brg["status"] == "failed"
+    assert calc_bad_brg["bearing_checks"]["passed"] is False
+    assert calc_bad_brg["bearing_checks"]["compressive_stress_mpa"] > 10.0
+
+    ql12_dxf = generate_civil_bridge_dxf(
+        "bearing_layout",
+        {"preset": "wenchang", "_calc_report": calc_bad_brg, "drawing_no": "QL-12"},
+        tmp_path / "bad_bearing",
+        stem="QL-12_overload",
+    )
+    doc_12 = ezdxf.readfile(ql12_dxf)
+    txt_12 = " ".join(str(e.dxf.get("text", "")) for e in doc_12.modelspace() if e.dxftype() == "TEXT")
+    assert "超限不合格" in txt_12
+    assert "> 10.0MPa" in txt_12
+    assert "≤ 10.0MPa" not in txt_12
+
+    ver_12 = verify_civil_dxf(ql12_dxf, calc_report=calc_bad_brg)
+    assert ver_12["status"] == "failed"
+    assert any(i["code"] == "STRUCTURAL_DESIGN_CHECK_FAILED" for i in ver_12["issues"])
+
+    # Also verify standalone false-inequality detector catches "12.82MPa ≤ 10.0MPa" even without calc_report!
+    for ent in doc_12.modelspace():
+        if ent.dxftype() == "TEXT" and "支座验算结论" in str(ent.dxf.get("text", "")):
+            ent.dxf.text = "支座承压验算：σc=12.82MPa ≤ 10.0MPa，合格"
+    fake_pass_12 = tmp_path / "bad_bearing" / "QL-12_fake_ineq.dxf"
+    doc_12.saveas(fake_pass_12)
+    ver_fake_12 = verify_civil_dxf(fake_pass_12)
+    assert ver_fake_12["status"] == "failed"
+    assert any(i["code"] == "FALSE_INEQUALITY_ON_DRAWING" for i in ver_fake_12["issues"])
+
+
 def test_reopen_dxf_verifier_catches_1_to_400_scale_fake_slope_and_stale_prestress(tmp_path):
-    # 1. At 1:400, 1.0m elevation difference MUST measure strictly 2.500mm on paper
     elev_dxf = generate_civil_bridge_dxf(
         "bridge_elevation",
         {
@@ -105,7 +218,6 @@ def test_reopen_dxf_verifier_catches_1_to_400_scale_fake_slope_and_stale_prestre
     ver_ok = verify_civil_dxf(elev_dxf)
     assert ver_ok["status"] == "passed"
 
-    # Verify raw paper dy is 2.5mm, then corrupt water triangle by -5.5mm (simulating old max(8.0, ...) bug)
     doc_el = ezdxf.readfile(elev_dxf)
     triangles = [
         e for e in doc_el.modelspace()
@@ -126,7 +238,6 @@ def test_reopen_dxf_verifier_catches_1_to_400_scale_fake_slope_and_stale_prestre
     assert el_issue["drawing_no"] == "QL-03"
     assert math.isclose(abs(el_issue["delta"]), 5.5, abs_tol=0.05)
 
-    # 2. Flatten a 2% sloped cross-section deck to 0% -> verifier MUST catch DECK_CROSS_SLOPE_MISMATCH
     cross_dxf = generate_civil_bridge_dxf(
         "t_girder_section",
         {"preset": "wenchang", "drawing_no": "QL-05"},
@@ -149,7 +260,6 @@ def test_reopen_dxf_verifier_catches_1_to_400_scale_fake_slope_and_stale_prestre
     assert slope_issue["drawing_no"] == "QL-05"
     assert math.isclose(slope_issue["measured"], 0.0, abs_tol=0.05)
 
-    # 3. Alter effective prestress text on tendon sheet -> verifier MUST catch TENDON_EFFECTIVE_PRESTRESS_MISMATCH
     calc_wc = run_full_bridge_calculation({"preset": "wenchang"})
     td_dxf = generate_civil_bridge_dxf(
         "tendon_layout",
@@ -169,7 +279,7 @@ def test_reopen_dxf_verifier_catches_1_to_400_scale_fake_slope_and_stale_prestre
     assert td_issue["drawing_no"] == "QL-08"
 
 
-def test_full_18_sheet_a3_suite_9_categories_and_bar_tendon_traceability(tmp_path):
+def test_delivery_audit_on_ql09_ql13_ql17_ql18_and_visible_table_entity_tamper_detection(tmp_path):
     suite = generate_full_bridge_drawing_set({"preset": "wenchang"}, tmp_path / "wenchang_18_sheets")
     assert suite["status"] == "passed"
     cov = suite["coverage_audit"]
@@ -181,16 +291,152 @@ def test_full_18_sheet_a3_suite_9_categories_and_bar_tendon_traceability(tmp_pat
     assert all(sh["rubric_score"] >= 92.0 for sh in suite["sheets"])
 
     calc = suite["calculation_report"]
-    for sample_id in ("N1", "N4", "R1", "GJ1", "W1", "HG1", "HL1", "GL1", "DZ1", "ZJ1", "QT1"):
+    for sample_id in (
+        "N1",
+        "N4",
+        "R1",
+        "GJ1",
+        "W1",
+        "HG1",
+        "HL1",
+        "LX1",
+        "SF1",
+        "DB1",
+        "DB2",
+        "GL1",
+        "DZ1",
+        "XL1",
+        "XL2",
+        "ZJ1",
+        "QT1",
+        "QT2",
+        "QT3",
+        "DS1",
+    ):
         traced = lookup_bar_or_tendon(calc, sample_id)
         assert traced["calc_basis"]
         assert traced.get("total_weight_bridge_kg", traced.get("bridge_total_weight_kg", 0.0)) > 0
+
+    sheets_by_no = {sh["drawing_no"]: sh for sh in suite["sheets"]}
+
+    # 1. QL-09: Verify 6 R1 circles in bottom bulb + 6 R2 + 8 R3 = 20 circles + half-span stirrup zone verification!
+    ql09_path = Path(sheets_by_no["QL-09"]["dxf_path"])
+    doc_09 = ezdxf.readfile(ql09_path)
+    rebar_circles_09 = [
+        e for e in doc_09.modelspace()
+        if e.dxftype() == "CIRCLE" and e.dxf.get("layer") == "REBAR" and 0.35 <= e.dxf.radius <= 3.0
+    ]
+    assert len(rebar_circles_09) == 20  # 6 (R1) + 6 (R2) + 8 (R3)
+    dims_09 = " | ".join(str(e.dxf.get("text", "")) for e in doc_09.modelspace() if e.dxftype() == "DIMENSION")
+    txts_09 = " ".join(str(e.dxf.get("text", "")) for e in doc_09.modelspace() if e.dxftype() == "TEXT")
+    assert "20×100=2000" in dims_09
+    assert "69×150=10350" in dims_09
+    assert "支点中心线" in txts_09 and "跨中对称线(L/2)" in txts_09 and "180根" in txts_09
+
+    # Tamper visible table R1 count TEXT from "6" -> "999" without touching XDATA!
+    doc_09_tbl = ezdxf.readfile(ql09_path)
+    r1_y = next(
+        float((e.get_placement()[1] or e.dxf.insert).y)
+        for e in doc_09_tbl.modelspace()
+        if e.dxftype() == "TEXT" and str(e.dxf.get("text", "")).strip() == "R1" and float((e.get_placement()[1] or e.dxf.insert).x) > 210.0
+    )
+    mutated_999 = False
+    for ent in doc_09_tbl.modelspace():
+        if ent.dxftype() == "TEXT" and str(ent.dxf.get("text", "")).strip() == "6":
+            ins = ent.get_placement()[1] or ent.dxf.insert
+            if float(ins.x) > 210.0 and abs(float(ins.y) - r1_y) <= 1.5:
+                ent.dxf.text = "999"
+                mutated_999 = True
+                break
+    assert mutated_999 is True
+    bad_09_tbl_path = tmp_path / "QL09_table_999.dxf"
+    doc_09_tbl.saveas(bad_09_tbl_path)
+    ver_09_tbl = verify_civil_dxf(bad_09_tbl_path, calc_report=calc)
+    assert ver_09_tbl["status"] == "failed"
+    codes_09_tbl = {i["code"] for i in ver_09_tbl["issues"]}
+    assert "REBAR_COUNT_LEDGER_MISMATCH" in codes_09_tbl
+    assert "VISIBLE_REBAR_TABLE_ARITHMETIC_MISMATCH" in codes_09_tbl
+    assert "REBAR_ENTITY_COUNT_MISMATCH" in codes_09_tbl
+
+    # Delete 1 bottom bulb circle (6 -> 5 circles) in QL-09 -> verifier MUST catch REBAR_ENTITY_COUNT_MISMATCH!
+    doc_09_dot = ezdxf.readfile(ql09_path)
+    bulb_dot = min(
+        (
+            e for e in doc_09_dot.modelspace()
+            if e.dxftype() == "CIRCLE" and e.dxf.get("layer") == "REBAR" and 0.35 <= e.dxf.radius <= 3.0
+        ),
+        key=lambda e: float(e.dxf.center.y),
+    )
+    doc_09_dot.modelspace().delete_entity(bulb_dot)
+    bad_09_dot_path = tmp_path / "QL09_5dots.dxf"
+    doc_09_dot.saveas(bad_09_dot_path)
+    ver_09_dot = verify_civil_dxf(bad_09_dot_path, calc_report=calc)
+    assert ver_09_dot["status"] == "failed"
+    dot_issue = next(i for i in ver_09_dot["issues"] if i["code"] == "REBAR_ENTITY_COUNT_MISMATCH" and "R1" in i["message"])
+    assert dot_issue["expected"] == 6 and dot_issue["measured"] == 5
+
+    # 2. QL-13: Must contain all 5 required sub-details + drainage & blockout installation interface labels!
+    ql13_ver = verify_civil_dxf(sheets_by_no["QL-13"]["dxf_path"], calc_report=calc)
+    assert ql13_ver["status"] == "passed"
+    assert {
+        "crash_barrier_detail",
+        "expansion_joint_detail",
+        "scupper_drain_detail",
+        "deck_continuity_detail",
+        "approach_slab_detail",
+    } <= set(ql13_ver["registered_views"])
+    doc_13 = ezdxf.readfile(sheets_by_no["QL-13"]["dxf_path"])
+    txts_13 = " ".join(str(e.dxf.get("text", "")) for e in doc_13.modelspace() if e.dxftype() == "TEXT")
+    assert "排水方向" in txts_13 and "防水层收口" in txts_13 and "C50钢纤维砼槽口" in txts_13
+
+    # 3. QL-17 & QL-18: Verify twin-column + tie-beam views/dims and reorganized 5-view abutment sheet + A3 B&W PDF!
+    ql17_ver = verify_civil_dxf(sheets_by_no["QL-17"]["dxf_path"], calc_report=calc)
+    assert ql17_ver["status"] == "passed"
+    assert {
+        "pier_pile_elev",
+        "pier_col_section",
+        "bored_pile_section",
+        "tie_beam_joint_detail",
+        "tie_beam_section",
+    } <= set(ql17_ver["registered_views"])
+    doc_17 = ezdxf.readfile(sheets_by_no["QL-17"]["dxf_path"])
+    dims_17 = " | ".join(str(e.dxf.get("text", "")) for e in doc_17.modelspace() if e.dxftype() == "DIMENSION")
+    pile_mm = int(round(calc["substructure_checks"]["bored_pile"]["design_length_m"] * 1000.0))
+    for req_tok in ("5200", "1200", "5500", "1400", "780", str(pile_mm)):
+        assert req_tok in dims_17
+
+    ql18_ver = verify_civil_dxf(sheets_by_no["QL-18"]["dxf_path"], calc_report=calc)
+    assert ql18_ver["status"] == "passed"
+    assert {
+        "abutment_plan",
+        "abutment_elev",
+        "abutment_side_rebar",
+        "abutment_cap_section",
+        "abutment_joint_detail",
+        "abutment_pile_section",
+    } <= set(ql18_ver["registered_views"])
+    doc_18 = ezdxf.readfile(sheets_by_no["QL-18"]["dxf_path"])
+    dims_18 = " | ".join(str(e.dxf.get("text", "")) for e in doc_18.modelspace() if e.dxftype() == "DIMENSION")
+    txts_18 = " ".join(str(e.dxf.get("text", "")) for e in doc_18.modelspace() if e.dxftype() == "TEXT")
+    for req_tok_18 in ("9000", "5400", "2000", "1800", "550", "560", "1400"):
+        assert req_tok_18 in dims_18
+    assert "道路中心线" in txts_18 and "耳墙" in txts_18 and "弯钩朝内" in txts_18
+
+    # Verify A3 1:1 B&W print PDF + PNG bundle export on QL-18
+    b18 = generate_civil_bridge_bundle(
+        "rebar_detail",
+        {"preset": "wenchang", "component": "abutment_rebar", "drawing_no": "QL-18", "_calc_report": calc},
+        tmp_path / "ql18_print_bundle",
+        stem="QL-18_print",
+    )
+    assert b18["status"] == "passed"
+    assert Path(b18["print_pdf_path"]).is_file() and Path(b18["print_pdf_path"]).stat().st_size > 5000
+    assert Path(b18["preview_png_path"]).is_file() and Path(b18["preview_png_path"]).stat().st_size > 15000
 
 
 def test_civil_preference_learning_scope_and_correction_regression_flywheel(tmp_path):
     mem_file = tmp_path / ".cad-memory" / "project-preferences.json"
 
-    # 1. Create a preferred civil sample DXF (font=gbenor.shx, OUTLINE color=2) and confirm it
     sample_pref = tmp_path / "fav_bridge_sample.dxf"
     doc_fav, _, _ = setup_civil_dxf_document(
         title="T梁标准横断面样图",
@@ -202,7 +448,6 @@ def test_civil_preference_learning_scope_and_correction_regression_flywheel(tmp_
     assert all(e.part_family == "civil_bridge" for e in learned)
     assert all(e.evidence[0].source_drawing == "fav_bridge_sample.dxf" for e in learned)
 
-    # 2. Feed an unconfirmed sample DXF with a DIFFERENT style -> must NOT overwrite confirmed project habits!
     stray_sample = tmp_path / "stray_other_style.dxf"
     doc_stray, _, _ = setup_civil_dxf_document(
         title="外单位桥墩样图",
@@ -215,7 +460,6 @@ def test_civil_preference_learning_scope_and_correction_regression_flywheel(tmp_
     confirmed_fonts = [e.value for e in store.entries if e.key == "civil_text_font" and e.status == "confirmed"]
     assert confirmed_fonts == ["gbenor.shx"]
 
-    # 3. Generate a bridge cross-section with NEW dimensions (deck=10200, spacing=2250) -> reuses style, adopts new dims!
     new_dxf = generate_civil_bridge_dxf(
         "t_girder_section",
         {
@@ -236,7 +480,6 @@ def test_civil_preference_learning_scope_and_correction_regression_flywheel(tmp_
     dim_txts = " | ".join(str(e.dxf.get("text", "")) for e in reopened_new.modelspace() if e.dxftype() == "DIMENSION")
     assert "10200" in dim_txts and "2250" in dim_txts
 
-    # 4. Record a faulty flat-slope DXF correction into the regression vault and replay it automatically
     doc_faulty = ezdxf.readfile(new_dxf)
     for ent in doc_faulty.modelspace():
         if ent.dxftype() == "LWPOLYLINE":

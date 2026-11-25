@@ -1295,6 +1295,7 @@ def wenchang_bridge_preset() -> dict[str, Any]:
         "cross_slope_pct": 2.0,
         "asphalt_thick_mm": 100.0,
         "concrete_paving_thick_mm": 80.0,
+        "barriers_total_kn_m": 18.0,
         "hydrology": {
             "area_m2": 325.0,
             "wetted_perimeter_m": 64.5,
@@ -1327,7 +1328,6 @@ def wenchang_bridge_preset() -> dict[str, Any]:
         },
         "superstructure": {
             "diaphragm_equiv_kn_m": 2.35,
-            "superimposed_dead_kn_m": 8.60,
             "load_grade": "highway-I",
         },
         "prestress": {
@@ -1360,6 +1360,227 @@ def _deep_merge_dict(base: dict[str, Any], over: dict[str, Any]) -> dict[str, An
     return out
 
 
+def collect_failed_structural_checks(
+    *,
+    section: dict[str, Any],
+    girder_checks: dict[str, Any],
+    slab_checks: dict[str, Any],
+    bearing_checks: dict[str, Any],
+    substructure_checks: dict[str, Any],
+    consistency: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Aggregate every failed structural or consistency check with governing demand, allowable limit, and sheet IDs."""
+    failed: list[dict[str, Any]] = []
+
+    def _add(
+        component: str,
+        check_key: str,
+        demand: float | str,
+        allowable: float | str,
+        unit: str,
+        related_drawings: list[str],
+        message: str,
+    ) -> None:
+        failed.append(
+            {
+                "component": component,
+                "check_key": check_key,
+                "demand": demand,
+                "allowable": allowable,
+                "unit": unit,
+                "related_drawings": related_drawings,
+                "message": message,
+            }
+        )
+
+    mid_mm = section["mid_span_mm"]
+    if not mid_mm.get("passes_efficiency", True):
+        _add(
+            "主梁跨中截面效率指标",
+            "t_girder_section.efficiency_rho",
+            mid_mm["efficiency_rho"],
+            0.50,
+            "-",
+            ["QL-05", "QL-06", "QL-07"],
+            f"T梁跨中截面效率指标 ρ={mid_mm['efficiency_rho']} < 0.50",
+        )
+
+    uf = girder_checks["uls_flexure"]
+    if not uf["passed"]:
+        _add(
+            "主梁正截面抗弯承载力",
+            "girder_checks.uls_flexure",
+            uf["demand_md_knm"],
+            uf["capacity_mu_knm"],
+            "kN·m",
+            ["QL-06", "QL-08", "QL-09"],
+            f"主梁跨中抗弯不满足：Md={uf['demand_md_knm']} kN·m, Mu={uf['capacity_mu_knm']} kN·m (x={uf['compression_depth_x_mm']}/{uf['max_depth_xib_h0_mm']}mm)",
+        )
+
+    us = girder_checks["uls_shear"]
+    if not us["passed"]:
+        _add(
+            "主梁斜截面抗剪承载力",
+            "girder_checks.uls_shear",
+            us["demand_vd_kn"],
+            min(us["capacity_vu_kn"], us["size_upper_limit_kn"]),
+            "kN",
+            ["QL-06", "QL-08", "QL-09"],
+            f"主梁支点抗剪不满足：Vd={us['demand_vd_kn']} kN > Vu={min(us['capacity_vu_kn'], us['size_upper_limit_kn'])} kN",
+        )
+
+    sc = girder_checks["sls_crack_and_stress"]
+    if not sc["passed"]:
+        _add(
+            "主梁抗裂及施工/使用阶段应力",
+            "girder_checks.sls_crack_and_stress",
+            sc["net_bot_stress_freq_mpa"],
+            0.0,
+            "MPa",
+            ["QL-08", "QL-09"],
+            f"主梁正常使用抗裂或压/主拉应力超限 (频遇下缘净应力={sc['net_bot_stress_freq_mpa']} MPa, 压应力={max(sc['top_comp_char_mpa'], sc['bot_comp_char_mpa'])}/{sc['comp_allowable_mpa']} MPa)",
+        )
+
+    sd = girder_checks["sls_deflection"]
+    if not sd["passed"]:
+        _add(
+            "主梁正常使用挠度",
+            "girder_checks.sls_deflection",
+            sd["live_deflection_mm"],
+            sd["allowable_l_div_600_mm"],
+            "mm",
+            ["QL-06", "QL-08"],
+            f"主梁活载挠度 f={sd['live_deflection_mm']} mm > L/600={sd['allowable_l_div_600_mm']} mm",
+        )
+
+    ds = slab_checks["deck_slab"]
+    if not ds["passed"]:
+        _add(
+            "行车道翼缘板抗弯承载力",
+            "slab_and_diaphragm_checks.deck_slab",
+            ds["m_uls_knm_per_m"],
+            ds["mu_capacity_knm_per_m"],
+            "kN·m/m",
+            ["QL-05", "QL-10"],
+            f"翼缘板悬臂抗弯超限：Md={ds['m_uls_knm_per_m']} > Mu={ds['mu_capacity_knm_per_m']} kN·m/m",
+        )
+
+    dp = slab_checks["diaphragm"]
+    if not dp["passed"]:
+        _add(
+            "中横隔梁抗弯承载力",
+            "slab_and_diaphragm_checks.diaphragm",
+            dp["m_uls_knm"],
+            dp["mu_capacity_knm"],
+            "kN·m",
+            ["QL-06", "QL-11"],
+            f"横隔梁抗弯超限：Md={dp['m_uls_knm']} > Mu={dp['mu_capacity_knm']} kN·m",
+        )
+
+    if not bearing_checks["passed"]:
+        if not bearing_checks.get("stress_passed", True):
+            _add(
+                "板式橡胶支座抗压应力",
+                "bearing_checks.compressive_stress",
+                bearing_checks["compressive_stress_mpa"],
+                bearing_checks["allowable_stress_mpa"],
+                "MPa",
+                ["QL-12", "QL-14", "QL-15"],
+                f"支座压应力超限：σc={bearing_checks['compressive_stress_mpa']} MPa > {bearing_checks['allowable_stress_mpa']} MPa",
+            )
+        if not bearing_checks.get("shear_strain_passed", True):
+            _add(
+                "板式橡胶支座剪切变形",
+                "bearing_checks.shear_strain",
+                bearing_checks["shear_strain_tan_gamma"],
+                bearing_checks["allowable_tan_gamma"],
+                "-",
+                ["QL-12"],
+                f"支座水平剪切变形超限：tanγ={bearing_checks['shear_strain_tan_gamma']} > {bearing_checks['allowable_tan_gamma']}",
+            )
+        if not bearing_checks.get("min_stress_passed", True) or not bearing_checks.get("anti_uplift_passed", True):
+            _add(
+                "板式橡胶支座最小压应力及抗脱空",
+                "bearing_checks.anti_uplift",
+                bearing_checks["min_contact_stress_mpa"],
+                bearing_checks.get("min_allowable_stress_mpa", 1.5),
+                "MPa",
+                ["QL-12", "QL-14", "QL-15"],
+                f"支座最小压应力或抗脱空不满足：σmin={bearing_checks['min_contact_stress_mpa']} MPa, Rmin={bearing_checks['min_reaction_kn']} kN",
+            )
+
+    cb = substructure_checks["cap_beam"]
+    if not cb["passed"]:
+        if cb["m_hog_uls_knm"] > cb["mu_hog_capacity_knm"] or cb["m_sag_uls_knm"] > cb["mu_sag_capacity_knm"]:
+            _add(
+                "桥墩盖梁正截面抗弯承载力",
+                "substructure_checks.cap_beam.flexure",
+                cb["m_hog_uls_knm"],
+                cb["mu_hog_capacity_knm"],
+                "kN·m",
+                ["QL-14", "QL-16"],
+                f"盖梁抗弯承载力不足：Md={cb['m_hog_uls_knm']} kN·m > Mu={cb['mu_hog_capacity_knm']} kN·m",
+            )
+        if cb["v_uls_kn"] > cb["vu_capacity_kn"]:
+            _add(
+                "桥墩盖梁斜截面抗剪承载力",
+                "substructure_checks.cap_beam.shear",
+                cb["v_uls_kn"],
+                cb["vu_capacity_kn"],
+                "kN",
+                ["QL-14", "QL-16"],
+                f"盖梁抗剪承载力不足：Vd={cb['v_uls_kn']} kN > Vu={cb['vu_capacity_kn']} kN",
+            )
+        if cb["crack_width_mm"] > cb["crack_allowable_mm"]:
+            _add(
+                "桥墩盖梁最大裂缝宽度",
+                "substructure_checks.cap_beam.crack_width",
+                cb["crack_width_mm"],
+                cb["crack_allowable_mm"],
+                "mm",
+                ["QL-14", "QL-16"],
+                f"盖梁裂缝超限：wcr={cb['crack_width_mm']} mm > {cb['crack_allowable_mm']} mm",
+            )
+
+    pc = substructure_checks["pier_column"]
+    if not pc["passed"]:
+        _add(
+            "桥墩双柱式墩柱偏心受压承载力",
+            "substructure_checks.pier_column",
+            pc["n_uls_kn"],
+            pc["nu_capacity_kn"],
+            "kN",
+            ["QL-14", "QL-17"],
+            f"墩柱偏心受压承载力不足：Nd={pc['n_uls_kn']} kN > Nu={pc['nu_capacity_kn']} kN",
+        )
+
+    bp = substructure_checks["bored_pile"]
+    if not bp["passed"]:
+        _add(
+            "钻孔灌注桩单桩竖向承载力",
+            "substructure_checks.bored_pile",
+            bp["pile_top_sls_demand_kn"],
+            bp["allowable_ra_kn"],
+            "kN",
+            ["QL-03", "QL-14", "QL-15", "QL-17", "QL-18"],
+            f"钻孔灌注桩竖向承载力不足 (桩长 {bp['design_length_m']}m)：桩顶需求 R={bp['pile_top_sls_demand_kn']} kN > 容许值 [Ra]={bp['allowable_ra_kn']} kN",
+        )
+
+    for iss in consistency.get("issues", []):
+        if iss.get("severity") == "error":
+            _add(
+                "总体与构造尺寸一致性校核",
+                f"consistency_audit.{iss['code']}",
+                "conflict",
+                "consistent",
+                "-",
+                ["QL-01", "QL-05", "QL-14", "QL-15"],
+                str(iss["message"]),
+            )
+
+    return failed
+
+
 def run_full_bridge_calculation(params: dict[str, Any] | None = None) -> dict[str, Any]:
     """Run an end-to-end Highway PC T-Girder Bridge calculation, ULS/SLS checks, ledger, BOQ, and audit."""
     from .bridge_checks import (
@@ -1372,74 +1593,111 @@ def run_full_bridge_calculation(params: dict[str, Any] | None = None) -> dict[st
     )
 
     raw_cfg = dict(params or {})
+    raw_sup_cfg = dict(raw_cfg.get("superstructure") or {})
+    raw_sub_cfg = dict(raw_cfg.get("substructure") or {})
     preset_name = str(raw_cfg.get("preset", "")).strip().lower()
     if preset_name == "wenchang":
         cfg = _deep_merge_dict(wenchang_bridge_preset(), raw_cfg)
     else:
-        cfg = raw_cfg
+        cfg = dict(raw_cfg)
 
-    # Track unresolved / assumed site parameters explicitly so missing survey items are never hidden
-    unresolved_assumptions: list[dict[str, Any]] = []
-    if "flood_elevation_m" not in cfg:
-        unresolved_assumptions.append(
+    hydro_cfg = dict(
+        cfg.get(
+            "hydrology",
             {
-                "field": "flood_elevation_m",
-                "assumed_value": 81.200,
-                "unit": "m",
-                "impact": "控制梁底最低标高与立面图设计洪水位线",
-                "required_source": "信阳桥位河道1/100洪水频率水文断面实测资料",
-            }
+                "area_m2": 898.525,
+                "wetted_perimeter_m": 127.86,
+                "roughness_inv": 22.22,
+                "slope_permille": 0.5,
+                "channel_width_m": 103.08,
+                "standard_span_m": 25.0,
+            },
         )
-    if "deck_elevation_m" not in cfg:
-        unresolved_assumptions.append(
-            {
-                "field": "deck_elevation_m",
-                "assumed_value": 86.500,
-                "unit": "m",
-                "impact": "控制桥面及墩柱高度",
-                "required_source": "路线纵断面设计高程表",
-            }
-        )
-    sub_user_cfg = dict(cfg.get("substructure", {}))
-    if "explicit_pile_length_m" not in sub_user_cfg and "pile_length_m" not in cfg:
-        unresolved_assumptions.append(
-            {
-                "field": "pile_length_m",
-                "assumed_value": "auto_friction_pile",
-                "unit": "m",
-                "impact": "钻孔灌注桩设计桩长及水下C30混凝土工程量（当前按JTG 3363-2019摩擦桩公式初算）",
-                "required_source": "桥位钻孔地质柱状图实测标高与分层摩阻力确认",
-            }
-        )
-    if "calc_span_m" not in cfg and "calc_span_m" not in cfg.get("superstructure", {}):
-        unresolved_assumptions.append(
-            {
-                "field": "calc_span_m",
-                "assumed_value": 24.0,
-                "unit": "m",
-                "impact": "主梁恒活载弯矩/剪力包络与挠度（由预制梁长扣除两端支座中心距决定）",
-                "required_source": "支座中心线距梁端构造距离确认",
-            }
-        )
-
-    hydro_cfg = dict(cfg.get("hydrology", {
-        "area_m2": 898.525,
-        "wetted_perimeter_m": 127.86,
-        "roughness_inv": 22.22,
-        "slope_permille": 0.5,
-        "channel_width_m": 103.08,
-        "standard_span_m": 25.0,
-    }))
+    )
     if "standard_span_m" in cfg:
         hydro_cfg.setdefault("standard_span_m", float(cfg["standard_span_m"]))
     hydro = compute_hydrology_and_span(**hydro_cfg)
     n_spans = int(cfg.get("n_spans", hydro["recommended_spans"]))
     std_span_m = float(cfg.get("standard_span_m", hydro["standard_span_m"]))
 
+    ps_cfg = dict(cfg.get("prestress", {}))
+    beam_len_m = float(cfg.get("beam_length_m", ps_cfg.get("beam_length_m", round(std_span_m - 0.04, 3))))
+
     sup_cfg = dict(cfg.get("superstructure", {}))
-    if "calc_span_m" in cfg:
+    if "bearing_center_offset_m" in cfg and "calc_span_m" not in raw_cfg and "calc_span_m" not in raw_sup_cfg:
+        sup_cfg["calc_span_m"] = round(beam_len_m - 2.0 * float(cfg["bearing_center_offset_m"]), 4)
+    elif "calc_span_m" in cfg:
         sup_cfg["calc_span_m"] = float(cfg["calc_span_m"])
     calc_span_m = float(sup_cfg.get("calc_span_m", 24.0))
+
+    # Track unresolved / assumed site & basis parameters against raw_cfg (never cleared without real basis!)
+    unresolved_assumptions: list[dict[str, Any]] = []
+    if "flood_elevation_m" not in raw_cfg:
+        unresolved_assumptions.append(
+            {
+                "field": "flood_elevation_m",
+                "assumed_value": float(cfg.get("flood_elevation_m", 81.200)),
+                "unit": "m",
+                "impact": "控制梁底最低标高与立面图设计洪水位线",
+                "required_source": "桥位河道1/100洪水频率水文断面实测资料",
+            }
+        )
+    if "deck_elevation_m" not in raw_cfg:
+        unresolved_assumptions.append(
+            {
+                "field": "deck_elevation_m",
+                "assumed_value": float(cfg.get("deck_elevation_m", 86.500)),
+                "unit": "m",
+                "impact": "控制桥面设计高程及墩柱高度",
+                "required_source": "路线纵断面设计高程表",
+            }
+        )
+    if "hydrology" not in raw_cfg:
+        unresolved_assumptions.append(
+            {
+                "field": "hydrology",
+                "assumed_value": "preliminary_channel_hydraulic_model",
+                "unit": "m3/s",
+                "impact": "设计流量与桥孔净长复核依据（当前采用开题阶段概略河槽参数）",
+                "required_source": "桥位河道实测横断面、糙率及水文频率计算资料",
+            }
+        )
+    has_geotech_basis = ("soil_layers" in raw_cfg) or ("soil_layers" in raw_sub_cfg)
+    if not has_geotech_basis:
+        unresolved_assumptions.append(
+            {
+                "field": "soil_layers",
+                "assumed_value": "default_xinyang_alluvial_4_layers",
+                "unit": "kPa",
+                "impact": "钻孔灌注桩分层侧摩阻力 q_ik 与桩端承载力 f_a0 验算依据（当前采用开题报告概略地层内置初值）",
+                "required_source": "桥位钻孔地质柱状图及地勘报告分层物理力学指标表",
+            }
+        )
+    if "explicit_pile_length_m" not in raw_sub_cfg and "pile_length_m" not in raw_cfg:
+        unresolved_assumptions.append(
+            {
+                "field": "pile_length_m",
+                "assumed_value": "auto_friction_pile",
+                "unit": "m",
+                "impact": "钻孔灌注桩设计桩长及水下C30混凝土工程量（当前按JTG 3363-2019摩擦桩公式初算）",
+                "required_source": "结合实测钻孔地勘持力层顶面标高核定最终桩长",
+            }
+        )
+    has_span_basis = (
+        ("calc_span_m" in raw_cfg)
+        or ("calc_span_m" in raw_sup_cfg)
+        or ("bearing_center_offset_m" in raw_cfg)
+    )
+    if not has_span_basis:
+        unresolved_assumptions.append(
+            {
+                "field": "calc_span_m",
+                "assumed_value": calc_span_m,
+                "unit": "m",
+                "impact": "主梁恒活载内力包络与挠度（开题报告仅给25m标准跨径，需由梁端至支座中心线定位距离核定实际计算跨径）",
+                "required_source": "预制梁长及支座中心线距梁端构造定位尺寸确认",
+            }
+        )
 
     t_cfg = dict(cfg.get("t_girder", {}))
     lat_cfg = dict(cfg.get("lateral", {}))
@@ -1459,6 +1717,36 @@ def run_full_bridge_calculation(params: dict[str, Any] | None = None) -> dict[st
     section = compute_t_girder_section(**t_cfg)
     lateral = compute_lateral_distribution(**lat_cfg)
 
+    # Upstream unified deck pavement + barrier superimposed dead load g2 (per girder, kN/m)
+    asphalt_mm = float(cfg.get("asphalt_thick_mm", 110.0))
+    conc_pav_mm = float(cfg.get("concrete_paving_thick_mm", 100.0))
+    asphalt_unit_wt = float(cfg.get("asphalt_unit_weight_kn_m3", 24.0))
+    conc_pav_unit_wt = float(cfg.get("concrete_paving_unit_weight_kn_m3", 25.0))
+    barriers_total_kn_m = float(cfg.get("barriers_total_kn_m", 18.0))
+    q_asphalt_deck_kn_m = lateral["clear_width_m"] * (asphalt_mm * 1e-3) * asphalt_unit_wt
+    q_conc_pav_deck_kn_m = lateral["clear_width_m"] * (conc_pav_mm * 1e-3) * conc_pav_unit_wt
+    derived_g2_kn_m = round(
+        (q_asphalt_deck_kn_m + q_conc_pav_deck_kn_m + barriers_total_kn_m) / lateral["n_girders"],
+        4,
+    )
+
+    extra_consistency_issues: list[dict[str, Any]] = []
+    if "superimposed_dead_kn_m" not in raw_sup_cfg:
+        sup_cfg["superimposed_dead_kn_m"] = derived_g2_kn_m
+    elif ("asphalt_thick_mm" in raw_cfg or "concrete_paving_thick_mm" in raw_cfg) and abs(
+        float(raw_sup_cfg["superimposed_dead_kn_m"]) - derived_g2_kn_m
+    ) > 1.5:
+        extra_consistency_issues.append(
+            {
+                "code": "SUPERIMPOSED_DEAD_PAVING_MISMATCH",
+                "severity": "error",
+                "message": (
+                    f"显式输入的二期恒载 ({raw_sup_cfg['superimposed_dead_kn_m']} kN/m) 与桥面铺装+护栏折算值 "
+                    f"({derived_g2_kn_m} kN/m) 冲突"
+                ),
+            }
+        )
+
     m_oq_gov = max(item["m_oq"] for item in lateral["lever_rule"])
     m_cq_gov = max(item["m_cq"] for item in lateral["eccentric_compression"])
 
@@ -1469,11 +1757,21 @@ def run_full_bridge_calculation(params: dict[str, Any] | None = None) -> dict[st
         m_cq=m_cq_gov,
         **sup_cfg,
     )
+    envelopes["dead_load_breakdown"] = {
+        "g1_girder_self_kn_m": round(
+            section["mid_span_m"]["area_m2"] * float(sup_cfg.get("concrete_unit_weight_kn_m3", 26.0)),
+            4,
+        ),
+        "diaphragm_equiv_kn_m": round(float(sup_cfg.get("diaphragm_equiv_kn_m", 3.20)), 4),
+        "asphalt_paving_per_girder_kn_m": round(q_asphalt_deck_kn_m / lateral["n_girders"], 4),
+        "concrete_paving_per_girder_kn_m": round(q_conc_pav_deck_kn_m / lateral["n_girders"], 4),
+        "barriers_per_girder_kn_m": round(barriers_total_kn_m / lateral["n_girders"], 4),
+        "superimposed_dead_kn_m": round(float(sup_cfg["superimposed_dead_kn_m"]), 4),
+        "total_dead_kn_m": envelopes["dead_load_kn_m"],
+    }
 
-    ps_cfg = dict(cfg.get("prestress", {}))
     if "sigma_con_mpa" in cfg:
         ps_cfg["sigma_con_mpa"] = float(cfg["sigma_con_mpa"])
-    beam_len_m = float(cfg.get("beam_length_m", ps_cfg.get("beam_length_m", round(std_span_m - 0.04, 3))))
     ps_cfg.setdefault("beam_length_m", beam_len_m)
 
     prestress = compute_prestress_estimation_and_loss(
@@ -1485,24 +1783,55 @@ def run_full_bridge_calculation(params: dict[str, Any] | None = None) -> dict[st
         **ps_cfg,
     )
 
-    # Derive per-girder support reactions and geometry for the pier cap beam unless overridden
-    per_girder_reactions_kn: list[float] = []
-    per_girder_sls_max_kn: list[float] = []
-    per_girder_sls_min_kn: list[float] = []
+    # Distinguish single-span bearing reactions vs intermediate pier (left + right adjacent spans!)
+    n_adj_spans = 2 if n_spans >= 2 else 1
+    gamma0 = float(sup_cfg.get("safety_factor_gamma0", 1.1))
+    load_grade = sup_cfg.get("load_grade", "highway-I")
+    code_edition = sup_cfg.get("code_edition", "JTG-D60-2015")
+    qk_2span, pk_2span = _highway_lane_load(
+        n_adj_spans * envelopes["calc_span_m"],
+        load_grade=load_grade,
+        code_edition=code_edition,
+    )
+    mu_imp = float(envelopes["impact_factor_mu"])
+
+    single_span_dead_per_girder_kn = round(abs(float(envelopes["support_summary"]["q_dead_kn"])), 2)
+    left_span_dead_per_girder_kn = single_span_dead_per_girder_kn
+    right_span_dead_per_girder_kn = single_span_dead_per_girder_kn if n_adj_spans == 2 else 0.0
+    pier_dead_per_girder_kn = round(left_span_dead_per_girder_kn + right_span_dead_per_girder_kn, 2)
+
+    per_girder_pier_uls_kn: list[float] = []
+    per_girder_pier_sls_kn: list[float] = []
+    per_girder_single_sls_max_kn: list[float] = []
+    per_girder_single_sls_min_kn: list[float] = []
+    per_girder_1span_live_kn: list[float] = []
+
     for g_idx in range(lateral["n_girders"]):
+        m_oq_i = float(lateral["lever_rule"][g_idx]["m_oq"])
+        m_cq_i = float(lateral["eccentric_compression"][g_idx]["m_cq"])
         g_env = compute_superstructure_envelopes(
             section_area_m2=section["mid_span_m"]["area_m2"],
             section_ix_m4=section["mid_span_m"]["ix_m4"],
-            m_oq=lateral["lever_rule"][g_idx]["m_oq"],
-            m_cq=lateral["eccentric_compression"][g_idx]["m_cq"],
+            m_oq=m_oq_i,
+            m_cq=m_cq_i,
             **sup_cfg,
         )
-        per_girder_reactions_kn.append(round(abs(g_env["support_summary"]["q_uls_gov_kn"]), 2))
-        per_girder_sls_max_kn.append(round(abs(g_env["support_summary"]["q_sls_char_kn"]), 2))
-        per_girder_sls_min_kn.append(round(abs(g_env["support_summary"]["q_dead_kn"]), 2))
+        r_live_1 = abs(float(g_env["support_summary"]["q_live_pos_kn"]))
+        per_girder_1span_live_kn.append(round(r_live_1, 2))
+        per_girder_single_sls_max_kn.append(round(abs(float(g_env["support_summary"]["q_sls_char_kn"])), 2))
+        per_girder_single_sls_min_kn.append(round(abs(float(g_env["support_summary"]["q_dead_kn"])), 2))
+
+        if n_adj_spans == 2:
+            # Two-span intermediate pier influence line [-L, +L]: area = L, peak ordinate at pier = 1.0
+            r_live_pier = (1.0 + mu_imp) * (m_cq_i * qk_2span * envelopes["calc_span_m"] + m_oq_i * 1.2 * pk_2span)
+        else:
+            r_live_pier = r_live_1
+
+        per_girder_pier_sls_kn.append(round(pier_dead_per_girder_kn + r_live_pier, 2))
+        per_girder_pier_uls_kn.append(round(gamma0 * (1.2 * pier_dead_per_girder_kn + 1.4 * r_live_pier), 2))
 
     cap_cfg = dict(cfg.get("cap_beam", {}))
-    cap_cfg.setdefault("girder_reactions_kn", per_girder_reactions_kn)
+    cap_cfg.setdefault("girder_reactions_kn", per_girder_pier_uls_kn)
     cap_cfg.setdefault("girder_spacing_m", lateral["girder_spacing_m"])
     default_cap_len = round((len(cap_cfg["girder_reactions_kn"]) - 1) * float(cap_cfg["girder_spacing_m"]) + 1.558, 4)
     cap_cfg.setdefault("cap_length_m", default_cap_len)
@@ -1510,13 +1839,45 @@ def run_full_bridge_calculation(params: dict[str, Any] | None = None) -> dict[st
 
     cap_beam = solve_continuous_cap_beam_1d(**cap_cfg)
 
-    asphalt_mm = float(cfg.get("asphalt_thick_mm", 110.0))
-    conc_pav_mm = float(cfg.get("concrete_paving_thick_mm", 100.0))
+    sub_user_cfg = dict(cfg.get("substructure", {}))
+    n_cols = int(cap_cfg.get("n_columns", 2))
+    cap_h_val = float(cap_cfg.get("cap_height_m", 1.50))
+    col_h_val = float(sub_user_cfg.get("column_height_m", 6.00))
+    bearing_ecc_m = float(cfg.get("pier_bearing_row_eccentricity_m", 0.28))
+    # Single-span asymmetric live load + braking horizontal force longitudinal moment on pier column
+    one_span_ecc_col_moment_uls_knm = (
+        round(
+            (
+                gamma0 * 1.4 * sum(per_girder_1span_live_kn) * bearing_ecc_m
+                + gamma0 * 1.4 * 85.0 * 0.5 * (cap_h_val + col_h_val)
+            )
+            / max(1, n_cols),
+            2,
+        )
+        if n_adj_spans == 2
+        else 0.0
+    )
+
+    pier_reaction_summary = {
+        "n_adjacent_spans": n_adj_spans,
+        "left_span_dead_per_girder_kn": left_span_dead_per_girder_kn,
+        "right_span_dead_per_girder_kn": right_span_dead_per_girder_kn,
+        "left_span_total_unfactored_dead_kn": round(left_span_dead_per_girder_kn * lateral["n_girders"], 2),
+        "right_span_total_unfactored_dead_kn": round(right_span_dead_per_girder_kn * lateral["n_girders"], 2),
+        "pier_total_unfactored_dead_kn": round(pier_dead_per_girder_kn * lateral["n_girders"], 2),
+        "two_span_pier_sls_per_girder_kn": per_girder_pier_sls_kn,
+        "two_span_pier_uls_per_girder_kn": per_girder_pier_uls_kn,
+        "single_bearing_sls_max_per_girder_kn": per_girder_single_sls_max_kn,
+        "single_bearing_sls_min_per_girder_kn": per_girder_single_sls_min_kn,
+        "one_span_eccentric_col_moment_uls_knm": one_span_ecc_col_moment_uls_knm,
+    }
+
     girder_checks = check_t_girder_uls_sls(
         section=section,
         envelopes=envelopes,
         prestress=prestress,
         beam_length_m=beam_len_m,
+        **dict(cfg.get("girder_check_overrides", {})),
     )
     slab_checks = check_deck_slab_and_diaphragm(
         girder_spacing_m=lateral["girder_spacing_m"],
@@ -1525,24 +1886,27 @@ def run_full_bridge_calculation(params: dict[str, Any] | None = None) -> dict[st
         impact_mu=envelopes["impact_factor_mu"],
         calc_span_m=envelopes["calc_span_m"],
     )
-    bearing_checks = check_elastomeric_bearing(
-        max_sls_reaction_kn=max(per_girder_sls_max_kn),
-        min_sls_reaction_kn=min(per_girder_sls_min_kn),
-        bearing_length_mm=450.0 if max(per_girder_sls_max_kn) > 880.0 else 400.0,
-        bearing_thick_mm=85.0 if max(per_girder_sls_max_kn) > 880.0 else 74.0,
-        calc_span_m=envelopes["calc_span_m"],
-    )
+
+    brg_cfg = dict(cfg.get("bearing", {}))
+    brg_cfg.setdefault("max_sls_reaction_kn", max(per_girder_single_sls_max_kn))
+    brg_cfg.setdefault("min_sls_reaction_kn", min(per_girder_single_sls_min_kn))
+    brg_cfg.setdefault("bearing_length_mm", 450.0 if brg_cfg["max_sls_reaction_kn"] > 880.0 else 400.0)
+    brg_cfg.setdefault("bearing_thick_mm", 85.0 if brg_cfg["max_sls_reaction_kn"] > 880.0 else 74.0)
+    brg_cfg.setdefault("calc_span_m", envelopes["calc_span_m"])
+    bearing_checks = check_elastomeric_bearing(**brg_cfg)
+
     explicit_pile_m = cfg.get("pile_length_m", sub_user_cfg.get("explicit_pile_length_m"))
     substructure_checks = check_substructure_cap_pier_pile(
         cap_beam_1d=cap_beam,
         cap_width_m=float(cap_cfg.get("cap_width_m", 1.70)),
-        cap_height_m=float(cap_cfg.get("cap_height_m", 1.50)),
+        cap_height_m=cap_h_val,
         column_diameter_m=float(sub_user_cfg.get("column_diameter_m", 1.20)),
-        column_height_m=float(sub_user_cfg.get("column_height_m", 6.00)),
+        column_height_m=col_h_val,
         pile_diameter_m=float(sub_user_cfg.get("pile_diameter_m", 1.40)),
         concrete_grade=str(sub_user_cfg.get("concrete_grade", "C30")),
-        soil_layers=sub_user_cfg.get("soil_layers"),
+        soil_layers=sub_user_cfg.get("soil_layers", cfg.get("soil_layers")),
         explicit_pile_length_m=float(explicit_pile_m) if explicit_pile_m is not None else None,
+        longitudinal_moment_uls_knm=one_span_ecc_col_moment_uls_knm,
     )
 
     ledger = build_rebar_and_tendon_ledger(
@@ -1559,6 +1923,7 @@ def run_full_bridge_calculation(params: dict[str, Any] | None = None) -> dict[st
         girder_checks=girder_checks,
         slab_checks=slab_checks,
         sub_checks=substructure_checks,
+        standard_span_m=std_span_m,
     )
     boq = compute_bridge_bill_of_quantities(
         n_spans=n_spans,
@@ -1570,13 +1935,15 @@ def run_full_bridge_calculation(params: dict[str, Any] | None = None) -> dict[st
         concrete_pav_thick_m=conc_pav_mm * 1e-3,
         cap_length_m=cap_beam["cap_length_m"],
         cap_width_m=float(cap_cfg.get("cap_width_m", 1.70)),
-        cap_height_m=float(cap_cfg.get("cap_height_m", 1.50)),
+        cap_height_m=cap_h_val,
         column_diameter_m=float(substructure_checks["pier_column"]["diameter_m"]),
         column_height_m=float(substructure_checks["pier_column"]["height_m"]),
         pile_diameter_m=float(substructure_checks["bored_pile"]["diameter_m"]),
         pile_length_m=float(substructure_checks["bored_pile"]["design_length_m"]),
         bearing_model=bearing_checks["bearing_model"],
         ledger=ledger,
+        standard_span_m=std_span_m,
+        clear_width_m=lateral["clear_width_m"],
     )
 
     actual_pedestals = len(cap_beam["girder_positions_m"])
@@ -1614,7 +1981,52 @@ def run_full_bridge_calculation(params: dict[str, Any] | None = None) -> dict[st
     else:
         merged_cons = default_consistency
     consistency = audit_bridge_design_consistency(merged_cons)
+    if extra_consistency_issues:
+        consistency["issues"].extend(extra_consistency_issues)
+        consistency["issue_count"] = len(consistency["issues"])
+        consistency["error_count"] = sum(1 for i in consistency["issues"] if i["severity"] == "error")
+        consistency["status"] = "passed" if consistency["error_count"] == 0 else "failed"
+
+    failed_checks = collect_failed_structural_checks(
+        section=section,
+        girder_checks=girder_checks,
+        slab_checks=slab_checks,
+        bearing_checks=bearing_checks,
+        substructure_checks=substructure_checks,
+        consistency=consistency,
+    )
+
+    confirmed_deliv = dict(raw_cfg.get("deliverables_confirmed") or {})
+    survey_complete = all(
+        k in raw_cfg for k in ("flood_elevation_m", "deck_elevation_m", "hydrology")
+    ) and has_geotech_basis
+    pending_graduation_deliverables = [
+        {
+            "id": "design_specification_thesis",
+            "title": "毕业设计完整计算说明书（含中英文摘要、三级目录、计算过程、内力图表与参考文献）",
+            "status": "completed" if confirmed_deliv.get("thesis_document") is True else "pending",
+            "note": "任务书要求不少于1.5万字完整说明书；当前一键流程交付18张A3施工图册、结构验算JSON及工程量清单。",
+        },
+        {
+            "id": "site_hydrology_and_geotech_survey",
+            "title": "桥位实测水文断面及钻孔地质勘察依据核定",
+            "status": "completed" if survey_complete else "pending",
+            "note": "需补充实测河床断面、1/100设计洪水位、路线纵断面设计高程及钻孔柱状图分层摩阻力实测值。",
+        },
+        {
+            "id": "seismic_e1_e2_verification",
+            "title": "开题报告列出的 E1 / E2 地震作用抗震验算",
+            "status": "completed"
+            if (confirmed_deliv.get("seismic_e1_e2") is True or bool(raw_cfg.get("seismic_checks")))
+            else "pending",
+            "note": "需按 JTG/T 2231-01-2020 补充 E1 弹性抗震与 E2 塑性铰延性/抗剪及防落梁挡块专项验算。",
+        },
+    ]
+
+    overall_status = "passed" if (not failed_checks and consistency["status"] == "passed") else "failed"
     return {
+        "status": overall_status,
+        "failed_checks": failed_checks,
         "project_summary": {
             "project_name": str(cfg.get("project_name", f"{n_spans}×{std_span_m:g}m 预应力混凝土简支T梁桥")),
             "n_spans": n_spans,
@@ -1625,15 +2037,19 @@ def run_full_bridge_calculation(params: dict[str, Any] | None = None) -> dict[st
             "clear_width_m": lateral["clear_width_m"],
             "roadway_width_m": lateral["roadway_width_m"],
             "cross_slope_pct": float(cfg.get("cross_slope_pct", 2.0)),
+            "asphalt_thick_mm": asphalt_mm,
+            "concrete_paving_thick_mm": conc_pav_mm,
             "flood_elevation_m": float(cfg.get("flood_elevation_m", 81.200)),
             "deck_elevation_m": float(cfg.get("deck_elevation_m", 86.500)),
         },
         "unresolved_assumptions": unresolved_assumptions,
+        "pending_graduation_deliverables": pending_graduation_deliverables,
         "hydrology": hydro,
         "t_girder_section": section,
         "lateral_distribution": lateral,
         "superstructure_envelopes": envelopes,
         "prestress": prestress,
+        "pier_reaction_summary": pier_reaction_summary,
         "pier_cap_beam_1d": cap_beam,
         "girder_checks": girder_checks,
         "slab_and_diaphragm_checks": slab_checks,

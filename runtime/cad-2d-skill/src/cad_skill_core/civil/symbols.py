@@ -116,7 +116,7 @@ def attach_sheet_metadata(doc: Drawing, msp: Modelspace, key: str, data: Mapping
 def setup_civil_dxf_document(
     *,
     sheet_size: str = "A3",
-    font: str = "simfang.ttf",
+    font: str = "Deng.ttf",
     title: str = "桥梁工程构造图",
     project: str = "4×25m 预应力混凝土简支T梁桥",
     drawing_no: str = "QL-01",
@@ -140,26 +140,33 @@ def setup_civil_dxf_document(
 
     doc = ezdxf.new("R2010", setup=True)
     doc.units = ezdxf.units.MM
+    doc.header["$LIMMIN"] = (0.0, 0.0)
+    doc.header["$LIMMAX"] = (sheet_w, sheet_h)
+    doc.header["$EXTMIN"] = (0.0, 0.0, 0.0)
+    doc.header["$EXTMAX"] = (sheet_w, sheet_h, 0.0)
 
     if "CIVIL_TEXT" not in doc.styles:
         st = doc.styles.add("CIVIL_TEXT", font=eff_font)
-        st.dxf.width = 0.80
+        st.dxf.width = 0.85
     if "CIVIL_TITLE" not in doc.styles:
-        st_t = doc.styles.add("CIVIL_TITLE", font=eff_font)
-        st_t.dxf.width = 0.85
+        title_font = "simhei.ttf" if "font" not in overrides and eff_font == "Deng.ttf" else eff_font
+        st_t = doc.styles.add("CIVIL_TITLE", font=title_font)
+        st_t.dxf.width = 0.90
 
-    # Explicit millimeter lineweights (in 1/100 mm) matching gb-civil-construction.yaml
+    # Explicit millimeter lineweights (in 1/100 mm): Main Rebar (0.70mm) > Frame (0.50mm) > Stirrup (0.35mm) > Concrete (0.25mm) > Dim (0.15mm)
     layer_defs = [
-        ("FRAME", 7, "CONTINUOUS", 70),
-        ("OUTLINE", 4, "CONTINUOUS", 60),
-        ("THIN", 8, "CONTINUOUS", 25),
-        ("REBAR", 1, "CONTINUOUS", 50),
-        ("TENDON", 6, "CONTINUOUS", 50),
-        ("CENTER", 1, "CENTER" if "CENTER" in doc.linetypes else "CONTINUOUS", 18),
-        ("HIDDEN", 2, "HIDDEN" if "HIDDEN" in doc.linetypes else "CONTINUOUS", 25),
-        ("DIM", 3, "CONTINUOUS", 18),
-        ("TEXT", 7, "CONTINUOUS", 18),
-        ("HATCH", 9, "CONTINUOUS", 15),
+        ("FRAME", 7, "CONTINUOUS", 50),
+        ("OUTLINE", 4, "CONTINUOUS", 40),
+        ("CONCRETE", 4, "CONTINUOUS", 25),
+        ("THIN", 8, "CONTINUOUS", 15),
+        ("REBAR", 1, "CONTINUOUS", 70),
+        ("REBAR_STIRRUP", 30, "CONTINUOUS", 35),
+        ("TENDON", 6, "CONTINUOUS", 60),
+        ("CENTER", 1, "CENTER" if "CENTER" in doc.linetypes else "CONTINUOUS", 15),
+        ("HIDDEN", 2, "HIDDEN" if "HIDDEN" in doc.linetypes else "CONTINUOUS", 20),
+        ("DIM", 3, "CONTINUOUS", 15),
+        ("TEXT", 7, "CONTINUOUS", 25),
+        ("HATCH", 9, "CONTINUOUS", 13),
         ("TERRAIN", 32, "CONTINUOUS", 35),
     ]
     for name, color, ltype, lw in layer_defs:
@@ -223,7 +230,8 @@ def setup_civil_dxf_document(
 
     add_civil_text(msp, organization, tb_x0 + 44.0, tb_y0 + 28.5, height=2.7, align="CENTER")
     add_civil_text(msp, project, tb_x0 + 134.0, tb_y0 + 28.5, height=2.5, align="CENTER")
-    add_civil_text(msp, f"图名：{title}", tb_x0 + 4.0, tb_y0 + 16.5, height=2.6, align="LEFT")
+    tb_title_h = 2.6 if len(title) <= 15 else max(1.65, round(41.0 / len(title), 2))
+    add_civil_text(msp, f"图名：{title}", tb_x0 + 4.0, tb_y0 + 16.5, height=tb_title_h, align="LEFT")
     add_civil_text(msp, f"比例 {scale_label}", tb_x0 + 91.0, tb_y0 + 16.5, height=2.4, align="LEFT")
     add_civil_text(msp, f"单位 {unit_note}", tb_x0 + 137.0, tb_y0 + 16.5, height=2.4, align="LEFT")
     add_civil_text(msp, "设计：CAD-Skill   复核：JTG规范引擎", tb_x0 + 4.0, tb_y0 + 4.5, height=2.3, align="LEFT")
@@ -624,6 +632,47 @@ def draw_detail_callout(
     )
 
 
+def draw_section_cut_symbol(
+    msp: Modelspace,
+    x1: float,
+    y1: float,
+    x2: float,
+    y2: float,
+    label: str,
+    *,
+    look_dx: float = 0.0,
+    look_dy: float = 1.0,
+    tick_len: float = 4.2,
+    arrow_len: float = 3.8,
+) -> None:
+    """Draw a GB/T 50001 section-cut marker (e.g. A-A, B-B) with bold end ticks and viewing-direction arrows."""
+    dx, dy = x2 - x1, y2 - y1
+    seg = max(1e-4, math.hypot(dx, dy))
+    ux, uy = dx / seg, dy / seg
+    ld_norm = max(1e-4, math.hypot(look_dx, look_dy))
+    vx, vy = look_dx / ld_norm, look_dy / ld_norm
+
+    for px, py, sign in ((x1, y1, -1.0), (x2, y2, 1.0)):
+        # Bold cut tick outside member
+        tx_out = px + sign * ux * tick_len
+        ty_out = py + sign * uy * tick_len
+        msp.add_line((px, py), (tx_out, ty_out), dxfattribs={"layer": "FRAME"})
+        # Viewing-direction arrow from outer end of tick
+        ax_tip = tx_out + vx * arrow_len
+        ay_tip = ty_out + vy * arrow_len
+        msp.add_line((tx_out, ty_out), (ax_tip, ay_tip), dxfattribs={"layer": "DIM"})
+        msp.add_line((ax_tip, ay_tip), (ax_tip - 1.2 * vx + 0.55 * ux, ay_tip - 1.2 * vy + 0.55 * uy), dxfattribs={"layer": "DIM"})
+        msp.add_line((ax_tip, ay_tip), (ax_tip - 1.2 * vx - 0.55 * ux, ay_tip - 1.2 * vy - 0.55 * uy), dxfattribs={"layer": "DIM"})
+        add_civil_text(
+            msp,
+            label,
+            ax_tip + vx * 1.9 + sign * ux * 1.4,
+            ay_tip + vy * 1.9 + sign * uy * 1.4,
+            height=2.35,
+            align="MIDDLE_CENTER",
+        )
+
+
 def _draw_mini_rebar_shape(
     msp: Modelspace,
     shape: str,
@@ -638,7 +687,7 @@ def _draw_mini_rebar_shape(
         msp.add_lwpolyline(
             [(cx - 0.55 * hw, cy - hh), (cx + 0.55 * hw, cy - hh), (cx + 0.55 * hw, cy + hh), (cx - 0.55 * hw, cy + hh)],
             close=True,
-            dxfattribs={"layer": "REBAR"},
+            dxfattribs={"layer": "REBAR_STIRRUP"},
         )
     elif st == "bent_up":
         msp.add_lwpolyline(
@@ -660,7 +709,7 @@ def _draw_mini_rebar_shape(
             dxfattribs={"layer": "REBAR"},
         )
     elif st == "spiral_hoop":
-        msp.add_circle((cx, cy), min(0.45 * hw, hh), dxfattribs={"layer": "REBAR"})
+        msp.add_circle((cx, cy), min(0.45 * hw, hh), dxfattribs={"layer": "REBAR_STIRRUP"})
     else:
         msp.add_lwpolyline(
             [(cx - hw, cy + 0.65 * hh), (cx - hw, cy - 0.35 * hh), (cx + hw, cy - 0.35 * hh), (cx + hw, cy + 0.65 * hh)],
@@ -678,8 +727,9 @@ def draw_rebar_schedule_table(
     y0: float,
     width: float = 180.0,
     title: str = "钢筋数量明细表",
+    dock_to_title_block: bool = False,
 ) -> dict[str, float]:
-    """Render a standard JTG bridge rebar schedule table with miniature bar shapes and attach traceability metadata."""
+    """Render a standard JTG bridge rebar schedule table (optionally fused atop the Title Block) with metadata."""
     rows = list(items)
     hdr_h = 6.2
     title_h = 6.6
@@ -687,12 +737,20 @@ def draw_rebar_schedule_table(
     sum_h = 5.6
     total_h = title_h + hdr_h + len(rows) * row_h + sum_h
 
-    # Outer table border
-    msp.add_lwpolyline(
-        [(x0, y0), (x0 + width, y0), (x0 + width, y0 + total_h), (x0, y0 + total_h)],
-        close=True,
-        dxfattribs={"layer": "FRAME"},
-    )
+    # Outer table border: when fused atop the Title Block (x0=tb_x0, y0=tb_y1, x1=ix1),
+    # share the Title Block's top border and the sheet's right inner frame without duplicate strokes.
+    if dock_to_title_block:
+        msp.add_lwpolyline(
+            [(x0, y0), (x0, y0 + total_h), (x0 + width, y0 + total_h)],
+            close=False,
+            dxfattribs={"layer": "FRAME"},
+        )
+    else:
+        msp.add_lwpolyline(
+            [(x0, y0), (x0 + width, y0), (x0 + width, y0 + total_h), (x0, y0 + total_h)],
+            close=True,
+            dxfattribs={"layer": "FRAME"},
+        )
     y_title_bot = y0 + total_h - title_h
     y_hdr_bot = y_title_bot - hdr_h
     msp.add_line((x0, y_title_bot), (x0 + width, y_title_bot), dxfattribs={"layer": "FRAME"})
@@ -735,7 +793,7 @@ def draw_rebar_schedule_table(
         unit_kg_m = float(item.get("unit_weight_kg_m", round(0.00617 * dia * dia, 3)))
         wt_kg = float(item.get("total_weight_kg", round(tot_m * unit_kg_m, 1)))
         total_kg += wt_kg
-        prefix_sym = "%%c" if grade.upper() == "HPB300" else "Φ"
+        prefix_sym = "φ" if grade.upper() == "HPB300" else "Φ"
         cells = (
             bar_id,
             f"{prefix_sym}{dia:g}",
@@ -780,3 +838,103 @@ def draw_rebar_schedule_table(
         {"title": title, "total_weight_kg": round(total_kg, 2), "items": serialized_rows},
     )
     return {"x0": x0, "y0": y0, "x1": x0 + width, "y1": y0 + total_h, "total_weight_kg": round(total_kg, 2)}
+
+
+def export_civil_a3_print_pdf_png(
+    dxf_path: Any,
+    pdf_path: Any,
+    png_path: Any,
+    *,
+    font_map: Mapping[str, Any] | None = None,
+    dpi: int = 200,
+) -> dict[str, Any]:
+    """Export a glyph-verified, true 1:1 physical sheet (e.g. 420×297 mm A3) monochrome B&W PDF + PNG."""
+    from pathlib import Path
+    import warnings
+
+    from ezdxf.addons.drawing import Frontend, RenderContext
+    from ezdxf.addons.drawing.config import BackgroundPolicy, ColorPolicy, Configuration
+    from ezdxf.addons.drawing.matplotlib import MatplotlibBackend
+    from ezdxf.fonts import fonts
+    from ezdxf.fonts.font_manager import get_ttf_font_face
+    from matplotlib import pyplot as plt
+
+    from cad_skill_core.rendering.preview import (
+        _FONT_RENDER_LOCK,
+        _bind_exact_backend_font,
+        _restore_font_caches,
+        _snapshot_font_caches,
+    )
+    from cad_skill_core.revision.drawing_set import read_dxf_snapshot
+    from cad_skill_core.revision.preview import _VerifiedTextRenderer, _prepare
+
+    src = Path(dxf_path).expanduser().resolve(strict=True)
+    out_pdf = Path(pdf_path).expanduser().resolve()
+    out_png = Path(png_path).expanduser().resolve()
+    out_pdf.parent.mkdir(parents=True, exist_ok=True)
+    out_png.parent.mkdir(parents=True, exist_ok=True)
+
+    raw_doc = read_dxf_snapshot(src.read_bytes())
+    extmin = raw_doc.header.get("$EXTMIN", (0.0, 0.0, 0.0))
+    extmax = raw_doc.header.get("$EXTMAX", (420.0, 297.0, 0.0))
+    x0, y0 = float(extmin[0]), float(extmin[1])
+    x1, y1 = float(extmax[0]), float(extmax[1])
+    if x1 <= x0 or y1 <= y0 or (x1 - x0) > 5000.0:
+        from ezdxf import bbox as ez_bbox
+
+        calc_ext = ez_bbox.extents(raw_doc.modelspace())
+        if calc_ext.has_data:
+            x0, y0 = float(calc_ext.extmin.x), float(calc_ext.extmin.y)
+            x1, y1 = float(calc_ext.extmax.x), float(calc_ext.extmax.y)
+        else:
+            x0, y0, x1, y1 = 0.0, 0.0, 420.0, 297.0
+    sheet_w_mm = max(50.0, x1 - x0)
+    sheet_h_mm = max(50.0, y1 - y0)
+
+    with _FONT_RENDER_LOCK:
+        prepared_doc, bindings, evidence = _prepare(raw_doc, dict(font_map) if font_map else None)
+        snapshots = _snapshot_font_caches(bindings)
+        matches = dict(fonts.font_manager._match_cache)
+        try:
+            fonts.font_manager._match_cache.clear()
+            for bnd in bindings:
+                _bind_exact_backend_font(bnd)
+
+            fig = plt.figure(figsize=(sheet_w_mm / 25.4, sheet_h_mm / 25.4), dpi=dpi, frameon=False)
+            try:
+                ax = fig.add_axes((0.0, 0.0, 1.0, 1.0))
+                ax.set_axis_off()
+                cfg = Configuration(
+                    color_policy=ColorPolicy.BLACK,
+                    background_policy=BackgroundPolicy.WHITE,
+                    lineweight_scaling=1.35,
+                    min_lineweight=0.40,
+                )
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    ctx = RenderContext(prepared_doc)
+                    for bnd in bindings:
+                        if ":inline:" not in bnd.role and bnd.font:
+                            ctx.fonts.setdefault(bnd.font.casefold(), get_ttf_font_face(bnd.path))
+                    fe = Frontend(ctx, MatplotlibBackend(ax, adjust_figure=False), config=cfg)
+                    fe.pipeline.text_engine = _VerifiedTextRenderer(bindings)
+                    fe.draw_layout(prepared_doc.modelspace(), finalize=True)
+                ax.set_xlim(x0, x1)
+                ax.set_ylim(y0, y1)
+                ax.set_aspect("equal", adjustable="box")
+                fig.savefig(out_pdf, format="pdf", facecolor="white")
+                fig.savefig(out_png, format="png", dpi=dpi, facecolor="white")
+            finally:
+                plt.close(fig)
+        finally:
+            _restore_font_caches(snapshots, bindings)
+            fonts.font_manager._match_cache.clear()
+            fonts.font_manager._match_cache.update(matches)
+
+    return {
+        "pdf_path": str(out_pdf),
+        "png_path": str(out_png),
+        "sheet_size_mm": (sheet_w_mm, sheet_h_mm),
+        "dpi": dpi,
+        "font_evidence": evidence,
+    }

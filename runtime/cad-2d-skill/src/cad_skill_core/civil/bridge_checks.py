@@ -38,6 +38,13 @@ def _bar_unit_weight_kg_m(dia_mm: float) -> float:
     return round(0.00617 * dia_mm * dia_mm, 3)
 
 
+def _cmp_str(demand: float, allowable: float, unit: str = "") -> str:
+    u = f" {unit}" if unit else ""
+    if demand <= allowable + 1e-6:
+        return f"{demand:g} <= {allowable:g}{u} (满足)"
+    return f"{demand:g} > {allowable:g}{u} (超限不满足!)"
+
+
 def check_t_girder_uls_sls(
     *,
     section: Mapping[str, Any],
@@ -334,6 +341,9 @@ def check_elastomeric_bearing(
     bearing_thick_mm: float = 74.0,
     rubber_net_thick_mm: float = 52.0,
     calc_span_m: float = 24.0,
+    allowable_stress_mpa: float = 10.0,
+    allowable_tan_gamma: float = 0.70,
+    min_allowable_stress_mpa: float = 1.5,
 ) -> dict[str, Any]:
     """Verify laminated elastomeric bearing (JT/T 4-2019) stress, shear strain, and anti-uplift."""
     ae_mm2 = (bearing_width_mm - 10.0) * (bearing_length_mm - 10.0)
@@ -342,18 +352,27 @@ def check_elastomeric_bearing(
     # Thermal expansion delta_T = 25C over half span
     delta_temp_mm = 1.0e-5 * 25.0 * (0.5 * calc_span_m * 1000.0) + 4.0
     tan_gamma = delta_temp_mm / max(1.0, rubber_net_thick_mm)
-    passed = (sigma_c_mpa <= 10.0) and (min_sls_reaction_kn > 50.0) and (sigma_min_mpa >= 1.5) and (tan_gamma <= 0.70)
+    stress_passed = bool(sigma_c_mpa <= allowable_stress_mpa + 1e-6)
+    min_stress_passed = bool(sigma_min_mpa >= min_allowable_stress_mpa - 1e-6)
+    shear_strain_passed = bool(tan_gamma <= allowable_tan_gamma + 1e-6)
+    anti_uplift_passed = bool(min_sls_reaction_kn > 50.0)
+    passed = stress_passed and min_stress_passed and shear_strain_passed and anti_uplift_passed
     model_str = f"GJZ {bearing_width_mm:g}×{bearing_length_mm:g}×{bearing_thick_mm:g}"
     return {
         "status": "passed" if passed else "failed",
         "bearing_model": model_str,
         "compressive_stress_mpa": round(sigma_c_mpa, 2),
-        "allowable_stress_mpa": 10.0,
+        "allowable_stress_mpa": round(allowable_stress_mpa, 2),
+        "stress_passed": stress_passed,
         "min_contact_stress_mpa": round(sigma_min_mpa, 2),
+        "min_allowable_stress_mpa": round(min_allowable_stress_mpa, 2),
+        "min_stress_passed": min_stress_passed,
+        "max_reaction_kn": round(max_sls_reaction_kn, 2),
         "min_reaction_kn": round(min_sls_reaction_kn, 2),
         "shear_strain_tan_gamma": round(tan_gamma, 3),
-        "allowable_tan_gamma": 0.70,
-        "anti_uplift_passed": bool(min_sls_reaction_kn > 50.0),
+        "allowable_tan_gamma": round(allowable_tan_gamma, 2),
+        "shear_strain_passed": shear_strain_passed,
+        "anti_uplift_passed": anti_uplift_passed,
         "passed": passed,
     }
 
@@ -377,6 +396,7 @@ def check_substructure_cap_pier_pile(
     concrete_grade: str = "C30",
     soil_layers: Sequence[Mapping[str, Any]] | None = None,
     explicit_pile_length_m: float | None = None,
+    longitudinal_moment_uls_knm: float | None = None,
 ) -> dict[str, Any]:
     """Design & verify cap beam (ULS + crack width <= 0.20mm), double-column pier, and bored friction pile."""
     c_mat = CONCRETE_PROPS.get(concrete_grade.upper(), CONCRETE_PROPS["C30"])
@@ -389,7 +409,7 @@ def check_substructure_cap_pier_pile(
 
     b_mm = cap_width_m * 1000.0
     h_mm = cap_height_m * 1000.0
-    h0_mm = h_mm - 75.0
+    h0_mm = max(80.0, h_mm - 75.0)
 
     # Auto-select top negative rebar count (Φ28 HRB400) so BOTH ULS flexure and w_cr <= 0.20mm pass!
     m_hog_sls_freq = 0.72 * m_hog_uls
@@ -397,9 +417,11 @@ def check_substructure_cap_pier_pile(
     chosen_top_n = 12
     w_cr_mm = 9.9
     mu_hog_knm = 0.0
-    for cand_n in range(10, 34, 2):
+    for cand_n in range(10, 44, 2):
         as_cand = _bar_area_mm2(28.0, cand_n)
         x_c = (r_mat["fsd"] * as_cand) / (c_mat["fcd"] * b_mm)
+        if x_c > 0.55 * h0_mm:
+            break
         mu_c = c_mat["fcd"] * b_mm * x_c * (h0_mm - 0.5 * x_c) * 1e-6
         sigma_ss = (m_hog_sls_freq * 1e6) / (0.87 * as_cand * h0_mm)
         rho_te = max(0.01, min(0.10, as_cand / (0.5 * b_mm * h_mm)))
@@ -416,25 +438,39 @@ def check_substructure_cap_pier_pile(
     x_bot = (r_mat["fsd"] * as_bot) / (c_mat["fcd"] * b_mm)
     mu_sag_knm = c_mat["fcd"] * b_mm * x_bot * (h0_mm - 0.5 * x_bot) * 1e-6
 
-    # Cap beam 4-leg Φ12@100 stirrups
-    asv_cap = _bar_area_mm2(12.0, 4)
+    # Cap beam multi-leg Φ12@100 stirrups + 4Φ25 bent-up bars (GL4) per JTG 3362-2018 §5.2.9
+    stirrup_legs_cap = 6 if v_cap_uls > 2400.0 else 4
+    asv_cap = _bar_area_mm2(12.0, stirrup_legs_cap)
     rho_sv_cap = asv_cap / (b_mm * 100.0)
-    vu_cap_kn = (
+    p_cap_pct = min(2.5, 100.0 * _bar_area_mm2(28.0, chosen_top_n) / max(1.0, b_mm * h0_mm))
+    vcs_cap_kn = (
         0.45e-3
         * 1.0
         * 1.0
         * 1.0
         * b_mm
         * h0_mm
-        * math.sqrt((2.0 + 0.6 * 1.2) * c_mat["fcu_k"] * rho_sv_cap * r_mat["fsd"])
+        * math.sqrt((2.0 + 0.6 * p_cap_pct) * math.sqrt(c_mat["fcu_k"]) * rho_sv_cap * r_mat["fsd"])
     )
-    cap_passed = (m_hog_uls <= mu_hog_knm) and (m_sag_uls <= mu_sag_knm) and (v_cap_uls <= vu_cap_kn) and (w_cr_mm <= 0.20)
+    vsb_cap_kn = 0.80e-3 * r_mat["fsd"] * _bar_area_mm2(25.0, 4) * math.sin(math.radians(45.0))
+    v_cap_upper_kn = 0.25e-3 * c_mat["fcd"] * b_mm * h0_mm
+    vu_cap_kn = min(v_cap_upper_kn, vcs_cap_kn + vsb_cap_kn)
+    cap_passed = (
+        (m_hog_uls <= mu_hog_knm)
+        and (m_sag_uls <= mu_sag_knm)
+        and (v_cap_uls <= vu_cap_kn)
+        and (w_cr_mm <= 0.20)
+    )
 
-    # Double-Column Pier Circular RC Section ULS Check
+    # Double-Column Pier Circular RC Section ULS Check (including single-span asymmetric live moment)
     col_area_mm2 = math.pi * 0.25 * ((column_diameter_m * 1000.0) ** 2)
     col_self_kn = 1.2 * (col_area_mm2 * 1e-6) * column_height_m * 25.0
     n_col_uls = max_col_top_kn + col_self_kn
-    m_col_uls = max(180.0, 0.08 * n_col_uls * column_diameter_m)
+    m_col_uls = max(
+        180.0,
+        0.08 * n_col_uls * column_diameter_m,
+        abs(float(longitudinal_moment_uls_knm or 0.0)),
+    )
     col_bar_n = 20
     as_col = _bar_area_mm2(25.0, col_bar_n)
     phi_stab = max(0.75, 1.0 - 0.008 * max(0.0, (column_height_m / column_diameter_m) - 4.0))
@@ -452,9 +488,9 @@ def check_substructure_cap_pier_pile(
     r_pile_sls_demand = (n_col_uls / 1.28) + 120.0
 
     def _eval_ra(length_m: float) -> float:
-        rem = length_m
+        rem = max(0.0, length_m)
         skin_sum = 0.0
-        tip_fa0 = layers[-1]["fa0_kpa"]
+        tip_fa0 = float(layers[0]["fa0_kpa"])
         for lyr in layers:
             thk = float(lyr["thickness_m"])
             used = min(rem, thk)
@@ -466,14 +502,14 @@ def check_substructure_cap_pier_pile(
         if rem > 1e-6:
             skin_sum += float(layers[-1]["qik_kpa"]) * rem
             tip_fa0 = float(layers[-1]["fa0_kpa"])
-        # [Ra] = 0.5 * u * sum(q_ik * l_i) + A_p * q_r (with m0*lambda=0.75 on tip fa0)
+        # [Ra] = 0.5 * u * sum(q_ik * l_i) + A_p * q_r
         return 0.5 * u_perim * skin_sum + ap_pile * (0.85 * tip_fa0)
 
     if explicit_pile_length_m is not None:
         pile_len_m = float(explicit_pile_length_m)
     else:
         pile_len_m = 14.0
-        while pile_len_m < 40.0 and _eval_ra(pile_len_m) < r_pile_sls_demand * 1.15:
+        while pile_len_m < 42.0 and _eval_ra(pile_len_m) < r_pile_sls_demand * 1.15:
             pile_len_m += 1.0
 
     ra_allow_kn = _eval_ra(pile_len_m)
@@ -482,6 +518,8 @@ def check_substructure_cap_pier_pile(
     return {
         "status": "passed" if (cap_passed and pier_passed and pile_passed) else "failed",
         "cap_beam": {
+            "width_m": cap_width_m,
+            "height_m": cap_height_m,
             "m_hog_uls_knm": round(m_hog_uls, 2),
             "mu_hog_capacity_knm": round(mu_hog_knm, 2),
             "m_sag_uls_knm": round(m_sag_uls, 2),
@@ -492,7 +530,8 @@ def check_substructure_cap_pier_pile(
             "crack_allowable_mm": 0.200,
             "top_rebar": f"{chosen_top_n}Φ28",
             "bottom_rebar": f"{bot_n}Φ25",
-            "stirrups": "4肢Φ12@100",
+            "stirrups": f"{stirrup_legs_cap}肢Φ12@100",
+            "stirrup_legs": stirrup_legs_cap,
             "top_rebar_count": chosen_top_n,
             "bottom_rebar_count": bot_n,
             "passed": cap_passed,
@@ -536,6 +575,7 @@ def build_rebar_and_tendon_ledger(
     girder_checks: Mapping[str, Any],
     slab_checks: Mapping[str, Any],
     sub_checks: Mapping[str, Any],
+    standard_span_m: float = 25.0,
 ) -> dict[str, Any]:
     """Construct a single source-of-truth ledger mapping every tendon & rebar ID to its check basis and BOQ."""
     total_girders = n_spans * n_girders_per_span
@@ -548,6 +588,11 @@ def build_rebar_and_tendon_ledger(
     mid_sigma_pe = float(prestress["loss_profile"][len(prestress["loss_profile"]) // 2]["effective_prestress_mpa"])
     tendon_items: list[dict[str, Any]] = []
     strand_wt_kg_m = 1.101  # Φs15.2 1860MPa strand = 1.101 kg/m
+    flex_cmp = _cmp_str(
+        float(girder_checks["uls_flexure"]["demand_md_knm"]),
+        float(girder_checks["uls_flexure"]["capacity_mu_knm"]),
+        "kN·m",
+    )
     for idx in range(1, n_tendons + 1):
         # Slight parabolic arc length increment + working length
         single_len_m = round(beam_length_m + 0.06 + idx * 0.035, 3)
@@ -566,10 +611,7 @@ def build_rebar_and_tendon_ledger(
                 "total_count_bridge": total_girders,
                 "weight_per_girder_kg": wt_one_tendon_kg,
                 "total_weight_bridge_kg": round(wt_one_tendon_kg * total_girders, 1),
-                "calc_basis": (
-                    f"JTG 3362-2018 §5.2.2/§6.3.1: Md={girder_checks['uls_flexure']['demand_md_knm']}kN·m "
-                    f"<= Mu={girder_checks['uls_flexure']['capacity_mu_knm']}kN·m; 跨中σpe={mid_sigma_pe}MPa"
-                ),
+                "calc_basis": f"JTG 3362-2018 §5.2.2/§6.3.1: Md vs Mu: {flex_cmp}; 跨中σpe={mid_sigma_pe}MPa",
             }
         )
 
@@ -603,12 +645,14 @@ def build_rebar_and_tendon_ledger(
             "calc_basis": calc_basis,
         }
 
-    n_stirrups_girder = int(round((beam_length_m - 4.0) / 0.15)) + 40
+    n_mid_half_stirrups = max(1, int(round((0.5 * beam_length_m * 1000.0 - 2130.0) / 150.0)))
+    n_stirrups_girder = 2 * (21 + n_mid_half_stirrups)
     n_flange_bars = int(round(beam_length_m / 0.125))
     cap_top_n = int(sub_checks["cap_beam"]["top_rebar_count"])
     cap_bot_n = int(sub_checks["cap_beam"]["bottom_rebar_count"])
     col_bar_n = int(sub_checks["pier_column"]["main_rebar_count"])
     pile_bar_n = int(sub_checks["bored_pile"]["main_rebar_count"])
+    abut_pile_len_m = max(1.5, pile_length_m - 2.0) if pile_length_m >= 6.0 else max(1.0, pile_length_m)
 
     rebar_by_sheet: dict[str, list[dict[str, Any]]] = {
         "t_girder_web_rebar": [
@@ -622,7 +666,7 @@ def build_rebar_and_tendon_ledger(
                 beam_length_m + 0.24,
                 6,
                 total_girders,
-                f"主梁正截面抗弯验算 Md={girder_checks['uls_flexure']['demand_md_knm']} <= Mu={girder_checks['uls_flexure']['capacity_mu_knm']} kN·m",
+                f"主梁正截面抗弯验算 Md vs Mu: {flex_cmp}",
             ),
             _mk_bar(
                 "R2",
@@ -646,7 +690,7 @@ def build_rebar_and_tendon_ledger(
                 2.0 * (girder_height_m - 0.12) + 0.56,
                 n_stirrups_girder,
                 total_girders,
-                f"斜截面抗剪验算 Vd={girder_checks['uls_shear']['demand_vd_kn']} <= Vu={girder_checks['uls_shear']['capacity_vu_kn']} kN",
+                f"斜截面抗剪验算 Vd vs Vu: {_cmp_str(float(girder_checks['uls_shear']['demand_vd_kn']), float(girder_checks['uls_shear']['capacity_vu_kn']), 'kN')}",
             ),
             _mk_bar(
                 "R3",
@@ -672,7 +716,7 @@ def build_rebar_and_tendon_ledger(
                 girder_spacing_m + 0.18,
                 n_flange_bars,
                 total_girders,
-                f"行车道板抗弯验算 Md={slab_checks['deck_slab']['m_uls_knm_per_m']} <= Mu={slab_checks['deck_slab']['mu_capacity_knm_per_m']} kN·m/m",
+                f"行车道板抗弯验算 Md vs Mu: {_cmp_str(float(slab_checks['deck_slab']['m_uls_knm_per_m']), float(slab_checks['deck_slab']['mu_capacity_knm_per_m']), 'kN·m/m')}",
             ),
             _mk_bar(
                 "W2",
@@ -710,7 +754,7 @@ def build_rebar_and_tendon_ledger(
                 (n_girders_per_span - 1) * girder_spacing_m + 0.35,
                 4,
                 n_spans * 5,
-                f"中横隔梁内力验算 Md={slab_checks['diaphragm']['m_uls_knm']} <= Mu={slab_checks['diaphragm']['mu_capacity_knm']} kN·m",
+                f"中横隔梁内力验算 Md vs Mu: {_cmp_str(float(slab_checks['diaphragm']['m_uls_knm']), float(slab_checks['diaphragm']['mu_capacity_knm']), 'kN·m')}",
             ),
             _mk_bar(
                 "HG2",
@@ -746,7 +790,7 @@ def build_rebar_and_tendon_ledger(
                 16.0,
                 "u_hairpin",
                 2.35,
-                int(round((n_spans * 25.0 * 2.0) / 0.15)),
+                int(round((n_spans * standard_span_m * 2.0) / 0.15)),
                 1,
                 "JTG D81 公路交通安全设施混凝土防撞护栏抗冲撞配筋",
             ),
@@ -762,6 +806,42 @@ def build_rebar_and_tendon_ledger(
                 n_piers,
                 "墩顶桥面连续构造负弯矩反射裂缝控制配筋",
             ),
+            _mk_bar(
+                "SF1",
+                "桥台D80型钢伸缩装置锚固筋",
+                "QL-13",
+                "HRB400",
+                16.0,
+                "u_hairpin",
+                1.15,
+                int(round(deck_width_m / 0.15)) * 2,
+                n_abutments,
+                "JT/T 327 公路桥梁模数式型钢伸缩装置锚固区局部冲击验算",
+            ),
+            _mk_bar(
+                "DB1",
+                "桥头搭板双层纵向主筋",
+                "QL-13",
+                "HRB400",
+                20.0,
+                "straight_hook",
+                6.15,
+                int(round(max(4.0, deck_width_m - 1.0) / 0.15)) * 2,
+                n_abutments,
+                "JTG D30 桥头搭板弹性地基板车辆荷载抗弯验算 (L=6.0m, 厚300mm)",
+            ),
+            _mk_bar(
+                "DB2",
+                "桥头搭板台背牛腿防滑锚栓",
+                "QL-13",
+                "HRB400",
+                22.0,
+                "straight_hook",
+                0.78,
+                int(round(max(4.0, deck_width_m - 1.0) / 0.75)),
+                n_abutments,
+                "桥台背墙牛腿与桥头搭板铰接水平限位防脱空构造",
+            ),
         ],
         "pier_cap_rebar": [
             _mk_bar(
@@ -775,8 +855,8 @@ def build_rebar_and_tendon_ledger(
                 cap_top_n,
                 n_piers,
                 (
-                    f"盖梁负弯矩及裂缝验算: Md={sub_checks['cap_beam']['m_hog_uls_knm']} <= Mu={sub_checks['cap_beam']['mu_hog_capacity_knm']} kN·m, "
-                    f"wcr={sub_checks['cap_beam']['crack_width_mm']}mm <= 0.20mm"
+                    f"盖梁负弯矩及裂缝验算: Md vs Mu: {_cmp_str(float(sub_checks['cap_beam']['m_hog_uls_knm']), float(sub_checks['cap_beam']['mu_hog_capacity_knm']), 'kN·m')}, "
+                    f"wcr: {_cmp_str(float(sub_checks['cap_beam']['crack_width_mm']), 0.20, 'mm')}"
                 ),
             ),
             _mk_bar(
@@ -789,19 +869,19 @@ def build_rebar_and_tendon_ledger(
                 cap_length_m + 0.40,
                 cap_bot_n,
                 n_piers,
-                f"盖梁跨中正弯矩验算: Md={sub_checks['cap_beam']['m_sag_uls_knm']} <= Mu={sub_checks['cap_beam']['mu_sag_capacity_knm']} kN·m",
+                f"盖梁跨中正弯矩验算: Md vs Mu: {_cmp_str(float(sub_checks['cap_beam']['m_sag_uls_knm']), float(sub_checks['cap_beam']['mu_sag_capacity_knm']), 'kN·m')}",
             ),
             _mk_bar(
                 "GL3",
-                "盖梁四肢抗剪箍筋",
+                f"盖梁{sub_checks['cap_beam']['stirrup_legs']}肢抗剪箍筋",
                 "QL-16",
                 "HRB400",
                 12.0,
                 "stirrup_rect",
-                5.80,
+                5.80 + (1.40 if int(sub_checks["cap_beam"]["stirrup_legs"]) >= 6 else 0.0),
                 int(round(cap_length_m / 0.10)) + 1,
                 n_piers,
-                f"盖梁斜截面抗剪验算: Vd={sub_checks['cap_beam']['v_uls_kn']} <= Vu={sub_checks['cap_beam']['vu_capacity_kn']} kN",
+                f"盖梁斜截面抗剪验算: Vd vs Vu: {_cmp_str(float(sub_checks['cap_beam']['v_uls_kn']), float(sub_checks['cap_beam']['vu_capacity_kn']), 'kN')}",
             ),
             _mk_bar(
                 "GL4",
@@ -827,7 +907,7 @@ def build_rebar_and_tendon_ledger(
                 column_height_m + 1.40,
                 col_bar_n,
                 n_piers * 2,
-                f"双柱墩偏心受压验算: Nd={sub_checks['pier_column']['n_uls_kn']} <= Nu={sub_checks['pier_column']['nu_capacity_kn']} kN",
+                f"双柱墩偏心受压验算: Nd vs Nu: {_cmp_str(float(sub_checks['pier_column']['n_uls_kn']), float(sub_checks['pier_column']['nu_capacity_kn']), 'kN')}",
             ),
             _mk_bar(
                 "DZ2",
@@ -837,9 +917,33 @@ def build_rebar_and_tendon_ledger(
                 10.0,
                 "spiral_hoop",
                 3.55,
-                int(round(column_height_m / 0.12)),
+                max(4, int(round(column_height_m / 0.12))),
                 n_piers * 2,
                 "JTG/T 2231-01-2020 抗震构造墩柱塑性铰区螺旋箍筋加密",
+            ),
+            _mk_bar(
+                "XL1",
+                "桩顶横系梁上下主筋",
+                "QL-17",
+                "HRB400",
+                22.0,
+                "straight_hook",
+                max(4.8, cap_length_m - 2.20),
+                12,
+                n_piers,
+                "双柱墩桩顶横系梁横向框架拉压弯矩及节点锚固配筋 (上下各6Φ22，锚入柱桩核心≥35d)",
+            ),
+            _mk_bar(
+                "XL2",
+                "桩顶系梁四肢抗剪箍筋",
+                "QL-17",
+                "HRB400",
+                12.0,
+                "stirrup_rect",
+                4.35,
+                max(16, int(round(max(3.2, cap_length_m - 3.60) / 0.10)) + 1),
+                n_piers,
+                "桩顶横系梁斜截面抗剪及柱底节点核心区约束箍筋 (4肢Φ12@100)",
             ),
             _mk_bar(
                 "ZJ1",
@@ -851,7 +955,7 @@ def build_rebar_and_tendon_ledger(
                 pile_length_m + 1.10,
                 pile_bar_n,
                 n_piers * 2,
-                f"JTG 3363-2019 摩擦桩验算: R={sub_checks['bored_pile']['pile_top_sls_demand_kn']} <= [Ra]={sub_checks['bored_pile']['allowable_ra_kn']} kN",
+                f"JTG 3363-2019 摩擦桩验算: R vs [Ra]: {_cmp_str(float(sub_checks['bored_pile']['pile_top_sls_demand_kn']), float(sub_checks['bored_pile']['allowable_ra_kn']), 'kN')}",
             ),
             _mk_bar(
                 "ZJ2",
@@ -861,7 +965,7 @@ def build_rebar_and_tendon_ledger(
                 12.0,
                 "spiral_hoop",
                 4.20,
-                int(round(pile_length_m / 0.15)),
+                max(2, int(round(pile_length_m / 0.15))),
                 n_piers * 2,
                 "水下C30钻孔灌注桩钢筋笼整体刚度及抗剪箍筋",
             ),
@@ -898,10 +1002,10 @@ def build_rebar_and_tendon_ledger(
                 "HRB400",
                 25.0,
                 "straight_hook",
-                max(14.0, pile_length_m - 2.0) + 1.0,
+                abut_pile_len_m + 1.0,
                 20,
                 n_abutments * 2,
-                f"桥台桩基竖向与水平土压力验算 (持力层砂砾石 [Ra]={sub_checks['bored_pile']['allowable_ra_kn']} kN)",
+                f"桥台桩基竖向与水平土压力验算: R vs [Ra]: {_cmp_str(float(sub_checks['bored_pile']['pile_top_sls_demand_kn']), float(sub_checks['bored_pile']['allowable_ra_kn']), 'kN')}",
             ),
             _mk_bar(
                 "DS1",
@@ -949,15 +1053,19 @@ def compute_bridge_bill_of_quantities(
     pile_length_m: float,
     bearing_model: str,
     ledger: Mapping[str, Any],
+    standard_span_m: float = 25.0,
+    clear_width_m: float | None = None,
 ) -> dict[str, Any]:
-    """Compute traceable whole-bridge concrete, strand, rebar, bearing, and joint quantities."""
-    total_bridge_len = n_spans * 25.0
+    """Compute traceable whole-bridge concrete, strand, rebar, bearing, joint, scupper, and approach slab quantities."""
+    total_bridge_len = n_spans * standard_span_m
     total_girders = n_spans * n_girders_per_span
     n_piers = max(1, n_spans - 1)
+    paving_width_m = float(clear_width_m) if clear_width_m is not None else max(1.0, deck_width_m - 1.0)
 
     c50_girders_m3 = round(total_girders * (section_area_m2 * beam_length_m + 0.85), 2)
-    c40_deck_pav_m3 = round(total_bridge_len * (deck_width_m - 1.0) * concrete_pav_thick_m, 2)
-    asphalt_m3 = round(total_bridge_len * (deck_width_m - 1.0) * asphalt_thick_m, 2)
+    c40_deck_pav_m3 = round(total_bridge_len * paving_width_m * concrete_pav_thick_m, 2)
+    asphalt_m3 = round(total_bridge_len * paving_width_m * asphalt_thick_m, 2)
+    c30_approach_slab_m3 = round(2.0 * paving_width_m * 6.0 * 0.30, 2)
     c30_sub_m3 = round(
         n_piers * (cap_length_m * cap_width_m * cap_height_m + 2.0 * (math.pi * 0.25 * column_diameter_m**2) * column_height_m)
         + 2.0 * (deck_width_m * 1.6 * 1.8),
@@ -978,6 +1086,7 @@ def compute_bridge_bill_of_quantities(
         1,
     )
     total_bearings = total_girders * 2
+    scupper_count = max(4, int(round(total_bridge_len / 5.0)) * 2)
 
     rows = [
         {"category": "上部预制T梁及湿接缝", "material": "C50混凝土", "unit": "m3", "quantity": c50_girders_m3, "sheet_ref": "QL-06/QL-07"},
@@ -988,13 +1097,16 @@ def compute_bridge_bill_of_quantities(
         {"category": "全桥光圆箍筋", "material": "HPB300", "unit": "kg", "quantity": hpb300_kg, "sheet_ref": "QL-17"},
         {"category": "墩台盖梁及柱身", "material": "C30混凝土", "unit": "m3", "quantity": c30_sub_m3, "sheet_ref": "QL-14/QL-15"},
         {"category": "水下钻孔灌注桩", "material": "C30水下混凝土", "unit": "m3", "quantity": c30_pile_m3, "sheet_ref": "QL-14/QL-17"},
+        {"category": "桥头钢筋混凝土搭板", "material": "C30混凝土 (6.0m×0.30m)", "unit": "m3", "quantity": c30_approach_slab_m3, "sheet_ref": "QL-13"},
         {"category": "板式橡胶支座", "material": bearing_model, "unit": "块", "quantity": total_bearings, "sheet_ref": "QL-12"},
         {"category": "桥台型钢伸缩装置", "material": "D80型钢伸缩缝", "unit": "m", "quantity": round(2.0 * deck_width_m, 1), "sheet_ref": "QL-13"},
+        {"category": "桥面铸铁/PVC泄水管", "material": "DN100竖向泄水管", "unit": "套", "quantity": scupper_count, "sheet_ref": "QL-13"},
     ]
     return {
         "c50_concrete_m3": c50_girders_m3,
         "c40_paving_m3": c40_deck_pav_m3,
         "asphalt_paving_m3": asphalt_m3,
+        "c30_approach_slab_m3": c30_approach_slab_m3,
         "c30_substructure_m3": c30_sub_m3,
         "c30_underwater_pile_m3": c30_pile_m3,
         "prestress_strand_kg": total_strand_kg,
@@ -1003,6 +1115,7 @@ def compute_bridge_bill_of_quantities(
         "total_rebar_kg": round(hrb400_kg + hpb300_kg, 1),
         "bearing_count": total_bearings,
         "bearing_model": bearing_model,
+        "scupper_count": scupper_count,
         "rows": rows,
     }
 

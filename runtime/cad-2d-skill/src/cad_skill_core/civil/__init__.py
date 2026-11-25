@@ -2,6 +2,7 @@
 
 from .bridge_calc import (
     audit_bridge_design_consistency,
+    collect_failed_structural_checks,
     compute_hydrology_and_span,
     compute_lateral_distribution,
     compute_polygon_section_properties,
@@ -42,7 +43,9 @@ from .symbols import (
     draw_ground_line,
     draw_pile_s_break,
     draw_rebar_schedule_table,
+    draw_section_cut_symbol,
     draw_slope_arrow,
+    export_civil_a3_print_pdf_png,
     setup_civil_dxf_document,
 )
 
@@ -57,6 +60,7 @@ __all__ = [
     "check_elastomeric_bearing",
     "check_substructure_cap_pier_pile",
     "check_t_girder_uls_sls",
+    "collect_failed_structural_checks",
     "compute_bridge_bill_of_quantities",
     "compute_hydrology_and_span",
     "compute_lateral_distribution",
@@ -73,7 +77,9 @@ __all__ = [
     "draw_ground_line",
     "draw_pile_s_break",
     "draw_rebar_schedule_table",
+    "draw_section_cut_symbol",
     "draw_slope_arrow",
+    "export_civil_a3_print_pdf_png",
     "generate_civil_bridge_bundle",
     "generate_civil_bridge_dxf",
     "generate_full_bridge_drawing_set",
