@@ -375,7 +375,7 @@ def test_delivery_audit_on_ql09_ql13_ql17_ql18_and_visible_table_entity_tamper_d
     dot_issue = next(i for i in ver_09_dot["issues"] if i["code"] == "REBAR_ENTITY_COUNT_MISMATCH" and "R1" in i["message"])
     assert dot_issue["expected"] == 6 and dot_issue["measured"] == 5
 
-    # 2. QL-13: Must contain all 5 required sub-details + drainage & blockout installation interface labels!
+    # 2. QL-13: Must contain all 6 required sub-details + 500mm debonded strip endpoints (250+250) + enlarged corbel DB2 detail!
     ql13_ver = verify_civil_dxf(sheets_by_no["QL-13"]["dxf_path"], calc_report=calc)
     assert ql13_ver["status"] == "passed"
     assert {
@@ -384,12 +384,20 @@ def test_delivery_audit_on_ql09_ql13_ql17_ql18_and_visible_table_entity_tamper_d
         "scupper_drain_detail",
         "deck_continuity_detail",
         "approach_slab_detail",
+        "approach_corbel_detail",
     } <= set(ql13_ver["registered_views"])
     doc_13 = ezdxf.readfile(sheets_by_no["QL-13"]["dxf_path"])
     txts_13 = " ".join(str(e.dxf.get("text", "")) for e in doc_13.modelspace() if e.dxftype() == "TEXT")
+    dims_13 = " | ".join(str(e.dxf.get("text", "")) for e in doc_13.modelspace() if e.dxftype() == "DIMENSION")
     assert "排水方向" in txts_13 and "防水层收口" in txts_13 and "C50钢纤维砼槽口" in txts_13
+    assert "250" in dims_13 and "无粘结层 500" in dims_13 and "牛腿宽 350" in dims_13 and "锚入 280" in dims_13
 
-    # 3. QL-17 & QL-18: Verify twin-column + tie-beam views/dims and reorganized 5-view abutment sheet + A3 B&W PDF!
+    # 3. QL-17 & QL-18: Verify grouped substructure unit schedules, JTG §9.3.2 anchorage basis, and aligned A-A cut + backwall!
+    j_anch = calc["substructure_checks"]["joint_anchorage"]
+    assert j_anch["passed"] is True
+    assert j_anch["xl1_tie_beam_to_pier"]["design_la_mm"] == 780.0 >= j_anch["xl1_tie_beam_to_pier"]["req_35d_mm"]
+    assert j_anch["qt2_wall_to_abutment_cap"]["design_la_mm"] == 560.0 >= j_anch["qt2_wall_to_abutment_cap"]["req_35d_mm"]
+
     ql17_ver = verify_civil_dxf(sheets_by_no["QL-17"]["dxf_path"], calc_report=calc)
     assert ql17_ver["status"] == "passed"
     assert {
@@ -401,9 +409,24 @@ def test_delivery_audit_on_ql09_ql13_ql17_ql18_and_visible_table_entity_tamper_d
     } <= set(ql17_ver["registered_views"])
     doc_17 = ezdxf.readfile(sheets_by_no["QL-17"]["dxf_path"])
     dims_17 = " | ".join(str(e.dxf.get("text", "")) for e in doc_17.modelspace() if e.dxftype() == "DIMENSION")
+    txts_17 = " ".join(str(e.dxf.get("text", "")) for e in doc_17.modelspace() if e.dxftype() == "TEXT")
     pile_mm = int(round(calc["substructure_checks"]["bored_pile"]["design_length_m"] * 1000.0))
     for req_tok in ("5200", "1200", "5500", "1400", "780", str(pile_mm)):
         assert req_tok in dims_17
+    for req_unit_tok in ("构件部位", "单根墩柱", "单道系梁", "单根桩基", "每墩件数", "2柱", "1道", "2桩", "单座双柱墩钢筋合计"):
+        assert req_unit_tok in txts_17
+
+    # Tamper "2柱" -> "1柱" on QL-17 without updating 每墩重(kg) -> verifier MUST catch VISIBLE_REBAR_UNIT_MULTIPLIER_MISMATCH!
+    doc_17_bad = ezdxf.readfile(sheets_by_no["QL-17"]["dxf_path"])
+    for ent in doc_17_bad.modelspace():
+        if ent.dxftype() == "TEXT" and str(ent.dxf.get("text", "")).strip() == "2柱":
+            ent.dxf.text = "1柱"
+            break
+    bad_17_path = tmp_path / "QL17_bad_mult.dxf"
+    doc_17_bad.saveas(bad_17_path)
+    ver_17_bad = verify_civil_dxf(bad_17_path, calc_report=calc)
+    assert ver_17_bad["status"] == "failed"
+    assert any(i["code"] == "VISIBLE_REBAR_UNIT_MULTIPLIER_MISMATCH" for i in ver_17_bad["issues"])
 
     ql18_ver = verify_civil_dxf(sheets_by_no["QL-18"]["dxf_path"], calc_report=calc)
     assert ql18_ver["status"] == "passed"
@@ -418,9 +441,54 @@ def test_delivery_audit_on_ql09_ql13_ql17_ql18_and_visible_table_entity_tamper_d
     doc_18 = ezdxf.readfile(sheets_by_no["QL-18"]["dxf_path"])
     dims_18 = " | ".join(str(e.dxf.get("text", "")) for e in doc_18.modelspace() if e.dxftype() == "DIMENSION")
     txts_18 = " ".join(str(e.dxf.get("text", "")) for e in doc_18.modelspace() if e.dxftype() == "TEXT")
-    for req_tok_18 in ("9000", "5400", "2000", "1800", "550", "560", "1400"):
+    for req_tok_18 in ("9000", "5400", "2000", "1800", "550", "1750", "560", "1400"):
         assert req_tok_18 in dims_18
     assert "道路中心线" in txts_18 and "耳墙" in txts_18 and "弯钩朝内" in txts_18
+    assert "2#垫石" in txts_18 and "背墙" in txts_18 and "单座桥台钢筋合计" in txts_18
+
+    # Verify manifest sheet titles are all true Chinese titles (never raw python drawing_type identifiers!)
+    for sh in suite["sheets"]:
+        assert sh["title"] not in {"rebar_detail", "t_girder_general", "tendon_layout", "bearing_layout", "deck_ancillary"}
+        assert any("\u4e00" <= ch <= "\u9fff" for ch in sh["title"])
+
+    # Verify QL-01 visible 18-sheet index table & zero leaked snake_case field names, QL-02 volume breakdown, QL-08 tendon table, and QL-14/15 consistency!
+    doc_01 = ezdxf.readfile(sheets_by_no["QL-01"]["dxf_path"])
+    txts_01 = " ".join(str(e.dxf.get("text", "")) for e in doc_01.modelspace() if e.dxftype() == "TEXT")
+    for idx_k in range(1, 19):
+        assert f"QL-{idx_k:02d}" in txts_01
+    assert "flood_elevation_m" not in txts_01 and "soil_layers" not in txts_01
+
+    vbk = calc["bill_of_quantities"]["volume_breakdown"]
+    assert vbk["tie_beam_m3"] > 0 and vbk["abut_wall_m3"] > 0
+    assert vbk["abut_pile_length_m"] < vbk["pier_pile_length_m"]
+
+    ql08_ver = verify_civil_dxf(sheets_by_no["QL-08"]["dxf_path"], calc_report=calc)
+    assert ql08_ver["status"] == "passed"
+    doc_08 = ezdxf.readfile(sheets_by_no["QL-08"]["dxf_path"])
+    txts_08 = " ".join(str(e.dxf.get("text", "")) for e in doc_08.modelspace() if e.dxftype() == "TEXT")
+    assert "预应力钢束数量及张拉参数表" in txts_08 and "单梁钢束合计" in txts_08
+
+    ql14_ver = verify_civil_dxf(sheets_by_no["QL-14"]["dxf_path"], calc_report=calc)
+    ql15_ver = verify_civil_dxf(sheets_by_no["QL-15"]["dxf_path"], calc_report=calc)
+    ql16_ver = verify_civil_dxf(sheets_by_no["QL-16"]["dxf_path"], calc_report=calc)
+    assert ql14_ver["status"] == "passed"
+    assert ql15_ver["status"] == "passed"
+    assert ql16_ver["status"] == "passed"
+
+    # Tamper QL-16 single-line note to simulate truncated unclosed parenthesis -> verifier MUST catch TRUNCATED_UNCLOSED_PARENTHESIS!
+    doc_16_trunc = ezdxf.readfile(sheets_by_no["QL-16"]["dxf_path"])
+    mutated_trunc = False
+    for ent in doc_16_trunc.modelspace():
+        if ent.dxftype() == "TEXT" and "主控验算：" in str(ent.dxf.get("text", "")):
+            ent.dxf.text = "主控验算：盖梁裂缝宽度验算 wcr: 0.176 <= 0.2 mm ("
+            mutated_trunc = True
+            break
+    assert mutated_trunc is True
+    bad_16_path = tmp_path / "QL16_truncated_paren.dxf"
+    doc_16_trunc.saveas(bad_16_path)
+    ver_16_bad = verify_civil_dxf(bad_16_path, calc_report=calc)
+    assert ver_16_bad["status"] == "failed"
+    assert any(i["code"] == "TRUNCATED_UNCLOSED_PARENTHESIS" for i in ver_16_bad["issues"])
 
     # Verify A3 1:1 B&W print PDF + PNG bundle export on QL-18
     b18 = generate_civil_bridge_bundle(

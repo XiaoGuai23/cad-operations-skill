@@ -45,6 +45,7 @@ from .symbols import (
     draw_rebar_schedule_table,
     draw_section_cut_symbol,
     draw_slope_arrow,
+    draw_tendon_schedule_table,
     export_civil_a3_print_pdf_png,
     setup_civil_dxf_document,
 )
@@ -79,6 +80,7 @@ __all__ = [
     "draw_rebar_schedule_table",
     "draw_section_cut_symbol",
     "draw_slope_arrow",
+    "draw_tendon_schedule_table",
     "export_civil_a3_print_pdf_png",
     "generate_civil_bridge_bundle",
     "generate_civil_bridge_dxf",

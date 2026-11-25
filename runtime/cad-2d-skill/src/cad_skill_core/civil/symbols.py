@@ -728,13 +728,19 @@ def draw_rebar_schedule_table(
     width: float = 180.0,
     title: str = "钢筋数量明细表",
     dock_to_title_block: bool = False,
+    unit_count_header: str = "每墩件数",
+    unit_weight_header: str = "每墩重(kg)",
+    summary_prefix: str | None = None,
+    bridge_units_count: int = 0,
+    bridge_units_noun: str = "座",
 ) -> dict[str, float]:
-    """Render a standard JTG bridge rebar schedule table (optionally fused atop the Title Block) with metadata."""
+    """Render a standard JTG bridge rebar schedule table (with optional multi-member substructure grouping)."""
     rows = list(items)
+    has_unit_mult = any(int(it.get("members_per_unit", 0) or 0) > 0 for it in rows)
     hdr_h = 6.2
     title_h = 6.6
     row_h = 5.4
-    sum_h = 5.6
+    sum_h = 5.8
     total_h = title_h + hdr_h + len(rows) * row_h + sum_h
 
     # Outer table border: when fused atop the Title Block (x0=tb_x0, y0=tb_y1, x1=ix1),
@@ -756,10 +762,32 @@ def draw_rebar_schedule_table(
     msp.add_line((x0, y_title_bot), (x0 + width, y_title_bot), dxfattribs={"layer": "FRAME"})
     msp.add_line((x0, y_hdr_bot), (x0 + width, y_hdr_bot), dxfattribs={"layer": "THIN"})
 
-    add_civil_text(msp, title, x0 + 0.5 * width, y_title_bot + 1.8, height=2.5, align="CENTER")
+    add_civil_text(msp, title, x0 + 0.5 * width, y_title_bot + 1.8, height=2.35, align="CENTER")
 
-    col_fracs = (0.11, 0.13, 0.22, 0.14, 0.10, 0.14, 0.16)
-    col_headers = ("编号", "规格(mm)", "大样简图", "单长(cm)", "根数", "总长(m)", "总重(kg)")
+    if has_unit_mult:
+        col_fracs: tuple[float, ...] = (0.122, 0.068, 0.085, 0.110, 0.098, 0.085, 0.104, 0.098, 0.090, 0.140)
+        col_headers: tuple[str, ...] = (
+            "构件部位",
+            "编号",
+            "规格(mm)",
+            "大样简图",
+            "单长(cm)",
+            "单件根数",
+            "单件长(m)",
+            "单件重(kg)",
+            unit_count_header,
+            unit_weight_header,
+        )
+        hdr_txt_h = 1.66
+        cell_txt_h = 1.70
+        shape_col_idx = 3
+    else:
+        col_fracs = (0.11, 0.13, 0.22, 0.14, 0.10, 0.14, 0.16)
+        col_headers = ("编号", "规格(mm)", "大样简图", "单长(cm)", "根数", "总长(m)", "总重(kg)")
+        hdr_txt_h = 1.95
+        cell_txt_h = 1.90
+        shape_col_idx = 2
+
     col_xs = [x0]
     acc = x0
     for f in col_fracs[:-1]:
@@ -774,15 +802,26 @@ def draw_rebar_schedule_table(
 
     for c_i, h_txt in enumerate(col_headers):
         mcx = 0.5 * (col_xs[c_i] + col_xs[c_i + 1])
-        add_civil_text(msp, h_txt, mcx, y_hdr_bot + 1.8, height=1.95, align="CENTER")
+        add_civil_text(msp, h_txt, mcx, y_hdr_bot + 1.8, height=hdr_txt_h, align="CENTER")
 
     total_kg = 0.0
+    substructure_total_kg = 0.0
     serialized_rows: list[dict[str, Any]] = []
+    group_spans: list[tuple[int, int, str]] = []
     for r_i, item in enumerate(rows):
         ry_top = y_hdr_bot - r_i * row_h
         ry_bot = ry_top - row_h
+        sub_part = str(item.get("sub_part", "")).strip()
         if r_i > 0:
-            msp.add_line((x0, ry_top), (x0 + width, ry_top), dxfattribs={"layer": "THIN"})
+            prev_part = str(rows[r_i - 1].get("sub_part", "")).strip()
+            line_x0 = col_xs[1] if (has_unit_mult and sub_part and sub_part == prev_part) else x0
+            msp.add_line((line_x0, ry_top), (x0 + width, ry_top), dxfattribs={"layer": "THIN"})
+        if has_unit_mult:
+            if group_spans and group_spans[-1][2] == sub_part and sub_part:
+                group_spans[-1] = (group_spans[-1][0], r_i, sub_part)
+            else:
+                group_spans.append((r_i, r_i, sub_part))
+
         bar_id = str(item.get("bar_id", f"N{r_i+1}"))
         grade = str(item.get("grade", "HRB400"))
         dia = float(item.get("dia_mm", 16.0))
@@ -793,51 +832,192 @@ def draw_rebar_schedule_table(
         unit_kg_m = float(item.get("unit_weight_kg_m", round(0.00617 * dia * dia, 3)))
         wt_kg = float(item.get("total_weight_kg", round(tot_m * unit_kg_m, 1)))
         total_kg += wt_kg
+        mult_n = max(1, int(item.get("members_per_unit", 1) or 1))
+        mult_lbl = str(item.get("unit_label", f"{mult_n}"))
+        sub_wt_kg = round(wt_kg * mult_n, 1)
+        substructure_total_kg += sub_wt_kg
         prefix_sym = "φ" if grade.upper() == "HPB300" else "Φ"
-        cells = (
-            bar_id,
-            f"{prefix_sym}{dia:g}",
-            "",
-            f"{single_cm:.1f}",
-            f"{cnt}",
-            f"{tot_m:.2f}",
-            f"{wt_kg:.1f}",
-        )
+
+        if has_unit_mult:
+            cells: tuple[str, ...] = (
+                "",
+                bar_id,
+                f"{prefix_sym}{dia:g}",
+                "",
+                f"{single_cm:.1f}",
+                f"{cnt}",
+                f"{tot_m:.2f}",
+                f"{wt_kg:.1f}",
+                mult_lbl,
+                f"{sub_wt_kg:.1f}",
+            )
+        else:
+            cells = (
+                bar_id,
+                f"{prefix_sym}{dia:g}",
+                "",
+                f"{single_cm:.1f}",
+                f"{cnt}",
+                f"{tot_m:.2f}",
+                f"{wt_kg:.1f}",
+            )
+
         for c_i, val_s in enumerate(cells):
+            if has_unit_mult and c_i == 0:
+                continue
             mcx = 0.5 * (col_xs[c_i] + col_xs[c_i + 1])
-            if c_i == 2:
-                _draw_mini_rebar_shape(msp, shape, mcx, 0.5 * (ry_bot + ry_top), col_xs[3] - col_xs[2], row_h)
+            if c_i == shape_col_idx:
+                _draw_mini_rebar_shape(msp, shape, mcx, 0.5 * (ry_bot + ry_top), col_xs[c_i + 1] - col_xs[c_i], row_h)
             else:
-                add_civil_text(msp, val_s, mcx, ry_bot + 1.5, height=1.9, align="CENTER")
+                add_civil_text(msp, val_s, mcx, ry_bot + 1.55, height=cell_txt_h, align="CENTER")
 
-        serialized_rows.append(
-            {
-                "bar_id": bar_id,
-                "grade": grade,
-                "dia_mm": dia,
-                "single_length_cm": single_cm,
-                "count": cnt,
-                "total_length_m": tot_m,
-                "total_weight_kg": round(wt_kg, 2),
-                "calc_basis": str(item.get("calc_basis", "")),
-            }
+        row_meta: dict[str, Any] = {
+            "bar_id": bar_id,
+            "grade": grade,
+            "dia_mm": dia,
+            "single_length_cm": single_cm,
+            "count": cnt,
+            "total_length_m": tot_m,
+            "total_weight_kg": round(wt_kg, 2),
+            "calc_basis": str(item.get("calc_basis", "")),
+        }
+        if has_unit_mult:
+            row_meta["sub_part"] = sub_part
+            row_meta["members_per_unit"] = mult_n
+            row_meta["substructure_weight_kg"] = sub_wt_kg
+        serialized_rows.append(row_meta)
+
+    if has_unit_mult:
+        part_cx = 0.5 * (col_xs[0] + col_xs[1])
+        for g_start, g_end, g_lbl in group_spans:
+            if not g_lbl:
+                continue
+            gy_top = y_hdr_bot - g_start * row_h
+            gy_bot = y_hdr_bot - (g_end + 1) * row_h
+            add_civil_text(msp, g_lbl, part_cx, 0.5 * (gy_top + gy_bot) - 0.85, height=cell_txt_h, align="CENTER")
+
+        reported_total_kg = round(substructure_total_kg, 1)
+        prefix_s = summary_prefix or "单座下部构件钢筋合计"
+        if bridge_units_count > 1:
+            footer_txt = f"{prefix_s}：{reported_total_kg:.1f} kg（全桥{bridge_units_count}{bridge_units_noun}共 {reported_total_kg * bridge_units_count:.1f} kg）"
+        else:
+            footer_txt = f"{prefix_s}：{reported_total_kg:.1f} kg"
+        add_civil_text(msp, footer_txt, x0 + 0.5 * width, y0 + 1.75, height=1.85, align="CENTER")
+    else:
+        reported_total_kg = round(total_kg, 1)
+        add_civil_text(
+            msp,
+            f"本构件钢筋合计：{reported_total_kg:.1f} kg",
+            x0 + 0.5 * width,
+            y0 + 1.65,
+            height=2.05,
+            align="CENTER",
         )
 
-    add_civil_text(
-        msp,
-        f"本构件钢筋合计：{total_kg:.1f} kg",
-        x0 + 0.5 * width,
-        y0 + 1.6,
-        height=2.05,
-        align="CENTER",
-    )
     attach_sheet_metadata(
         doc,
         msp,
         "rebar_schedule",
-        {"title": title, "total_weight_kg": round(total_kg, 2), "items": serialized_rows},
+        {"title": title, "total_weight_kg": round(reported_total_kg, 2), "items": serialized_rows},
     )
-    return {"x0": x0, "y0": y0, "x1": x0 + width, "y1": y0 + total_h, "total_weight_kg": round(total_kg, 2)}
+    return {"x0": x0, "y0": y0, "x1": x0 + width, "y1": y0 + total_h, "total_weight_kg": round(reported_total_kg, 2)}
+
+
+def draw_tendon_schedule_table(
+    doc: Drawing,
+    msp: Modelspace,
+    items: Sequence[Mapping[str, Any]],
+    *,
+    x0: float,
+    y0: float,
+    width: float = 180.0,
+    title: str = "预应力钢束数量及张拉参数表",
+    end_ys_mm: Sequence[float] | None = None,
+    mid_ys_mm: Sequence[float] | None = None,
+    sigma_con_mpa: float = 1395.0,
+    mid_sigma_pe_mpa: float = 1235.0,
+    dock_to_title_block: bool = False,
+) -> dict[str, float]:
+    """Render a visible JTG prestressing tendon & jacking parameter table (optionally docked atop Title Block)."""
+    rows = list(items)
+    hdr_h = 6.0
+    title_h = 6.4
+    row_h = 5.2
+    sum_h = 5.6
+    total_h = title_h + hdr_h + len(rows) * row_h + sum_h
+
+    if dock_to_title_block:
+        msp.add_lwpolyline(
+            [(x0, y0), (x0, y0 + total_h), (x0 + width, y0 + total_h)],
+            close=False,
+            dxfattribs={"layer": "FRAME"},
+        )
+    else:
+        msp.add_lwpolyline(
+            [(x0, y0), (x0 + width, y0), (x0 + width, y0 + total_h), (x0, y0 + total_h)],
+            close=True,
+            dxfattribs={"layer": "FRAME"},
+        )
+    y_title_bot = y0 + total_h - title_h
+    y_hdr_bot = y_title_bot - hdr_h
+    msp.add_line((x0, y_title_bot), (x0 + width, y_title_bot), dxfattribs={"layer": "FRAME"})
+    msp.add_line((x0, y_hdr_bot), (x0 + width, y_hdr_bot), dxfattribs={"layer": "THIN"})
+    add_civil_text(msp, title, x0 + 0.5 * width, y_title_bot + 1.7, height=2.4, align="CENTER")
+
+    col_fracs = (0.10, 0.19, 0.14, 0.14, 0.14, 0.14, 0.15)
+    col_headers = ("束号", "规格", "单束长(m)", "梁端高", "跨中高", "伸长(mm)", "单梁重(kg)")
+    col_xs = [x0]
+    acc = x0
+    for f in col_fracs[:-1]:
+        acc += f * width
+        col_xs.append(acc)
+    col_xs.append(x0 + width)
+
+    y_sum_top = y0 + sum_h
+    for cx in col_xs[1:-1]:
+        msp.add_line((cx, y_sum_top), (cx, y_title_bot), dxfattribs={"layer": "THIN"})
+    msp.add_line((x0, y_sum_top), (x0 + width, y_sum_top), dxfattribs={"layer": "THIN"})
+
+    for c_i, h_txt in enumerate(col_headers):
+        mcx = 0.5 * (col_xs[c_i] + col_xs[c_i + 1])
+        add_civil_text(msp, h_txt, mcx, y_hdr_bot + 1.7, height=1.85, align="CENTER")
+
+    tot_girder_kg = 0.0
+    for r_i, t_item in enumerate(rows):
+        ry_top = y_hdr_bot - r_i * row_h
+        ry_bot = ry_top - row_h
+        if r_i > 0:
+            msp.add_line((x0, ry_top), (x0 + width, ry_top), dxfattribs={"layer": "THIN"})
+        tid = str(t_item.get("tendon_id", f"N{r_i+1}"))
+        spec_s = str(t_item.get("spec", "Φs15.2-6"))
+        len_m = float(t_item.get("single_length_m", 25.0))
+        elong = float(t_item.get("theoretical_elongation_mm", 160.0))
+        wt_one = float(t_item.get("weight_per_girder_kg", 100.0))
+        tot_girder_kg += wt_one
+        ey_v = float(end_ys_mm[r_i]) if end_ys_mm and r_i < len(end_ys_mm) else 240.0 + r_i * 300.0
+        my_v = float(mid_ys_mm[r_i]) if mid_ys_mm and r_i < len(mid_ys_mm) else 100.0
+        cells = (
+            tid,
+            spec_s,
+            f"{len_m:.2f}",
+            f"{ey_v:g}",
+            f"{my_v:g}",
+            f"{elong:.1f}",
+            f"{wt_one:.1f}",
+        )
+        for c_i, vs in enumerate(cells):
+            mcx = 0.5 * (col_xs[c_i] + col_xs[c_i + 1])
+            add_civil_text(msp, vs, mcx, ry_bot + 1.4, height=1.82, align="CENTER")
+
+    add_civil_text(
+        msp,
+        f"单梁钢束合计：{tot_girder_kg:.1f} kg | σcon={sigma_con_mpa:g}MPa | 跨中有效预应力={mid_sigma_pe_mpa:.2f}MPa",
+        x0 + 0.5 * width,
+        y0 + 1.6,
+        height=1.80,
+        align="CENTER",
+    )
+    return {"x0": x0, "y0": y0, "x1": x0 + width, "y1": y0 + total_h, "total_weight_kg": round(tot_girder_kg, 2)}
 
 
 def export_civil_a3_print_pdf_png(

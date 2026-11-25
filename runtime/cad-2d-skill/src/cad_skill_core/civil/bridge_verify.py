@@ -40,6 +40,20 @@ _REQUIRED_QL13_VIEWS: tuple[tuple[str, str], ...] = (
     ("scupper_drain_detail", "桥面泄水管构造详图"),
     ("deck_continuity_detail", "墩顶桥面连续构造详图"),
     ("approach_slab_detail", "桥头搭板构造详图"),
+    ("approach_corbel_detail", "桥头搭板台背牛腿支承放大图"),
+)
+
+_LEAKED_INTERNAL_TOKENS: tuple[str, ...] = (
+    "flood_elevation_m",
+    "deck_elevation_m",
+    "soil_layers",
+    "pile_length_m",
+    "calc_span_m",
+    "t_girder_general",
+    "tendon_layout",
+    "rebar_detail",
+    "bearing_layout",
+    "deck_ancillary",
 )
 
 
@@ -135,17 +149,34 @@ def _extract_trailing_dim_number(label: str) -> float | None:
 
 def _parse_visible_rebar_tables(texts: list[tuple[str, float, float]]) -> list[dict[str, Any]]:
     """Reconstruct human-visible rebar schedule tables directly from modelspace TEXT entities."""
+    hdr_alias: dict[str, str] = {
+        "构件部位": "构件部位",
+        "编号": "编号",
+        "规格(mm)": "规格(mm)",
+        "单长(cm)": "单长(cm)",
+        "根数": "根数",
+        "单件根数": "根数",
+        "总长(m)": "总长(m)",
+        "单件长(m)": "总长(m)",
+        "总重(kg)": "总重(kg)",
+        "单件重(kg)": "总重(kg)",
+        "每墩件数": "每座件数",
+        "每台件数": "每座件数",
+        "每墩重(kg)": "每座重(kg)",
+        "每台重(kg)": "每座重(kg)",
+    }
     tables: list[dict[str, Any]] = []
     id_headers = [(s, tx, ty) for s, tx, ty in texts if s == "编号"]
     for _, hx_id, hy_hdr in id_headers:
-        hdr_cells = [(s, tx, ty) for s, tx, ty in texts if abs(ty - hy_hdr) <= 1.5 and tx >= hx_id - 5.0]
+        hdr_cells = [(s, tx, ty) for s, tx, ty in texts if abs(ty - hy_hdr) <= 1.5 and tx >= hx_id - 30.0]
         col_map: dict[str, float] = {}
         for s, tx, _ in hdr_cells:
-            if s in {"编号", "规格(mm)", "单长(cm)", "根数", "总长(m)", "总重(kg)"}:
-                col_map[s] = tx
+            if s in hdr_alias:
+                col_map[hdr_alias[s]] = tx
         if "编号" not in col_map or "根数" not in col_map:
             continue
 
+        has_unit_mult = "每座件数" in col_map and "每座重(kg)" in col_map
         x_min = min(col_map.values()) - 14.0
         x_max = max(col_map.values()) + 18.0
         sum_candidates = [
@@ -163,6 +194,15 @@ def _parse_visible_rebar_tables(texts: list[tuple[str, float, float]]) -> list[d
             for s, tx, ty in texts
             if x_min <= tx <= x_max and (y_sum + 1.8) <= ty <= (hy_hdr - 1.8)
         ]
+        # Exclude merged group labels positioned inside the '构件部位' column before row clustering
+        part_col_x = col_map.get("构件部位")
+        if part_col_x is not None:
+            body_cells = [
+                (s, tx, ty)
+                for s, tx, ty in body_cells
+                if abs(tx - part_col_x) > abs(tx - col_map["编号"])
+            ]
+
         # Cluster body cells into rows by y coordinate
         body_cells.sort(key=lambda item: -item[2])
         row_clusters: list[list[tuple[str, float, float]]] = []
@@ -194,6 +234,8 @@ def _parse_visible_rebar_tables(texts: list[tuple[str, float, float]]) -> list[d
                     return None
 
             cnt_f = _f("根数")
+            mult_raw = assigned.get("每座件数", "").strip()
+            m_mult = re.search(r"(\d+)", mult_raw) if mult_raw else None
             parsed_rows[bid] = {
                 "bar_id": bid,
                 "spec": spec_s,
@@ -203,6 +245,9 @@ def _parse_visible_rebar_tables(texts: list[tuple[str, float, float]]) -> list[d
                 "count_raw": assigned.get("根数", ""),
                 "total_m": _f("总长(m)"),
                 "weight_kg": _f("总重(kg)"),
+                "unit_mult": int(m_mult.group(1)) if m_mult else None,
+                "unit_mult_raw": mult_raw,
+                "sub_weight_kg": _f("每座重(kg)"),
             }
 
         tables.append(
@@ -210,6 +255,7 @@ def _parse_visible_rebar_tables(texts: list[tuple[str, float, float]]) -> list[d
                 "bbox": (x_min, y_sum - 2.0, x_max, hy_hdr + 9.0),
                 "rows": parsed_rows,
                 "reported_sum_kg": reported_sum_kg,
+                "has_unit_mult": has_unit_mult,
             }
         )
     return tables
@@ -261,6 +307,7 @@ def verify_civil_dxf(
     polylines: list[list[tuple[float, float]]] = []
     lines_geom: list[tuple[tuple[float, float], tuple[float, float], str]] = []
     rebar_dots: list[tuple[float, float, float]] = []
+    tendon_dots: list[tuple[float, float, float]] = []
     dims: list[Any] = []
 
     for ent in msp:
@@ -281,13 +328,59 @@ def verify_civil_dxf(
             c_pt = ent.dxf.center
             if lyr == "REBAR" and 0.35 <= rad <= 3.0:
                 rebar_dots.append((float(c_pt.x), float(c_pt.y), rad))
+            elif lyr == "TENDON" and 0.6 <= rad <= 4.0:
+                tendon_dots.append((float(c_pt.x), float(c_pt.y), rad))
         elif dt == "DIMENSION":
             dims.append(ent)
 
     # ------------------------------------------------------------------
-    # 0. Visible Inequality Truth Check (rejects "12.82 MPa ≤ 10.0 MPa" anywhere!)
+    # 0. Visible Inequality Truth Check + Truncation / Internal-Key Leak Check
     # ------------------------------------------------------------------
+    new_item_re = re.compile(r"^(?:[一二三四五六七八九十]+、|\[[A-Za-z0-9]+\]|\d+[.、)）]|【)")
+    sorted_col_texts = sorted(enumerate(texts), key=lambda item: (round(item[1][1] / 6.0), -item[1][2]))
+    consumed_text_idxs: set[int] = set()
+    logical_paragraphs: list[str] = []
+    for pos, (orig_idx, (s_cur, tx_cur, ty_cur)) in enumerate(sorted_col_texts):
+        if orig_idx in consumed_text_idxs:
+            continue
+        consumed_text_idxs.add(orig_idx)
+        para = s_cur
+        prev_x, prev_y = tx_cur, ty_cur
+        for next_orig_idx, (s_nxt, tx_nxt, ty_nxt) in sorted_col_texts[pos + 1 :]:
+            if next_orig_idx in consumed_text_idxs:
+                continue
+            if abs(tx_nxt - prev_x) <= 6.0 and 1.5 <= (prev_y - ty_nxt) <= 8.0 and not new_item_re.match(s_nxt):
+                if para.count("(") > para.count(")") or para.count("（") > para.count("）"):
+                    para = para + s_nxt
+                    consumed_text_idxs.add(next_orig_idx)
+                    prev_x, prev_y = tx_nxt, ty_nxt
+                    continue
+            if abs(tx_nxt - prev_x) <= 6.0 and (prev_y - ty_nxt) > 8.5:
+                break
+        logical_paragraphs.append(para)
+
+    for para in logical_paragraphs:
+        if para.count("(") != para.count(")") or para.count("（") != para.count("）"):
+            checks_run += 1
+            _fail(
+                "TRUNCATED_UNCLOSED_PARENTHESIS",
+                expected="closed_parentheses",
+                measured=para,
+                delta=None,
+                message=f"图面文本存在未闭合括号截断：'{para}'",
+            )
+
     for s, _, _ in texts:
+        for bad_tok in _LEAKED_INTERNAL_TOKENS:
+            if bad_tok in s:
+                checks_run += 1
+                _fail(
+                    "LEAKED_INTERNAL_FIELD_NAME",
+                    expected="zh_engineering_term",
+                    measured=bad_tok,
+                    delta=None,
+                    message=f"图面文本残留未转换的程序内部字段名 '{bad_tok}'：'{s}'",
+                )
         for m_in in _INEQ_CLAIM_RE.finditer(s):
             lhs = float(m_in.group(1))
             op = m_in.group(2)
@@ -518,7 +611,25 @@ def verify_civil_dxf(
                         f"与图面总长列 ({tot_m:.2f}m) 不符（疑似手工篡改根数或单长）"
                     ),
                 )
-            sum_calc += wt_kg
+            if tbl.get("has_unit_mult"):
+                u_mult = r_info.get("unit_mult")
+                sub_wt = r_info.get("sub_weight_kg")
+                checks_run += 1
+                if u_mult is None or sub_wt is None or abs(sub_wt - wt_kg * u_mult) > max(0.35, 0.015 * wt_kg * u_mult):
+                    _fail(
+                        "VISIBLE_REBAR_UNIT_MULTIPLIER_MISMATCH",
+                        expected=round(wt_kg * (u_mult or 1), 1),
+                        measured=sub_wt,
+                        delta=(sub_wt - wt_kg * u_mult) if (sub_wt is not None and u_mult is not None) else None,
+                        message=(
+                            f"可见钢筋表编号 {bid} 单件重({wt_kg:.1f}kg) × 每座构件数({r_info.get('unit_mult_raw')}) "
+                            f"与每座重列 ({sub_wt}kg) 不符"
+                        ),
+                    )
+                if sub_wt is not None:
+                    sum_calc += sub_wt
+            else:
+                sum_calc += wt_kg
         if tbl["reported_sum_kg"] is not None and tbl["rows"]:
             checks_run += 1
             if abs(sum_calc - tbl["reported_sum_kg"]) > max(1.0, 0.02 * sum_calc):
@@ -597,18 +708,99 @@ def verify_civil_dxf(
         _check_dot_count("rebar_t_girder_web", "R2", top_cnt, "主梁顶板架立筋")
         _check_dot_count("rebar_t_girder_web", "R3", mid_cnt, "主梁腹板水平防裂筋")
 
-    if "rebar_t_girder_flange" in views_by_id:
-        _check_dot_count("rebar_t_girder_flange", "W3", len(dots_by_view.get("rebar_t_girder_flange", [])), "翼缘板纵向分布筋")
+    if "rebar_t_girder_flange" in views_by_id or drawing_no == "QL-10":
+        for req_vid in ("rebar_t_girder_flange", "wet_joint_rebar_detail"):
+            checks_run += 1
+            if req_vid not in views_by_id:
+                _fail(
+                    "MISSING_FLANGE_WET_JOINT_VIEW",
+                    expected=req_vid,
+                    measured="missing",
+                    delta=None,
+                    message=f"翼缘板及湿接缝配筋图缺少必要视图：{req_vid}",
+                )
+        if "rebar_t_girder_flange" in views_by_id:
+            _check_dot_count("rebar_t_girder_flange", "W3", len(dots_by_view.get("rebar_t_girder_flange", [])), "翼缘板纵向分布筋")
 
-    if "diaphragm_section" in views_by_id:
-        pts_d = dots_by_view.get("diaphragm_section", [])
-        _check_dot_count("diaphragm_section", "HG1", sum(1 for _, ry in pts_d if ry < 350.0), "横隔梁底筋")
-        _check_dot_count("diaphragm_section", "HG2", sum(1 for _, ry in pts_d if ry > 900.0), "横隔梁顶筋")
+    if "diaphragm_section" in views_by_id or drawing_no == "QL-11":
+        for req_vid in ("rebar_diaphragm", "diaphragm_section", "end_diaphragm_section"):
+            checks_run += 1
+            if req_vid not in views_by_id:
+                _fail(
+                    "MISSING_DIAPHRAGM_REBAR_VIEW",
+                    expected=req_vid,
+                    measured="missing",
+                    delta=None,
+                    message=f"中/端横隔梁配筋图缺少必要视图：{req_vid}",
+                )
+        if "diaphragm_section" in views_by_id:
+            pts_d = dots_by_view.get("diaphragm_section", [])
+            _check_dot_count("diaphragm_section", "HG1", sum(1 for _, ry in pts_d if ry < 350.0), "横隔梁底筋")
+            _check_dot_count("diaphragm_section", "HG2", sum(1 for _, ry in pts_d if ry > 900.0), "横隔梁顶筋")
 
-    if "pier_cap_section" in views_by_id:
-        pts_c = dots_by_view.get("pier_cap_section", [])
-        _check_dot_count("pier_cap_section", "GL1", sum(1 for _, ry in pts_c if ry > 700.0), "盖梁顶层负弯矩主筋")
-        _check_dot_count("pier_cap_section", "GL2", sum(1 for _, ry in pts_c if ry <= 700.0), "盖梁底层正弯矩主筋")
+    if "pier_cap_section" in views_by_id or drawing_no == "QL-16":
+        for req_vid in ("rebar_pier_cap", "pier_cap_section", "pier_cap_end_detail"):
+            checks_run += 1
+            if req_vid not in views_by_id:
+                _fail(
+                    "MISSING_PIER_CAP_REBAR_VIEW",
+                    expected=req_vid,
+                    measured="missing",
+                    delta=None,
+                    message=f"桥墩盖梁配筋图缺少必要视图：{req_vid}",
+                )
+        if "pier_cap_section" in views_by_id:
+            pts_c = dots_by_view.get("pier_cap_section", [])
+            _check_dot_count("pier_cap_section", "GL1", sum(1 for _, ry in pts_c if ry > 700.0), "盖梁顶层负弯矩主筋")
+            _check_dot_count("pier_cap_section", "GL2", sum(1 for _, ry in pts_c if ry <= 700.0), "盖梁底层正弯矩主筋")
+
+    if "bearing_section" in views_by_id or drawing_no == "QL-12":
+        for req_vid in ("bearing_section", "bearing_pedestal_detail"):
+            checks_run += 1
+            if req_vid not in views_by_id:
+                _fail(
+                    "MISSING_BEARING_PEDESTAL_VIEW",
+                    expected=req_vid,
+                    measured="missing",
+                    delta=None,
+                    message=f"支座及垫石构造图缺少必要视图：{req_vid}",
+                )
+
+    # 5b. Visible Prestressing Tendon Schedule Table + Duct CIRCLE Entity Verification (QL-08)
+    if "tendon_mid_section" in views_by_id or "tendon_end_section" in views_by_id:
+        tendon_by_view: dict[str, int] = {}
+        for px, py, _ in tendon_dots:
+            vb_t = _find_enclosing_view(views, px, py, max_dist=10.0)
+            if vb_t is not None:
+                vid_t = str(vb_t["view_id"])
+                tendon_by_view[vid_t] = tendon_by_view.get(vid_t, 0) + 1
+        vis_tendon_ids = sorted(
+            {s for s, tx, ty in texts if tx >= 225.0 and ty >= 46.0 and re.fullmatch(r"N\d+", s)}
+        )
+        checks_run += 1
+        if not vis_tendon_ids:
+            _fail(
+                "MISSING_VISIBLE_TENDON_SCHEDULE",
+                expected="tendon_schedule_table",
+                measured="missing",
+                delta=None,
+                message="预应力钢束图缺少可见的《预应力钢束数量及张拉参数表》",
+            )
+        else:
+            exp_td_n = len(vis_tendon_ids)
+            for td_vid, td_desc in (("tendon_mid_section", "跨中钢束断面"), ("tendon_end_section", "梁端锚固断面")):
+                if td_vid in views_by_id:
+                    meas_td_n = tendon_by_view.get(td_vid, 0)
+                    checks_run += 1
+                    if meas_td_n != exp_td_n:
+                        _fail(
+                            "TENDON_DUCT_COUNT_MISMATCH",
+                            view_id=td_vid,
+                            expected=exp_td_n,
+                            measured=meas_td_n,
+                            delta=float(meas_td_n - exp_td_n),
+                            message=f"{td_desc} 实测绘制波纹管圆孔 ({meas_td_n}孔) 与可见钢束明细表 ({exp_td_n}束) 不符",
+                        )
 
     if "pier_col_section" in views_by_id or drawing_no == "QL-17":
         for req_vid in ("pier_pile_elev", "pier_col_section", "bored_pile_section", "tie_beam_joint_detail", "tie_beam_section"):
@@ -643,6 +835,45 @@ def verify_civil_dxf(
             _check_dot_count("abutment_cap_section", "QT1", len(dots_by_view.get("abutment_cap_section", [])), "桥台台帽主筋")
         if "abutment_pile_section" in views_by_id:
             _check_dot_count("abutment_pile_section", "QT3", len(dots_by_view.get("abutment_pile_section", [])), "桥台钻孔桩主筋")
+        # Verify A-A section cut in abutment_plan aligns with a drawn bearing pedestal center (not midway between pedestals!)
+        if "abutment_plan" in views_by_id and "abutment_cap_section" in views_by_id and "DS1" in visible_bars:
+            v_pl = views_by_id["abutment_plan"]
+            pl_b = v_pl.get("paper_bounds") or [0.0, 0.0, 0.0, 0.0]
+            ped_cxs = [
+                0.5 * (min(p[0] for p in pts) + max(p[0] for p in pts))
+                for pts in polylines
+                if len(pts) == 4
+                and all(_rect_distance(pl_b, p[0], p[1]) <= 2.0 for p in pts)
+                and 4.5 <= (max(p[0] for p in pts) - min(p[0] for p in pts)) <= 8.5
+                and 4.5 <= (max(p[1] for p in pts) - min(p[1] for p in pts)) <= 8.5
+            ]
+            a_lbl_xs = [
+                tx for s, tx, ty in texts if s == "A" and _rect_distance(pl_b, tx, ty) <= 4.0
+            ]
+            if ped_cxs and a_lbl_xs:
+                # Section-cut line x is ~3.3mm behind the 'A' label in look_dx direction; find vertical DIM tick line near 'A'
+                cut_xs = [
+                    p0[0]
+                    for p0, p1, lyr in lines_geom
+                    if lyr == "DIM"
+                    and abs(p0[0] - p1[0]) < 0.05
+                    and abs(p0[1] - p1[1]) >= 2.2
+                    and _rect_distance(pl_b, p0[0], p0[1]) <= 4.0
+                    and any(abs(p0[0] - ax) <= 6.0 for ax in a_lbl_xs)
+                ]
+                if cut_xs:
+                    aa_cx = cut_xs[0]
+                    min_ped_dist = min(abs(aa_cx - pcx) for pcx in ped_cxs)
+                    checks_run += 1
+                    if min_ped_dist > 1.8:
+                        _fail(
+                            "SECTION_CUT_PEDESTAL_MISALIGNED",
+                            view_id="abutment_plan",
+                            expected=0.0,
+                            measured=round(min_ped_dist, 2),
+                            delta=min_ped_dist,
+                            message="桥台平面图 A-A 剖切线位于垫石间隙处，但 A-A 断面却画出了支座垫石与 DS1 防裂网",
+                        )
 
     # ------------------------------------------------------------------
     # 6. QL-13 Deck Ancillary 5-Subdetail Completeness Verification
@@ -854,6 +1085,67 @@ def verify_civil_dxf(
                         measured="missing",
                         delta=None,
                         message=f"工程量汇总表未找到 '{r_boq['category']}' 的计算书数量 {q_str} {r_boq['unit']}",
+                    )
+
+        # 7g. Sheet Index completeness on QL-01 (must list all QL-01 ~ QL-18!)
+        if drawing_no == "QL-01" and "施工图目录" in joined_text:
+            txt_tokens_01 = {s.strip() for s, _, _ in texts if s.strip()}
+            for idx_sh in range(1, 19):
+                req_dno = f"QL-{idx_sh:02d}"
+                checks_run += 1
+                if req_dno not in txt_tokens_01:
+                    _fail(
+                        "SHEET_INDEX_ENTRY_MISSING",
+                        expected=req_dno,
+                        measured="missing",
+                        delta=None,
+                        message=f"QL-01 全套施工图目录表缺少图号 {req_dno}",
+                    )
+
+        # 7h. Cross-sheet general construction dimensions on QL-14 / QL-15 vs calc_report & QL-16~QL-18!
+        if drawing_no == "QL-14" and "substructure_checks" in calc_report:
+            sub_14 = calc_report["substructure_checks"]
+            cap_pos = calc_report.get("pier_cap_beam_1d", {}).get("column_positions_m") or [-2.6, 2.6]
+            req_14_dims = [
+                ("盖梁长", float(calc_report["pier_cap_beam_1d"]["cap_length_m"]) * 1000.0),
+                ("盖梁宽", float(sub_14["cap_beam"].get("width_m", 1.60)) * 1000.0),
+                ("墩距", round((float(cap_pos[-1]) - float(cap_pos[0])) * 1000.0, 1)),
+                ("墩柱直径", float(sub_14["pier_column"]["diameter_m"]) * 1000.0),
+                ("墩柱高度", float(sub_14["pier_column"]["height_m"]) * 1000.0),
+                ("桩顶系梁高", 1200.0),
+                ("钻孔桩直径", float(sub_14["bored_pile"]["diameter_m"]) * 1000.0),
+            ]
+            for d_name, req_mm in req_14_dims:
+                checks_run += 1
+                if not any(abs(dv - req_mm) <= 2.0 for dv in dim_numeric_values):
+                    _fail(
+                        "PIER_GENERAL_DIM_INCONSISTENT",
+                        expected=req_mm,
+                        measured="missing_or_different",
+                        delta=None,
+                        message=f"桥墩一般构造图 (QL-14) 缺少或与配筋图/计算书不一致的尺寸：{d_name} ({req_mm:g} mm)",
+                    )
+
+        if drawing_no == "QL-15" and "project_summary" in calc_report:
+            deck_mm = float(calc_report["project_summary"]["deck_width_m"]) * 1000.0
+            pile_d_15 = float(calc_report["substructure_checks"]["bored_pile"]["diameter_m"]) * 1000.0
+            req_15_dims = [
+                ("台帽长", deck_mm),
+                ("台帽宽", 1800.0),
+                ("背墙厚", 550.0),
+                ("耳墙长", 2000.0),
+                ("桩距", round(max(3600.0, deck_mm - 3600.0), 1)),
+                ("桩径", pile_d_15),
+            ]
+            for d_name, req_mm in req_15_dims:
+                checks_run += 1
+                if not any(abs(dv - req_mm) <= 2.0 for dv in dim_numeric_values):
+                    _fail(
+                        "ABUTMENT_GENERAL_DIM_INCONSISTENT",
+                        expected=req_mm,
+                        measured="missing_or_different",
+                        delta=None,
+                        message=f"桥台一般构造图 (QL-15) 缺少或与桥台配筋图 (QL-18) 不一致的尺寸：{d_name} ({req_mm:g} mm)",
                     )
 
     return {

@@ -45,6 +45,7 @@ from .symbols import (
     draw_rebar_schedule_table,
     draw_section_cut_symbol,
     draw_slope_arrow,
+    draw_tendon_schedule_table,
     export_civil_a3_print_pdf_png,
     setup_civil_dxf_document,
 )
@@ -88,6 +89,55 @@ TASK_BOOK_9_CATEGORIES: tuple[tuple[str, str], ...] = (
     ("cat8_substructure_general", "8. 下部结构一般构造图"),
     ("cat9_substructure_rebar", "9. 下部结构普通钢筋图"),
 )
+
+DEFAULT_18_SHEET_INDEX: tuple[tuple[str, str, str], ...] = (
+    ("QL-01", "设计总说明及全套施工图目录", "无比例"),
+    ("QL-02", "全桥主要工程材料数量汇总表", "表格"),
+    ("QL-03", "桥型总体布置图（一：立面图）", "1:400"),
+    ("QL-04", "桥型总体布置图（二：平面及横剖面图）", "1:400/1:100"),
+    ("QL-05", "主梁标准横断面及桥面铺装构造图", "1:40/1:25/1:10"),
+    ("QL-06", "25m预制T梁一般构造图（一：纵立面及平面）", "1:80"),
+    ("QL-07", "25m预制T梁一般构造图（二：边中梁变截面详图）", "1:25"),
+    ("QL-08", "T梁预应力钢束构造及张拉布置图", "1:15/1:100"),
+    ("QL-09", "主梁梁肋普通钢筋构造图", "1:20/1:80"),
+    ("QL-10", "主梁翼缘板及湿接缝钢筋构造图", "1:20/1:10"),
+    ("QL-11", "主梁中横隔梁与端横隔梁钢筋构造图", "1:65/1:25"),
+    ("QL-12", "板式橡胶支座及支座垫石构造布置图", "1:5/1:10"),
+    ("QL-13", "桥面附属结构构造图（护栏/伸缩缝/泄水管/搭板）", "1:15/1:10/1:80"),
+    ("QL-14", "双柱式桥墩一般构造图", "1:80"),
+    ("QL-15", "桩柱式桥台一般构造图", "1:80"),
+    ("QL-16", "桥墩盖梁普通钢筋构造图", "1:65/1:30"),
+    ("QL-17", "桥墩墩柱、系梁及钻孔桩钢筋构造图", "1:180/1:25"),
+    ("QL-18", "桥台台帽、耳背墙及桩基钢筋构造图", "1:80/1:30/1:20"),
+)
+
+_UNRESOLVED_FIELD_LABELS_ZH: dict[str, str] = {
+    "flood_elevation_m": "设计洪水位",
+    "deck_elevation_m": "桥面设计高程",
+    "hydrology": "实测河床水文断面",
+    "soil_layers": "钻孔地质分层及摩阻力",
+    "pile_length_m": "持力层与设计桩长",
+    "calc_span_m": "支座定位与实际计算跨径",
+}
+
+
+def _wrap_zh_text(text: str, width_chars: int = 38) -> list[str]:
+    s = str(text).strip()
+    if len(s) <= width_chars:
+        return [s]
+    out: list[str] = []
+    cur = ""
+    for ch in s:
+        cur += ch
+        if len(cur) >= width_chars and ch in "，。；、）) ":
+            out.append(cur.strip())
+            cur = "    "
+        elif len(cur) >= width_chars + 4:
+            out.append(cur.strip())
+            cur = "    "
+    if cur.strip():
+        out.append(cur.rstrip())
+    return out
 
 _STANDARD_ELEV_SCALES: tuple[int, ...] = (
     100, 150, 200, 250, 300, 400, 500, 600, 750, 800, 1000, 1250, 1500, 2000, 2500, 3000, 4000, 5000
@@ -267,10 +317,10 @@ def _draw_bridge_elevation(spec: dict[str, Any]) -> ezdxf.document.Drawing:
         )
     pier_rxs.append(rx_span_end)
 
-    # Left & Right Abutments + True-Scale Piles (zero * 0.72 distortion!)
-    abut_h_cm = 380.0
+    # Left & Right Abutments (backwall + cap + approach slab silhouette) + True-Scale Piles
+    abut_h_cm = 315.0
     abut_pile_cm = max(1200.0, pile_len_cm - 200.0)
-    for rxa0, rxa1 in ((rx_abut_l, rx_span_0), (rx_span_end, rx_abut_r)):
+    for rxa0, rxa1, is_left in ((rx_abut_l, rx_span_0, True), (rx_span_end, rx_abut_r, False)):
         msp.add_lwpolyline(
             [
                 vb.pt(rxa0, ry_deck - abut_h_cm),
@@ -281,43 +331,44 @@ def _draw_bridge_elevation(spec: dict[str, Any]) -> ezdxf.document.Drawing:
             close=True,
             dxfattribs={"layer": "OUTLINE"},
         )
-        rxc_p = 0.5 * (rxa0 + rxa1)
+        rx_bw = rxa1 - 55.0 if is_left else rxa0 + 55.0
+        msp.add_line(vb.pt(rx_bw, ry_deck - 175.0), vb.pt(rx_bw, ry_deck), dxfattribs={"layer": "THIN"})
+        msp.add_line(vb.pt(rxa0, ry_deck - 175.0), vb.pt(rxa1, ry_deck - 175.0), dxfattribs={"layer": "THIN"})
+        rxc_p = (rxa1 - 90.0) if is_left else (rxa0 + 90.0)
         ry_p_top = ry_deck - abut_h_cm
         ry_p_bot = ry_p_top - abut_pile_cm
         msp.add_line(vb.pt(rxc_p - 0.5 * pile_d_cm, ry_p_top), vb.pt(rxc_p - 0.5 * pile_d_cm, ry_p_bot), dxfattribs={"layer": "OUTLINE"})
         msp.add_line(vb.pt(rxc_p + 0.5 * pile_d_cm, ry_p_top), vb.pt(rxc_p + 0.5 * pile_d_cm, ry_p_bot), dxfattribs={"layer": "OUTLINE"})
         draw_pile_s_break(msp, vb.x(rxc_p), vb.y(ry_p_bot), max(1.4, vb.span(pile_d_cm)))
 
-    # Natural riverbed valley profile + optional soil strata lines
-    terrain_pts: list[tuple[float, float]] = [vb.pt(rx_abut_l - 250.0, ry_deck - 320.0)]
+    # Natural riverbed valley profile + non-overlapping ground & flood elevation markers!
+    terrain_pts: list[tuple[float, float]] = [vb.pt(rx_abut_l - 280.0, ry_deck - 315.0)]
     pier_ground_rys: list[float] = []
     for idx, rxp in enumerate(pier_rxs):
         t_norm = idx / max(1, n_spans)
-        depth_cm = 340.0 + 480.0 * math.sin(math.pi * t_norm)
+        depth_cm = 330.0 + 500.0 * math.sin(math.pi * t_norm)
         ryg = ry_deck - depth_cm
         pier_ground_rys.append(ryg)
         terrain_pts.append(vb.pt(rxp, ryg))
-    terrain_pts.append(vb.pt(rx_abut_r + 250.0, ry_deck - 330.0))
+    terrain_pts.append(vb.pt(rx_abut_r + 280.0, ry_deck - 315.0))
     msp.add_lwpolyline(terrain_pts, close=False, dxfattribs={"layer": "TERRAIN"})
-    draw_ground_line(
-        msp,
-        terrain_pts[1][0] - 5.0,
-        terrain_pts[1][1] - 1.2,
-        terrain_pts[-2][0] + 5.0,
-        terrain_pts[-2][1] - 1.2,
-        label="河床地面线",
-        scale=0.82,
-    )
+    # Place ground symbol cleanly on right bank embankment shoulder (zero overlap with water level!)
+    gx_r0 = vb.x(rx_abut_r + 20.0)
+    gy_r0 = vb.y(ry_deck - 315.0)
+    draw_ground_line(msp, gx_r0, gy_r0, gx_r0 + 18.0, gy_r0, label="河床地面线", scale=0.80)
 
     # True-scale Design Flood Water Line (strictly (deck_elev_m - flood_elev_m)*1000/scale_denom mm below deck!)
     ry_water = flood_elev_m * 100.0
-    msp.add_line(vb.pt(rx_span_0 + 200.0, ry_water), vb.pt(rx_span_end - 200.0, ry_water), dxfattribs={"layer": "CENTER"})
-    draw_elevation_marker(msp, vb.x(rx_span_0 + 420.0), vb.y(ry_water), flood_elev_m, prefix="设计洪水位 ", scale=0.82)
-    draw_elevation_marker(msp, vb.x(rx_abut_l + 60.0), vb.y(ry_deck), deck_elev_m, prefix="桥面 ", scale=0.82)
+    msp.add_line(vb.pt(rx_span_0 + 220.0, ry_water), vb.pt(rx_span_end - 220.0, ry_water), dxfattribs={"layer": "CENTER"})
+    # Place flood elevation marker over mid-river channel (cleanly separated from piers & ground label!)
+    rx_flood_lbl = 0.22 * span_cm if n_spans % 2 == 0 else 0.0
+    draw_elevation_marker(msp, vb.x(rx_flood_lbl), vb.y(ry_water), flood_elev_m, prefix="设计洪水位 ", scale=0.80)
+    draw_elevation_marker(msp, vb.x(rx_abut_l + 40.0), vb.y(ry_deck), deck_elev_m, prefix="桥面 ", scale=0.80)
 
-    # Intermediate Piers (strictly true 1:scale_denom — zero max(...) clamping!)
-    cap_w_cm = 170.0
-    cap_h_cm = 150.0
+    # Intermediate Piers (strictly true 1:scale_denom — linked to real cap & column heights!)
+    cap_w_cm = float(spec.get("cap_width_cm", 160.0))
+    cap_h_cm = float(spec.get("cap_height_cm", 140.0))
+    col_h_cm = float(spec.get("column_height_cm", 550.0))
     tie_h_cm = 120.0
     min_paper_y = y_deck_paper
     for idx in range(1, n_spans):
@@ -334,7 +385,7 @@ def _draw_bridge_elevation(spec: dict[str, Any]) -> ezdxf.document.Drawing:
             close=True,
             dxfattribs={"layer": "OUTLINE"},
         )
-        ry_tie_top = min(ry_cap_bot - 150.0, ryg - 60.0)
+        ry_tie_top = min(ry_cap_bot - col_h_cm, ryg - 40.0)
         msp.add_lwpolyline(
             [
                 vb.pt(rxp - 0.5 * pier_col_d_cm, ry_tie_top),
@@ -801,15 +852,15 @@ def _draw_t_girder_general(spec: dict[str, Any]) -> ezdxf.document.Drawing:
     if variant == "cross_details":
         doc, msp, b = setup_civil_dxf_document(
             sheet_size=str(spec.get("sheet_size", "A3")),
-            title=str(spec.get("title", "25m预制T梁一般构造图（二：中梁与边梁变截面详图）")),
+            title=str(spec.get("title", "25m预制T梁一般构造图（二：边中梁变截面及横隔板详图）")),
             project=str(spec.get("project", "信阳市文昌中桥设计")),
             drawing_no=str(spec.get("drawing_no", "QL-07")),
             unit_note="mm",
             scale_label="1:25",
             style_overrides=_resolve_style_overrides(spec),
         )
-        # Left: Asymmetric Edge Girder Mid-Span (outer cantilever 600mm, inner precast 775mm)
-        vb_edge = ViewBox("edge_girder_mid", 98.0, 92.0, 25.0, "mm")
+        # 1. Left: Asymmetric Edge Girder Mid-Span (1:25) with complete flange/haunch/web/bulb dimensions
+        vb_edge = ViewBox("edge_girder_mid", 80.0, 88.0, 25.0, "mm")
         inner_half = 0.5 * (spacing_mm - 400.0)
         edge_pts = [
             (-0.5 * bulb_w_mm, 0.0), (0.5 * bulb_w_mm, 0.0), (0.5 * bulb_w_mm, 200.0),
@@ -820,20 +871,62 @@ def _draw_t_girder_general(spec: dict[str, Any]) -> ezdxf.document.Drawing:
             (-100.0, 400.0), (-0.5 * bulb_w_mm, 200.0),
         ]
         msp.add_lwpolyline([vb_edge.pt(x, y) for x, y in edge_pts], close=True, dxfattribs={"layer": "OUTLINE"})
+        msp.add_line((vb_edge.x(0.0), vb_edge.y(-100.0)), (vb_edge.x(0.0), vb_edge.y(girder_h_mm + 120.0)), dxfattribs={"layer": "CENTER"})
         add_arch_dim(msp, vb_edge.pt(-edge_cant_mm, girder_h_mm), vb_edge.pt(0.0, girder_h_mm), (vb_edge.x(-0.5 * edge_cant_mm), vb_edge.y(girder_h_mm) + 8.0), f"{edge_cant_mm:g}")
         add_arch_dim(msp, vb_edge.pt(0.0, girder_h_mm), vb_edge.pt(inner_half, girder_h_mm), (vb_edge.x(0.5 * inner_half), vb_edge.y(girder_h_mm) + 8.0), f"{inner_half:g}")
-        add_arch_dim(msp, vb_edge.pt(inner_half, 0.0), vb_edge.pt(inner_half, girder_h_mm), (vb_edge.x(inner_half) + 9.0, vb_edge.y(0.5 * girder_h_mm)), f"{girder_h_mm:g}", angle=90.0)
-        add_civil_text(msp, "外边梁跨中预制截面 (1:25)", vb_edge.x(0.0), 74.0, height=2.6, align="CENTER")
-        vb_edge.register(doc, msp, paper_bounds=(vb_edge.x(-edge_cant_mm) - 10.0, 78.0, vb_edge.x(inner_half) + 14.0, vb_edge.y(girder_h_mm) + 14.0))
+        add_arch_dim(msp, vb_edge.pt(-0.5 * bulb_w_mm, 0.0), vb_edge.pt(0.5 * bulb_w_mm, 0.0), (vb_edge.x(0.0), vb_edge.y(0.0) - 6.5), f"{bulb_w_mm:g}")
+        add_arch_dim(msp, vb_edge.pt(-100.0, 900.0), vb_edge.pt(100.0, 900.0), (vb_edge.x(0.0), vb_edge.y(900.0) + 5.5), "200")
+        add_arch_dim(msp, vb_edge.pt(inner_half, 0.0), vb_edge.pt(inner_half, girder_h_mm), (vb_edge.x(inner_half) + 8.5, vb_edge.y(0.5 * girder_h_mm)), f"{girder_h_mm:g}", angle=90.0)
+        add_arch_dim(msp, vb_edge.pt(-edge_cant_mm, girder_h_mm - 200.0), vb_edge.pt(-edge_cant_mm, girder_h_mm), (vb_edge.x(-edge_cant_mm) - 6.5, vb_edge.y(girder_h_mm - 100.0)), "200", angle=90.0)
+        add_arch_dim(msp, vb_edge.pt(-0.5 * bulb_w_mm, 0.0), vb_edge.pt(-0.5 * bulb_w_mm, 200.0), (vb_edge.x(-0.5 * bulb_w_mm) - 6.5, vb_edge.y(100.0)), "200", angle=90.0)
+        add_civil_text(msp, "一、外边梁跨中预制截面 (1:25)", vb_edge.x(0.0), 68.0, height=2.4, align="CENTER")
+        vb_edge.register(doc, msp, paper_bounds=(vb_edge.x(-edge_cant_mm) - 10.0, 66.0, vb_edge.x(inner_half) + 13.0, vb_edge.y(girder_h_mm) + 14.0))
 
-        # Right: Girder Support Thickened End Section (1:25)
-        vb_sup = ViewBox("girder_support_end", 282.0, 92.0, 25.0, "mm")
+        # 2. Center: Girder Support Thickened End Section (1:25)
+        vb_sup = ViewBox("girder_support_end", 206.0, 88.0, 25.0, "mm")
         end_poly = build_t_girder_polygon_mm(flange_width_mm=2.0 * inner_half, height_mm=girder_h_mm, web_thick_mm=bulb_w_mm, bulb_width_mm=bulb_w_mm, bulb_height_mm=0.0)
         msp.add_lwpolyline([vb_sup.pt(x, y) for x, y in end_poly], close=True, dxfattribs={"layer": "OUTLINE"})
-        add_arch_dim(msp, vb_sup.pt(-0.5 * bulb_w_mm, 0.0), vb_sup.pt(0.5 * bulb_w_mm, 0.0), (vb_sup.x(0.0), vb_sup.y(0.0) - 7.0), f"{bulb_w_mm:g}")
+        msp.add_line((vb_sup.x(0.0), vb_sup.y(-100.0)), (vb_sup.x(0.0), vb_sup.y(girder_h_mm + 120.0)), dxfattribs={"layer": "CENTER"})
+        add_arch_dim(msp, vb_sup.pt(-0.5 * bulb_w_mm, 0.0), vb_sup.pt(0.5 * bulb_w_mm, 0.0), (vb_sup.x(0.0), vb_sup.y(0.0) - 6.5), f"加厚肋 {bulb_w_mm:g}")
         add_arch_dim(msp, vb_sup.pt(-inner_half, girder_h_mm), vb_sup.pt(inner_half, girder_h_mm), (vb_sup.x(0.0), vb_sup.y(girder_h_mm) + 8.0), f"{2.0*inner_half:g}")
-        add_civil_text(msp, "中梁支点加厚截面 (1:25)", vb_sup.x(0.0), 74.0, height=2.6, align="CENTER")
-        vb_sup.register(doc, msp, paper_bounds=(vb_sup.x(-inner_half) - 10.0, 78.0, vb_sup.x(inner_half) + 14.0, vb_sup.y(girder_h_mm) + 14.0))
+        add_arch_dim(msp, vb_sup.pt(inner_half, 0.0), vb_sup.pt(inner_half, girder_h_mm), (vb_sup.x(inner_half) + 8.5, vb_sup.y(0.5 * girder_h_mm)), f"{girder_h_mm:g}", angle=90.0)
+        add_civil_text(msp, "二、中梁支点加厚截面 (1:25)", vb_sup.x(0.0), 68.0, height=2.4, align="CENTER")
+        vb_sup.register(doc, msp, paper_bounds=(vb_sup.x(-inner_half) - 8.0, 66.0, vb_sup.x(inner_half) + 13.0, vb_sup.y(girder_h_mm) + 14.0))
+
+        # 3. Right (above Title Block): Precast Diaphragm Outrigger Wing & Wet-Joint Splice Elevation (1:25)
+        vb_dw = ViewBox("diaphragm_wing_detail", 336.0, 126.0, 25.0, "mm")
+        dia_h = 1350.0
+        # T-girder web core + bilateral precast diaphragm wings [-inner_half .. +inner_half] x [girder_h - dia_h .. girder_h]
+        msp.add_lwpolyline(
+            [
+                vb_dw.pt(-inner_half, girder_h_mm),
+                vb_dw.pt(inner_half, girder_h_mm),
+                vb_dw.pt(inner_half, girder_h_mm - dia_h),
+                vb_dw.pt(100.0, girder_h_mm - dia_h),
+                vb_dw.pt(100.0, 0.0),
+                vb_dw.pt(-100.0, 0.0),
+                vb_dw.pt(-100.0, girder_h_mm - dia_h),
+                vb_dw.pt(-inner_half, girder_h_mm - dia_h),
+            ],
+            close=True,
+            dxfattribs={"layer": "OUTLINE"},
+        )
+        msp.add_line(vb_dw.pt(-inner_half, girder_h_mm - 200.0), vb_dw.pt(inner_half, girder_h_mm - 200.0), dxfattribs={"layer": "THIN"})
+        # Adjacent wet-joint splice zone [inner_half .. inner_half + 400]
+        msp.add_lwpolyline(
+            [
+                vb_dw.pt(inner_half, girder_h_mm - dia_h),
+                vb_dw.pt(inner_half + 400.0, girder_h_mm - dia_h),
+                vb_dw.pt(inner_half + 400.0, girder_h_mm),
+                vb_dw.pt(inner_half, girder_h_mm),
+            ],
+            close=True,
+            dxfattribs={"layer": "HIDDEN"},
+        )
+        add_arch_dim(msp, vb_dw.pt(inner_half, girder_h_mm), vb_dw.pt(inner_half + 400.0, girder_h_mm), (vb_dw.x(inner_half + 200.0), vb_dw.y(girder_h_mm) + 7.5), "湿接缝 400")
+        add_arch_dim(msp, vb_dw.pt(-inner_half, girder_h_mm - dia_h), vb_dw.pt(-inner_half, girder_h_mm), (vb_dw.x(-inner_half) - 7.5, vb_dw.y(girder_h_mm - 0.5 * dia_h)), f"{dia_h:g}", angle=90.0)
+        add_civil_text(msp, "三、中横隔板预制及湿接缝构造 (1:25)", vb_dw.x(100.0), 112.0, height=2.3, align="CENTER")
+        vb_dw.register(doc, msp, paper_bounds=(286.0, 110.0, 404.0, 214.0))
         return doc
 
     doc, msp, b = setup_civil_dxf_document(
@@ -846,34 +939,61 @@ def _draw_t_girder_general(spec: dict[str, Any]) -> ezdxf.document.Drawing:
         style_overrides=_resolve_style_overrides(spec),
     )
     cx = 0.5 * (b["ix0"] + b["ix1"])
-    vb = ViewBox("girder_longitudinal", cx, 184.0, 80.0, "mm")
+    vb = ViewBox("girder_longitudinal", cx, 188.0, 80.0, "mm")
     half_l = 0.5 * beam_len_mm
     half_c = 0.5 * calc_span_mm
     end_off = half_l - half_c
-    # Elevation rectangle + flange bottom line + 5 diaphragm dashed verticals
+    dia_sp = 0.25 * calc_span_mm
+    # Elevation rectangle + flange bottom line + bulb top line + end web thickening transition + 5 diaphragms
     msp.add_lwpolyline([vb.pt(-half_l, 0.0), vb.pt(half_l, 0.0), vb.pt(half_l, girder_h_mm), vb.pt(-half_l, girder_h_mm)], close=True, dxfattribs={"layer": "OUTLINE"})
     msp.add_line(vb.pt(-half_l, girder_h_mm - 200.0), vb.pt(half_l, girder_h_mm - 200.0), dxfattribs={"layer": "THIN"})
+    msp.add_line(vb.pt(-half_c + 2200.0, 200.0), vb.pt(half_c - 2200.0, 200.0), dxfattribs={"layer": "THIN"})
+    # End thickened web transition lines (1200 straight + 1000 taper from support)
+    for sx_end in (-1.0, 1.0):
+        rx_s1 = sx_end * (half_c - 1200.0)
+        rx_s2 = sx_end * (half_c - 2200.0)
+        msp.add_line(vb.pt(rx_s1, 0.0), vb.pt(rx_s1, girder_h_mm - 200.0), dxfattribs={"layer": "HIDDEN"})
+        msp.add_line(vb.pt(rx_s1, 0.0), vb.pt(rx_s2, 200.0), dxfattribs={"layer": "HIDDEN"})
     for k in range(5):
-        rxd = -half_c + k * (0.25 * calc_span_mm)
-        msp.add_line(vb.pt(rxd, 200.0), vb.pt(rxd, girder_h_mm - 200.0), dxfattribs={"layer": "HIDDEN"})
-    draw_bearing_symbol(msp, vb.x(-half_c), vb.y(0.0) - 2.2, kind="fixed", size=3.0)
-    draw_bearing_symbol(msp, vb.x(half_c), vb.y(0.0) - 2.2, kind="sliding_longitudinal", size=3.0)
+        rxd = -half_c + k * dia_sp
+        msp.add_lwpolyline(
+            [vb.pt(rxd - 100.0, girder_h_mm - 1350.0), vb.pt(rxd + 100.0, girder_h_mm - 1350.0), vb.pt(rxd + 100.0, girder_h_mm - 200.0), vb.pt(rxd - 100.0, girder_h_mm - 200.0)],
+            close=True,
+            dxfattribs={"layer": "THIN"},
+        )
+        if 0 < k < 4:
+            add_arch_dim(
+                msp,
+                vb.pt(-half_c + (k - 1) * dia_sp, 0.0),
+                vb.pt(rxd, 0.0),
+                (vb.x(-half_c + (k - 0.5) * dia_sp), vb.y(0.0) - 6.5),
+                f"{dia_sp:g}",
+            )
+    add_arch_dim(msp, vb.pt(-half_c + 3.0 * dia_sp, 0.0), vb.pt(half_c, 0.0), (vb.x(half_c - 0.5 * dia_sp), vb.y(0.0) - 6.5), f"{dia_sp:g}")
+    add_arch_dim(msp, vb.pt(-half_c, 0.0), vb.pt(-half_c + dia_sp, 0.0), (vb.x(-half_c + 0.5 * dia_sp), vb.y(0.0) - 6.5), f"{dia_sp:g}")
+    draw_bearing_symbol(msp, vb.x(-half_c), vb.y(0.0) - 2.0, kind="fixed", size=2.8)
+    draw_bearing_symbol(msp, vb.x(half_c), vb.y(0.0) - 2.0, kind="sliding_longitudinal", size=2.8)
 
-    add_arch_dim(msp, vb.pt(-half_l, girder_h_mm), vb.pt(-half_c, girder_h_mm), (vb.x(-half_l + 0.5 * end_off), vb.y(girder_h_mm) + 8.5), f"{end_off:g}")
-    add_arch_dim(msp, vb.pt(-half_c, girder_h_mm), vb.pt(half_c, girder_h_mm), (cx, vb.y(girder_h_mm) + 8.5), f"计算跨径 {calc_span_mm:g}")
-    add_arch_dim(msp, vb.pt(half_c, girder_h_mm), vb.pt(half_l, girder_h_mm), (vb.x(half_c + 0.5 * end_off), vb.y(girder_h_mm) + 8.5), f"{end_off:g}")
-    add_arch_dim(msp, vb.pt(-half_l, girder_h_mm), vb.pt(half_l, girder_h_mm), (cx, vb.y(girder_h_mm) + 17.5), f"预制主梁全长 {beam_len_mm:g}")
-    add_arch_dim(msp, vb.pt(half_l, 0.0), vb.pt(half_l, girder_h_mm), (vb.x(half_l) + 9.0, vb.y(0.5 * girder_h_mm)), f"{girder_h_mm:g}", angle=90.0)
-    add_civil_text(msp, "预制T梁纵立面图 (1:80，设端横隔板2道、中横隔板3道)", cx, vb.y(0.0) - 10.0, height=2.5, align="CENTER")
+    add_arch_dim(msp, vb.pt(-half_l, girder_h_mm), vb.pt(-half_c, girder_h_mm), (vb.x(-half_l + 0.5 * end_off), vb.y(girder_h_mm) + 8.0), f"{end_off:g}")
+    add_arch_dim(msp, vb.pt(-half_c, girder_h_mm), vb.pt(half_c, girder_h_mm), (cx, vb.y(girder_h_mm) + 8.0), f"计算跨径 {calc_span_mm:g}")
+    add_arch_dim(msp, vb.pt(half_c, girder_h_mm), vb.pt(half_l, girder_h_mm), (vb.x(half_c + 0.5 * end_off), vb.y(girder_h_mm) + 8.0), f"{end_off:g}")
+    add_arch_dim(msp, vb.pt(-half_l, girder_h_mm), vb.pt(half_l, girder_h_mm), (cx, vb.y(girder_h_mm) + 16.5), f"预制主梁全长 {beam_len_mm:g}")
+    add_arch_dim(msp, vb.pt(half_l, 0.0), vb.pt(half_l, girder_h_mm), (vb.x(half_l) + 8.5, vb.y(0.5 * girder_h_mm)), f"{girder_h_mm:g}", angle=90.0)
+    add_civil_text(msp, "预制T梁纵立面图 (1:80，端横隔板2道、中横隔板3道，间距4×6000)", cx, vb.y(0.0) - 14.5, height=2.4, align="CENTER")
 
-    # Plan view directly below in same 1:80 ViewBox
-    ry_p0 = -4200.0
+    # Plan view directly below in same 1:80 ViewBox, showing precast flange + 5 diaphragm stubs + 400mm wet joint!
+    ry_p0 = -4800.0
     pre_w = spacing_mm - 400.0
     msp.add_lwpolyline([vb.pt(-half_l, ry_p0 - 0.5 * pre_w), vb.pt(half_l, ry_p0 - 0.5 * pre_w), vb.pt(half_l, ry_p0 + 0.5 * pre_w), vb.pt(-half_l, ry_p0 + 0.5 * pre_w)], close=True, dxfattribs={"layer": "OUTLINE"})
+    msp.add_line(vb.pt(-half_l, ry_p0 + 0.5 * spacing_mm), vb.pt(half_l, ry_p0 + 0.5 * spacing_mm), dxfattribs={"layer": "HIDDEN"})
     msp.add_line(vb.pt(-half_l - 300.0, ry_p0), vb.pt(half_l + 300.0, ry_p0), dxfattribs={"layer": "CENTER"})
-    add_arch_dim(msp, vb.pt(-half_l, ry_p0 - 0.5 * pre_w), vb.pt(-half_l, ry_p0 + 0.5 * pre_w), (vb.x(-half_l) - 9.0, vb.y(ry_p0)), f"{pre_w:g}", angle=90.0)
-    add_civil_text(msp, "预制T梁顶面平面图 (1:80)", cx, vb.y(ry_p0 - 0.5 * pre_w) - 8.5, height=2.5, align="CENTER")
-    vb.register(doc, msp, paper_bounds=(vb.x(-half_l) - 15.0, vb.y(ry_p0 - 0.5 * pre_w) - 10.0, vb.x(half_l) + 15.0, vb.y(girder_h_mm) + 22.0))
+    for k in range(5):
+        rxd = -half_c + k * dia_sp
+        msp.add_line(vb.pt(rxd, ry_p0 - 0.5 * spacing_mm), vb.pt(rxd, ry_p0 + 0.5 * spacing_mm), dxfattribs={"layer": "THIN"})
+    add_arch_dim(msp, vb.pt(-half_l, ry_p0 - 0.5 * pre_w), vb.pt(-half_l, ry_p0 + 0.5 * pre_w), (vb.x(-half_l) - 8.5, vb.y(ry_p0)), f"预制宽 {pre_w:g}", angle=90.0)
+    add_arch_dim(msp, vb.pt(half_l, ry_p0 + 0.5 * pre_w), vb.pt(half_l, ry_p0 + 0.5 * spacing_mm), (vb.x(half_l) + 8.5, vb.y(ry_p0 + 0.5 * (pre_w + spacing_mm))), "200", angle=90.0)
+    add_civil_text(msp, "预制T梁顶面及横隔板平面图 (1:80，虚线为半侧湿接缝中心)", cx, vb.y(ry_p0 - 0.5 * pre_w) - 9.5, height=2.4, align="CENTER")
+    vb.register(doc, msp, paper_bounds=(vb.x(-half_l) - 15.0, vb.y(ry_p0 - 0.5 * pre_w) - 11.0, vb.x(half_l) + 15.0, vb.y(girder_h_mm) + 21.0))
     return doc
 
 
@@ -903,7 +1023,7 @@ def _draw_tendon_layout(spec: dict[str, Any]) -> ezdxf.document.Drawing:
     beam_len_mm = float(spec.get("beam_length_mm", calc["project_summary"]["beam_length_m"] * 1000.0))
     half_span_mm = float(spec.get("half_beam_length_mm", 0.5 * beam_len_mm))
 
-    bulb_dx = min(120.0, max(60.0, 0.25 * bulb_w_mm))
+    bulb_dx = min(130.0, max(70.0, 0.26 * bulb_w_mm))
     if n_tendons == 1:
         mid_ducts_mm: list[tuple[str, float, float]] = [("N1", 0.0, 100.0)]
     elif n_tendons == 2:
@@ -911,7 +1031,7 @@ def _draw_tendon_layout(spec: dict[str, Any]) -> ezdxf.document.Drawing:
     else:
         mid_ducts_mm = [("N1", -bulb_dx, 100.0), ("N2", bulb_dx, 100.0), ("N3", 0.0, 100.0)]
         for extra_idx in range(4, n_tendons + 1):
-            dy_mm = 100.0 + (extra_idx - 3) * 80.0
+            dy_mm = 100.0 + (extra_idx - 3) * 115.0
             if dy_mm > girder_h_mm - 200.0:
                 raise ValueError(f"girder height {girder_h_mm:g}mm cannot accommodate {n_tendons} mid-span ducts")
             mid_ducts_mm.append((f"N{extra_idx}", 0.0, dy_mm))
@@ -928,82 +1048,112 @@ def _draw_tendon_layout(spec: dict[str, Any]) -> ezdxf.document.Drawing:
 
     doc, msp, b = setup_civil_dxf_document(
         sheet_size=str(spec.get("sheet_size", "A3")),
-        title=str(spec.get("title", "T梁预应力钢束构造及布置图")),
+        title=str(spec.get("title", "T梁预应力钢束构造及张拉布置图")),
         project=str(spec.get("project", calc["project_summary"]["project_name"])),
         drawing_no=str(spec.get("drawing_no", "QL-08" if spec.get("preset") == "wenchang" else "QL-03")),
         unit_note="mm",
-        scale_label="1:15 / 1:100",
+        scale_label="1:15 / 1:90",
         style_overrides=_resolve_style_overrides(spec),
     )
 
-    # 1. Left: Mid-Span Section (exact 1:15 ViewBox)
-    vb_mid = ViewBox("tendon_mid_section", 76.0, 88.0, 15.0, "mm")
-    crop_fl = min(flange_w_mm, 1350.0)
+    # 1. Left: A-A Mid-Span Section (exact 1:15 ViewBox)
+    vb_mid = ViewBox("tendon_mid_section", 70.0, 86.0, 15.0, "mm")
+    crop_fl = min(flange_w_mm, 1250.0)
     mid_poly = build_t_girder_polygon_mm(flange_width_mm=crop_fl, height_mm=girder_h_mm, web_thick_mm=web_t_mm, bulb_width_mm=bulb_w_mm, bulb_height_mm=bulb_h_mm)
-    msp.add_lwpolyline([vb_mid.pt(px, py) for px, py in mid_poly], close=True, dxfattribs={"layer": "OUTLINE"})
+    msp.add_lwpolyline([vb_mid.pt(px, py) for px, py in mid_poly], close=True, dxfattribs={"layer": "CONCRETE"})
     msp.add_line((vb_mid.x(0.0), vb_mid.y(-100.0)), (vb_mid.x(0.0), vb_mid.y(girder_h_mm + 100.0)), dxfattribs={"layer": "CENTER"})
-    add_civil_text(msp, "跨中钢束断面 (1:15)", vb_mid.x(0.0), 71.0, height=2.7, align="CENTER")
+    add_civil_text(msp, "A-A 跨中钢束断面 (1:15)", vb_mid.x(0.0), 68.0, height=2.4, align="CENTER")
 
-    tag_pitch = min(9.0, 82.0 / max(1, n_tendons))
+    tag_pitch = min(9.5, 84.0 / max(1, n_tendons))
     for idx, (tag, dx_mm, dy_mm) in enumerate(mid_ducts_mm):
         px, py = vb_mid.pt(dx_mm, dy_mm)
-        msp.add_circle((px, py), 2.0, dxfattribs={"layer": "TENDON"})
-        draw_boxed_tag(msp, vb_mid.x(0.0) + (34.0 if dx_mm >= 0 else -34.0), 96.0 + idx * tag_pitch, tag, leader_to=(px, py))
+        msp.add_circle((px, py), 1.85, dxfattribs={"layer": "TENDON"})
+        draw_boxed_tag(msp, vb_mid.x(0.0) + (32.0 if dx_mm >= 0 else -32.0), 96.0 + idx * tag_pitch, tag, leader_to=(px, py))
 
     add_arch_dim(msp, vb_mid.pt(-0.5 * bulb_w_mm, 0.0), vb_mid.pt(0.5 * bulb_w_mm, 0.0), (vb_mid.x(0.0), vb_mid.y(0.0) - 6.5), f"{bulb_w_mm:g}")
-    add_arch_dim(msp, vb_mid.pt(-0.5 * bulb_w_mm, 0.0), vb_mid.pt(-0.5 * bulb_w_mm, 100.0), (vb_mid.x(-0.5 * bulb_w_mm) - 8.0, vb_mid.y(50.0)), "100", angle=90.0)
-    vb_mid.register(doc, msp, paper_bounds=(24.0, 74.0, 128.0, 218.0))
+    add_arch_dim(msp, vb_mid.pt(-0.5 * bulb_w_mm, 0.0), vb_mid.pt(-0.5 * bulb_w_mm, 100.0), (vb_mid.x(-0.5 * bulb_w_mm) - 7.5, vb_mid.y(50.0)), "100", angle=90.0)
+    vb_mid.register(doc, msp, paper_bounds=(22.0, 66.0, 120.0, 218.0))
 
-    # 2. Center: Girder-End Anchorage Section (exact 1:15 ViewBox)
-    vb_end = ViewBox("tendon_end_section", 184.0, 88.0, 15.0, "mm")
+    # 2. Center: B-B Girder-End Anchorage Section (exact 1:15 ViewBox)
+    vb_end = ViewBox("tendon_end_section", 174.0, 86.0, 15.0, "mm")
     end_poly = build_t_girder_polygon_mm(flange_width_mm=crop_fl, height_mm=girder_h_mm, haunch_width_mm=10.0, web_thick_mm=end_web_t_mm, bulb_width_mm=end_web_t_mm, bulb_height_mm=0.0)
-    msp.add_lwpolyline([vb_end.pt(px, py) for px, py in end_poly], close=True, dxfattribs={"layer": "OUTLINE"})
+    msp.add_lwpolyline([vb_end.pt(px, py) for px, py in end_poly], close=True, dxfattribs={"layer": "CONCRETE"})
     msp.add_line((vb_end.x(0.0), vb_end.y(-100.0)), (vb_end.x(0.0), vb_end.y(girder_h_mm + 100.0)), dxfattribs={"layer": "CENTER"})
-    add_civil_text(msp, "梁端锚固断面 (1:15)", vb_end.x(0.0), 71.0, height=2.7, align="CENTER")
+    add_civil_text(msp, "B-B 梁端锚固断面 (1:15)", vb_end.x(0.0), 68.0, height=2.4, align="CENTER")
 
     for idx, ey_mm in enumerate(end_ys_mm):
         tag = mid_ducts_mm[idx][0]
         px, py = vb_end.pt(0.0, ey_mm)
-        msp.add_circle((px, py), 2.2, dxfattribs={"layer": "TENDON"})
-        draw_boxed_tag(msp, vb_end.x(0.0) + 32.0, py, tag, leader_to=(px + 2.2, py))
-        if idx > 0:
+        msp.add_circle((px, py), 2.0, dxfattribs={"layer": "TENDON"})
+        draw_boxed_tag(msp, vb_end.x(0.0) + 30.0, py, tag, leader_to=(px + 2.0, py))
+        if idx == 0:
+            add_arch_dim(msp, vb_end.pt(-0.5 * end_web_t_mm, 0.0), (vb_end.x(-0.5 * end_web_t_mm), py), (vb_end.x(-0.5 * end_web_t_mm) - 7.5, 0.5 * (vb_end.y(0.0) + py)), f"{ey_mm:g}", angle=90.0)
+        else:
             py_prev = vb_end.y(end_ys_mm[idx - 1])
-            add_arch_dim(msp, (vb_end.x(-0.5 * end_web_t_mm), py_prev), (vb_end.x(-0.5 * end_web_t_mm), py), (vb_end.x(-0.5 * end_web_t_mm) - 8.0, 0.5 * (py_prev + py)), f"{end_step_mm:g}", angle=90.0)
-    if n_tendons == 1:
-        py0 = vb_end.y(end_ys_mm[0])
-        add_arch_dim(msp, vb_end.pt(-0.5 * end_web_t_mm, 0.0), (vb_end.x(-0.5 * end_web_t_mm), py0), (vb_end.x(-0.5 * end_web_t_mm) - 8.0, 0.5 * (vb_end.y(0.0) + py0)), f"{end_ys_mm[0]:g}", angle=90.0)
-    vb_end.register(doc, msp, paper_bounds=(136.0, 74.0, 236.0, 218.0))
+            add_arch_dim(msp, (vb_end.x(-0.5 * end_web_t_mm), py_prev), (vb_end.x(-0.5 * end_web_t_mm), py), (vb_end.x(-0.5 * end_web_t_mm) - 7.5, 0.5 * (py_prev + py)), f"{end_step_mm:g}", angle=90.0)
+    vb_end.register(doc, msp, paper_bounds=(126.0, 66.0, 224.0, 218.0))
 
-    # 3. Right: Half-Span Parabolic Tendon Profile (true 1:100 horizontal + Tendon Schedule)
-    vb_prof = ViewBox("tendon_half_profile", 262.0, 152.0, 100.0, "mm")
+    # 3. Upper-Right: Half-Span Parabolic Tendon Profile (1:90) with Support / Mid-Span / Section Cuts!
+    vb_prof = ViewBox("tendon_half_profile", 244.0, 174.0, 90.0, "mm")
+    calc_span_mm = float(calc["project_summary"]["calc_span_m"]) * 1000.0
+    brg_off_mm = max(200.0, round(0.5 * (beam_len_mm - calc_span_mm), 1))
     msp.add_lwpolyline(
         [vb_prof.pt(0.0, 0.0), vb_prof.pt(half_span_mm, 0.0), vb_prof.pt(half_span_mm, girder_h_mm), vb_prof.pt(0.0, girder_h_mm)],
-        close=True,
-        dxfattribs={"layer": "OUTLINE"},
+        close=False,
+        dxfattribs={"layer": "CONCRETE"},
     )
-    msp.add_line((vb_prof.x(half_span_mm), vb_prof.y(-350.0)), (vb_prof.x(half_span_mm), vb_prof.y(girder_h_mm + 450.0)), dxfattribs={"layer": "CENTER"})
-    add_civil_text(msp, "半跨预应力钢束纵断线形 (1:100)", vb_prof.x(0.5 * half_span_mm), vb_prof.y(0.0) - 9.0, height=2.5, align="CENTER")
+    msp.add_line(vb_prof.pt(0.0, 0.0), vb_prof.pt(0.0, girder_h_mm), dxfattribs={"layer": "CONCRETE"})
+    # Support axis + bearing symbol + Mid-span symmetry line
+    x_sup_t = vb_prof.x(brg_off_mm)
+    msp.add_line((x_sup_t, vb_prof.y(0.0) - 5.0), (x_sup_t, vb_prof.y(girder_h_mm) + 4.5), dxfattribs={"layer": "CENTER"})
+    msp.add_lwpolyline([(x_sup_t, vb_prof.y(0.0)), (x_sup_t - 1.9, vb_prof.y(0.0) - 2.9), (x_sup_t + 1.9, vb_prof.y(0.0) - 2.9)], close=True, dxfattribs={"layer": "CONCRETE"})
+    x_sym_t = vb_prof.x(half_span_mm)
+    msp.add_line((x_sym_t, vb_prof.y(0.0) - 7.0), (x_sym_t, vb_prof.y(girder_h_mm) + 7.5), dxfattribs={"layer": "CENTER"})
+    for sy_tk in (vb_prof.y(girder_h_mm) + 5.0, vb_prof.y(0.0) - 4.8):
+        msp.add_line((x_sym_t - 2.0, sy_tk + 0.6), (x_sym_t + 2.0, sy_tk + 0.6), dxfattribs={"layer": "DIM"})
+        msp.add_line((x_sym_t - 2.0, sy_tk - 0.6), (x_sym_t + 2.0, sy_tk - 0.6), dxfattribs={"layer": "DIM"})
+    add_civil_text(msp, f"支点(x={brg_off_mm:g})", x_sup_t + 1.0, vb_prof.y(girder_h_mm) + 2.0, height=1.8, align="LEFT")
+    add_civil_text(msp, "跨中对称线(L/2)", x_sym_t, vb_prof.y(girder_h_mm) + 8.5, height=1.85, align="CENTER")
+
+    draw_section_cut_symbol(msp, vb_prof.x(180.0), vb_prof.y(0.0) - 1.5, vb_prof.x(180.0), vb_prof.y(girder_h_mm) + 1.5, "B", look_dx=1.0, look_dy=0.0, tick_len=2.6, arrow_len=2.6)
+    draw_section_cut_symbol(msp, vb_prof.x(half_span_mm - 950.0), vb_prof.y(0.0) - 1.5, vb_prof.x(half_span_mm - 950.0), vb_prof.y(girder_h_mm) + 1.5, "A", look_dx=-1.0, look_dy=0.0, tick_len=2.6, arrow_len=2.6)
 
     for idx, (tag, _, mid_y_mm) in enumerate(mid_ducts_mm):
         ey_mm = end_ys_mm[idx]
         pts_curve = [vb_prof.pt(half_span_mm * (k / 24.0), mid_y_mm + (ey_mm - mid_y_mm) * ((1.0 - k / 24.0) ** 2)) for k in range(25)]
         msp.add_lwpolyline(pts_curve, close=False, dxfattribs={"layer": "TENDON"})
-        add_civil_text(msp, tag, pts_curve[0][0] - 5.2, pts_curve[0][1] - 0.8, height=1.9)
+        add_civil_text(msp, tag, pts_curve[0][0] - 5.0, pts_curve[0][1] - 0.8, height=1.82)
 
-    add_arch_dim(msp, vb_prof.pt(0.0, girder_h_mm), vb_prof.pt(half_span_mm, girder_h_mm), (vb_prof.x(0.5 * half_span_mm), vb_prof.y(girder_h_mm) + 7.5), f"半梁长 {half_span_mm:g}")
-    vb_prof.register(doc, msp, paper_bounds=(250.0, 140.0, 404.0, 200.0))
+    add_arch_dim(msp, vb_prof.pt(0.0, girder_h_mm), vb_prof.pt(half_span_mm, girder_h_mm), (vb_prof.x(0.5 * half_span_mm), vb_prof.y(girder_h_mm) + 15.0), f"半梁长 {half_span_mm:g}")
+    add_civil_text(msp, "二次抛物线束 y=ym+(ye-ym)(1-2x/L)(1-2x/L)，梁端弯起角 6.5°~8.5°", vb_prof.x(0.5 * half_span_mm), vb_prof.y(0.0) - 9.5, height=1.82, align="CENTER")
+    add_civil_text(msp, "半跨预应力钢束纵断线形图 (1:90)", vb_prof.x(0.5 * half_span_mm), vb_prof.y(0.0) - 16.5, height=2.25, align="CENTER")
+    vb_prof.register(doc, msp, paper_bounds=(234.0, 154.0, 404.0, 224.0))
 
-    # Tendon Summary Box above title block (live values from calc_report!)
+    # 4. Bottom-Right: Visible Prestressing Tendon & Jacking Schedule Table fused atop Title Block!
     mid_pe = float(ps_info["loss_profile"][len(ps_info["loss_profile"]) // 2]["effective_prestress_mpa"])
     sigma_con = float(ps_info["sigma_con_mpa"])
-    tendon_rows = calc["rebar_and_tendon_ledger"]["tendons"]
+    tendon_rows = list(calc["rebar_and_tendon_ledger"]["tendons"])[:n_tendons]
+    draw_tendon_schedule_table(
+        doc,
+        msp,
+        tendon_rows,
+        x0=b["tb_x0"],
+        y0=b["tb_y1"],
+        width=b["ix1"] - b["tb_x0"],
+        end_ys_mm=end_ys_mm,
+        mid_ys_mm=[m[2] for m in mid_ducts_mm],
+        sigma_con_mpa=sigma_con,
+        mid_sigma_pe_mpa=mid_pe,
+        dock_to_title_block=True,
+    )
+
     elong_sample = tendon_rows[0]["theoretical_elongation_mm"] if tendon_rows else 170.0
     add_civil_text(
         msp,
-        f"钢束规格：{n_tendons}束 Φs15.2-{strands_per} (fpk=1860MPa, σcon={sigma_con:g}MPa, 跨中有效预应力={mid_pe:.2f}MPa, 单束理论伸长量={elong_sample:g}mm)",
+        f"钢束规格：{n_tendons}束 Φs15.2-{strands_per} (fpk=1860MPa, σcon={sigma_con:g}MPa, 跨中有效预应力={mid_pe:.2f}MPa, 首束理论伸长量={elong_sample:g}mm)",
         b["ix0"] + 5.0,
         b["iy0"] + 16.0,
-        height=2.15,
+        height=1.95,
     )
     attach_sheet_metadata(doc, msp, "tendon_schedule", {"items": tendon_rows, "sigma_con_mpa": sigma_con, "mid_effective_prestress_mpa": mid_pe})
     return doc
@@ -1092,16 +1242,51 @@ def _draw_rebar_detail(spec: dict[str, Any]) -> ezdxf.document.Drawing:
     )
 
     # Merge Rebar Schedule Table directly atop the bottom-right Title Block (shared 180mm width & border)
-    draw_rebar_schedule_table(
-        doc,
-        msp,
-        bars,
-        x0=b["tb_x0"],
-        y0=b["tb_y1"],
-        width=b["ix1"] - b["tb_x0"],
-        title="钢筋数量明细表",
-        dock_to_title_block=True,
-    )
+    n_piers_br = max(1, int(calc["project_summary"]["n_spans"]) - 1)
+    n_ped_br = int(calc["lateral_distribution"]["n_girders"])
+    if comp == "pier_column_pile":
+        draw_rebar_schedule_table(
+            doc,
+            msp,
+            bars,
+            x0=b["tb_x0"],
+            y0=b["tb_y1"],
+            width=b["ix1"] - b["tb_x0"],
+            title="双柱式桥墩钢筋数量明细表（按单座桥墩计）",
+            dock_to_title_block=True,
+            unit_count_header="每墩件数",
+            unit_weight_header="每墩重(kg)",
+            summary_prefix="单座双柱墩钢筋合计(2柱+1系梁+2桩)",
+            bridge_units_count=n_piers_br,
+            bridge_units_noun="座墩",
+        )
+    elif comp == "abutment_rebar":
+        draw_rebar_schedule_table(
+            doc,
+            msp,
+            bars,
+            x0=b["tb_x0"],
+            y0=b["tb_y1"],
+            width=b["ix1"] - b["tb_x0"],
+            title="桩柱式桥台钢筋数量明细表（按单座桥台计）",
+            dock_to_title_block=True,
+            unit_count_header="每台件数",
+            unit_weight_header="每台重(kg)",
+            summary_prefix=f"单座桥台钢筋合计(1台帽+1耳背墙+2桩+{n_ped_br}垫石)",
+            bridge_units_count=2,
+            bridge_units_noun="座台",
+        )
+    else:
+        draw_rebar_schedule_table(
+            doc,
+            msp,
+            bars,
+            x0=b["tb_x0"],
+            y0=b["tb_y1"],
+            width=b["ix1"] - b["tb_x0"],
+            title="钢筋数量明细表",
+            dock_to_title_block=True,
+        )
 
     girder_h = float(calc["t_girder_section"]["mid_span_mm"]["height"])
     flange_w = float(calc["t_girder_section"]["effective_flange_width_mm"])
@@ -1281,7 +1466,8 @@ def _draw_rebar_detail(spec: dict[str, Any]) -> ezdxf.document.Drawing:
         }
 
     elif comp == "t_girder_flange":
-        vb = ViewBox("rebar_t_girder_flange", 112.0, 74.0, 20.0, "mm")
+        # Left: 1:20 Precast T-Girder Flange Transverse Rebar Section (exact W3 count!)
+        vb = ViewBox("rebar_t_girder_flange", 108.0, 74.0, 20.0, "mm")
         poly = build_t_girder_polygon_mm(flange_width_mm=flange_w, height_mm=girder_h, bulb_width_mm=bulb_w)
         msp.add_lwpolyline([vb.pt(x, y) for x, y in poly], close=True, dxfattribs={"layer": "CONCRETE"})
         msp.add_line(vb.pt(-0.47 * flange_w, girder_h - 42.0), vb.pt(0.47 * flange_w, girder_h - 42.0), dxfattribs={"layer": "REBAR"})
@@ -1290,10 +1476,42 @@ def _draw_rebar_detail(spec: dict[str, Any]) -> ezdxf.document.Drawing:
         w3_top = w3_cnt // 2
         w3_pts = _draw_row_bar_circles(msp, vb, w3_top, -0.44 * flange_w, 0.44 * flange_w, girder_h - 56.0, dot_r_mm=0.9)
         w3_pts += _draw_row_bar_circles(msp, vb, w3_cnt - w3_top, -0.44 * flange_w, 0.44 * flange_w, girder_h - 142.0, dot_r_mm=0.9)
+        draw_detail_callout(
+            msp,
+            vb.x(0.42 * flange_w),
+            vb.y(girder_h - 100.0),
+            5.0,
+            "I 湿接缝(1:10)",
+            leader_to=(vb.x(0.5 * flange_w) + 6.0, vb.y(girder_h) + 12.0),
+        )
         add_arch_dim(msp, vb.pt(-0.5 * flange_w, girder_h), vb.pt(0.5 * flange_w, girder_h), (vb.x(0.0), vb.y(girder_h) + 8.0), f"{flange_w:g}")
         add_arch_dim(msp, vb.pt(0.5 * flange_w, 0.0), vb.pt(0.5 * flange_w, girder_h), (vb.x(0.5 * flange_w) + 9.0, vb.y(0.5 * girder_h)), f"{girder_h:g}", angle=90.0)
-        add_civil_text(msp, "翼缘板及湿接缝横向配筋断面 (1:20)", vb.x(0.0), 54.0, height=2.4, align="CENTER")
-        vb.register(doc, msp, paper_bounds=(28.0, 58.0, 198.0, 188.0))
+        add_civil_text(msp, "一、翼缘板横向配筋断面 (1:20)", vb.x(0.0), 54.0, height=2.35, align="CENTER")
+        vb.register(doc, msp, paper_bounds=(26.0, 52.0, 194.0, 192.0))
+
+        # Upper-Right: 1:10 Detail I — 400mm Cast-in-Place Wet-Joint Loop-Bar Splice Detail!
+        vb_wj = ViewBox("wet_joint_rebar_detail", 316.0, 184.0, 10.0, "mm")
+        # Left & right precast flange tips [-420..-200] & [200..420] x [0..200] + roughened shear keys
+        msp.add_lwpolyline([vb_wj.pt(-420.0, 0.0), vb_wj.pt(-200.0, 0.0), vb_wj.pt(-180.0, 100.0), vb_wj.pt(-200.0, 200.0), vb_wj.pt(-420.0, 200.0)], close=False, dxfattribs={"layer": "CONCRETE"})
+        msp.add_lwpolyline([vb_wj.pt(420.0, 0.0), vb_wj.pt(200.0, 0.0), vb_wj.pt(180.0, 100.0), vb_wj.pt(200.0, 200.0), vb_wj.pt(420.0, 200.0)], close=False, dxfattribs={"layer": "CONCRETE"})
+        msp.add_line(vb_wj.pt(-200.0, 200.0), vb_wj.pt(200.0, 200.0), dxfattribs={"layer": "HIDDEN"})
+        msp.add_line(vb_wj.pt(-200.0, 0.0), vb_wj.pt(200.0, 0.0), dxfattribs={"layer": "HIDDEN"})
+        # Top negative-moment bar W1 continuous / welded across wet joint + Bottom U-hairpin loop overlap W2 (搭接 340mm)
+        msp.add_line(vb_wj.pt(-400.0, 162.0), vb_wj.pt(400.0, 162.0), dxfattribs={"layer": "REBAR"})
+        msp.add_lwpolyline([vb_wj.pt(-400.0, 142.0), vb_wj.pt(170.0, 142.0), vb_wj.pt(170.0, 44.0), vb_wj.pt(-400.0, 44.0)], close=False, dxfattribs={"layer": "REBAR"})
+        msp.add_lwpolyline([vb_wj.pt(400.0, 128.0), vb_wj.pt(-170.0, 128.0), vb_wj.pt(-170.0, 58.0), vb_wj.pt(400.0, 58.0)], close=False, dxfattribs={"layer": "REBAR_STIRRUP"})
+        # Longitudinal lacer bars inside wet-joint loop (drawn on REBAR_STIRRUP to isolate W3 section dot count!)
+        for rx_lj in (-135.0, 0.0, 135.0):
+            msp.add_circle(vb_wj.pt(rx_lj, 148.0), 0.78, dxfattribs={"layer": "REBAR_STIRRUP"})
+            msp.add_circle(vb_wj.pt(rx_lj, 58.0), 0.78, dxfattribs={"layer": "REBAR_STIRRUP"})
+
+        add_arch_dim(msp, vb_wj.pt(-200.0, 200.0), vb_wj.pt(200.0, 200.0), (vb_wj.x(0.0), vb_wj.y(200.0) + 12.5), "现浇C50湿接缝 400")
+        add_arch_dim(msp, vb_wj.pt(-170.0, 200.0), vb_wj.pt(170.0, 200.0), (vb_wj.x(0.0), vb_wj.y(200.0) + 5.8), "环形筋搭接 340")
+        add_arch_dim(msp, vb_wj.pt(420.0, 0.0), vb_wj.pt(420.0, 200.0), (vb_wj.x(420.0) + 6.5, vb_wj.y(100.0)), "200", angle=90.0)
+        add_civil_text(msp, "预制端面人工凿毛，W2环形筋搭接并穿纵向筋焊接", vb_wj.x(0.0), vb_wj.y(0.0) - 8.5, height=1.82, align="CENTER")
+        add_civil_text(msp, "二、I 湿接缝横向环形钢筋连接详图 (1:10)", vb_wj.x(0.0), vb_wj.y(0.0) - 16.0, height=2.25, align="CENTER")
+        vb_wj.register(doc, msp, paper_bounds=(234.0, 162.0, 404.0, 232.0))
+
         anchor_by_id = {
             "W1": vb.pt(0.28 * flange_w, girder_h - 42.0),
             "W2": vb.pt(0.28 * flange_w, girder_h - 156.0),
@@ -1305,28 +1523,77 @@ def _draw_rebar_detail(spec: dict[str, Any]) -> ezdxf.document.Drawing:
         sp_mm = float(calc["lateral_distribution"]["girder_spacing_m"]) * 1000.0
         w_mm = (n_g - 1) * sp_mm
         h_mm = 1350.0
-        vb = ViewBox("rebar_diaphragm", 114.0, 168.0, 65.0, "mm")
+        vb = ViewBox("rebar_diaphragm", 114.0, 174.0, 65.0, "mm")
         hw = 0.5 * w_mm
         msp.add_lwpolyline([vb.pt(-hw, 0.0), vb.pt(hw, 0.0), vb.pt(hw, h_mm), vb.pt(-hw, h_mm)], close=True, dxfattribs={"layer": "CONCRETE"})
+        # Show the 5 intersecting T-girder webs + 4 cast-in-place wet-joint diaphragm splice zones!
+        for gi in range(n_g):
+            rxg = -hw + gi * sp_mm
+            msp.add_line((vb.x(rxg), vb.y(-260.0)), (vb.x(rxg), vb.y(h_mm + 260.0)), dxfattribs={"layer": "CENTER"})
+            msp.add_lwpolyline(
+                [vb.pt(rxg - 100.0, -220.0), vb.pt(rxg + 100.0, -220.0), vb.pt(rxg + 100.0, h_mm), vb.pt(rxg - 100.0, h_mm)],
+                close=False,
+                dxfattribs={"layer": "THIN"},
+            )
+            add_civil_text(msp, f"{gi+1}#梁", vb.x(rxg), vb.y(-220.0) - 3.8, height=1.72, align="CENTER")
+            if gi < n_g - 1:
+                rx_wj = rxg + 0.5 * sp_mm
+                msp.add_line(vb.pt(rx_wj - 200.0, 0.0), vb.pt(rx_wj - 200.0, h_mm), dxfattribs={"layer": "HIDDEN"})
+                msp.add_line(vb.pt(rx_wj + 200.0, 0.0), vb.pt(rx_wj + 200.0, h_mm), dxfattribs={"layer": "HIDDEN"})
+
         msp.add_line(vb.pt(-hw + 80.0, h_mm - 75.0), vb.pt(hw - 80.0, h_mm - 75.0), dxfattribs={"layer": "REBAR"})
         msp.add_lwpolyline([vb.pt(-hw + 80.0, h_mm - 120.0), vb.pt(-0.45 * hw, 75.0), vb.pt(0.45 * hw, 75.0), vb.pt(hw - 80.0, h_mm - 120.0)], close=False, dxfattribs={"layer": "REBAR"})
         for k in range(13):
             rxs = -hw + 200.0 + k * ((w_mm - 400.0) / 12.0)
             msp.add_line(vb.pt(rxs, 75.0), vb.pt(rxs, h_mm - 75.0), dxfattribs={"layer": "REBAR_STIRRUP"})
-        add_arch_dim(msp, vb.pt(-hw, h_mm), vb.pt(hw, h_mm), (vb.x(0.0), vb.y(h_mm) + 8.5), f"{w_mm:g}")
+        x_aa_d = vb.x(-0.22 * hw)
+        draw_section_cut_symbol(msp, x_aa_d, vb.y(0.0) - 1.5, x_aa_d, vb.y(h_mm) + 1.5, "A", look_dx=1.0, look_dy=0.0, tick_len=2.6, arrow_len=2.6)
+        add_arch_dim(msp, vb.pt(-hw, h_mm), vb.pt(hw, h_mm), (vb.x(0.0), vb.y(h_mm) + 9.5), f"中横隔梁 {w_mm:g} ({n_g-1}×{sp_mm:g})")
         add_arch_dim(msp, vb.pt(hw, 0.0), vb.pt(hw, h_mm), (vb.x(hw) + 8.0, vb.y(0.5 * h_mm)), f"{h_mm:g}", angle=90.0)
-        add_civil_text(msp, "中横隔梁配筋立面图 (1:65)", vb.x(0.0), 156.0, height=2.4, align="CENTER")
-        vb.register(doc, msp, paper_bounds=(24.0, 152.0, 206.0, 214.0))
+        add_civil_text(msp, "一、中横隔梁与主梁肋连接配筋立面图 (1:65)", vb.x(0.0), 152.0, height=2.3, align="CENTER")
+        vb.register(doc, msp, paper_bounds=(24.0, 150.0, 212.0, 232.0))
 
-        # 1:25 Cross-section showing exact HG1 & HG2 bar counts
+        # Lower-Left: 1:25 A-A Mid-Diaphragm Cross-Section (exact HG1=4 & HG2=4 counts!)
         vb_sec = ViewBox("diaphragm_section", 114.0, 68.0, 25.0, "mm")
         msp.add_lwpolyline([vb_sec.pt(-100.0, 0.0), vb_sec.pt(100.0, 0.0), vb_sec.pt(100.0, h_mm), vb_sec.pt(-100.0, h_mm)], close=True, dxfattribs={"layer": "CONCRETE"})
         msp.add_lwpolyline([vb_sec.pt(-72.0, 50.0), vb_sec.pt(72.0, 50.0), vb_sec.pt(72.0, h_mm - 50.0), vb_sec.pt(-72.0, h_mm - 50.0)], close=True, dxfattribs={"layer": "REBAR_STIRRUP"})
         hg1_pts = _draw_row_bar_circles(msp, vb_sec, int(bars_by_id["HG1"]["count"]), -60.0, 60.0, 75.0, dot_r_mm=0.95)
         hg2_pts = _draw_row_bar_circles(msp, vb_sec, int(bars_by_id["HG2"]["count"]), -60.0, 60.0, h_mm - 75.0, dot_r_mm=0.9)
         add_arch_dim(msp, vb_sec.pt(-100.0, 0.0), vb_sec.pt(100.0, 0.0), (vb_sec.x(0.0), vb_sec.y(0.0) - 6.5), "200")
-        add_civil_text(msp, "横隔梁断面 (1:25)", vb_sec.x(0.0), 50.0, height=2.3, align="CENTER")
-        vb_sec.register(doc, msp, paper_bounds=(78.0, 48.0, 152.0, 136.0))
+        add_civil_text(msp, "二、A-A 中横隔梁断面 (1:25)", vb_sec.x(0.0), 50.0, height=2.25, align="CENTER")
+        vb_sec.register(doc, msp, paper_bounds=(74.0, 48.0, 154.0, 136.0))
+
+        # Upper-Right: 1:25 End Diaphragm Cross-Section (端横隔梁 240×1450 + 翼缘顶板接口, completing sheet title!)
+        vb_end_d = ViewBox("end_diaphragm_section", 318.0, 154.0, 25.0, "mm")
+        end_dh = 1450.0
+        msp.add_lwpolyline(
+            [
+                vb_end_d.pt(-120.0, 0.0),
+                vb_end_d.pt(120.0, 0.0),
+                vb_end_d.pt(120.0, end_dh - 200.0),
+                vb_end_d.pt(380.0, end_dh - 200.0),
+                vb_end_d.pt(380.0, end_dh),
+                vb_end_d.pt(-380.0, end_dh),
+                vb_end_d.pt(-380.0, end_dh - 200.0),
+                vb_end_d.pt(-120.0, end_dh - 200.0),
+            ],
+            close=True,
+            dxfattribs={"layer": "CONCRETE"},
+        )
+        msp.add_lwpolyline(
+            [vb_end_d.pt(-85.0, 55.0), vb_end_d.pt(85.0, 55.0), vb_end_d.pt(85.0, end_dh - 55.0), vb_end_d.pt(-85.0, end_dh - 55.0)],
+            close=True,
+            dxfattribs={"layer": "REBAR_STIRRUP"},
+        )
+        # Schematic longitudinal dots in end diaphragm drawn on REBAR_STIRRUP so HG1/HG2 count in A-A stays exact!
+        for rx_ed in (-65.0, -22.0, 22.0, 65.0):
+            msp.add_circle(vb_end_d.pt(rx_ed, 80.0), 0.90, dxfattribs={"layer": "REBAR_STIRRUP"})
+            msp.add_circle(vb_end_d.pt(rx_ed, end_dh - 80.0), 0.90, dxfattribs={"layer": "REBAR_STIRRUP"})
+        add_arch_dim(msp, vb_end_d.pt(-120.0, 0.0), vb_end_d.pt(120.0, 0.0), (vb_end_d.x(0.0), vb_end_d.y(0.0) - 6.0), "端隔梁厚 240")
+        add_arch_dim(msp, vb_end_d.pt(380.0, 0.0), vb_end_d.pt(380.0, end_dh), (vb_end_d.x(380.0) + 7.5, vb_end_d.y(0.5 * end_dh)), f"{end_dh:g}", angle=90.0)
+        add_civil_text(msp, "三、端横隔梁配筋断面及桥面连接 (1:25)", vb_end_d.x(0.0), 136.0, height=2.2, align="CENTER")
+        vb_end_d.register(doc, msp, paper_bounds=(262.0, 134.0, 386.0, 236.0))
+
         anchor_by_id = {
             "HG1": hg1_pts[-1] if hg1_pts else vb.pt(0.0, 75.0),
             "HG2": hg2_pts[-1] if hg2_pts else vb.pt(0.0, h_mm - 75.0),
@@ -1334,25 +1601,57 @@ def _draw_rebar_detail(spec: dict[str, Any]) -> ezdxf.document.Drawing:
         }
 
     elif comp == "pier_cap":
+        col_positions_cap = calc["pier_cap_beam_1d"].get("column_positions_m") or [-2.6, 2.6]
+        col_sp_cap_mm = round(max(3200.0, float(col_positions_cap[-1] - col_positions_cap[0]) * 1000.0), 1)
         vb = ViewBox("rebar_pier_cap", 114.0, 178.0, 65.0, "mm")
         hw = 0.5 * cap_len_mm
-        msp.add_lwpolyline([vb.pt(-hw, 0.0), vb.pt(hw, 0.0), vb.pt(hw, cap_h_mm), vb.pt(-hw, cap_h_mm)], close=True, dxfattribs={"layer": "CONCRETE"})
-        msp.add_line(vb.pt(-hw + 80.0, cap_h_mm - 75.0), vb.pt(hw - 80.0, cap_h_mm - 75.0), dxfattribs={"layer": "REBAR"})
-        msp.add_line(vb.pt(-hw + 80.0, 75.0), vb.pt(hw - 80.0, 75.0), dxfattribs={"layer": "REBAR"})
-        msp.add_lwpolyline([vb.pt(-0.82 * hw, cap_h_mm - 95.0), vb.pt(-0.42 * hw, 95.0), vb.pt(0.42 * hw, 95.0), vb.pt(0.82 * hw, cap_h_mm - 95.0)], close=False, dxfattribs={"layer": "REBAR"})
-        for k in range(15):
-            rxs = -hw + 200.0 + k * ((cap_len_mm - 400.0) / 14.0)
-            msp.add_line(vb.pt(rxs, 75.0), vb.pt(rxs, cap_h_mm - 75.0), dxfattribs={"layer": "REBAR_STIRRUP"})
-        add_arch_dim(msp, vb.pt(-hw, cap_h_mm), vb.pt(hw, cap_h_mm), (vb.x(0.0), vb.y(cap_h_mm) + 8.5), f"盖梁长 {cap_len_mm:g}")
-        add_arch_dim(msp, vb.pt(hw, 0.0), vb.pt(hw, cap_h_mm), (vb.x(hw) + 8.0, vb.y(0.5 * cap_h_mm)), f"{cap_h_mm:g}", angle=90.0)
-        add_civil_text(msp, "桥墩盖梁配筋立面图 (1:65)", vb.x(0.0), 166.0, height=2.4, align="CENTER")
-        vb.register(doc, msp, paper_bounds=(20.0, 162.0, 208.0, 224.0))
+        overhang_cap = max(200.0, 0.5 * (cap_len_mm - col_sp_cap_mm - col_d_mm))
+        haunch_cap = 0.30 * cap_h_mm
+        cap_elev_pts = [
+            vb.pt(-hw, haunch_cap),
+            vb.pt(-hw + overhang_cap, 0.0),
+            vb.pt(hw - overhang_cap, 0.0),
+            vb.pt(hw, haunch_cap),
+            vb.pt(hw, cap_h_mm),
+            vb.pt(-hw, cap_h_mm),
+        ]
+        msp.add_lwpolyline(cap_elev_pts, close=True, dxfattribs={"layer": "CONCRETE"})
+        # Dashed twin pier column support positions + centerlines
+        for sx_c in (-0.5, 0.5):
+            rxc_s = sx_c * col_sp_cap_mm
+            msp.add_line((vb.x(rxc_s), vb.y(-550.0)), (vb.x(rxc_s), vb.y(cap_h_mm + 260.0)), dxfattribs={"layer": "CENTER"})
+            msp.add_line(vb.pt(rxc_s - 0.5 * col_d_mm, -500.0), vb.pt(rxc_s - 0.5 * col_d_mm, 0.0), dxfattribs={"layer": "HIDDEN"})
+            msp.add_line(vb.pt(rxc_s + 0.5 * col_d_mm, -500.0), vb.pt(rxc_s + 0.5 * col_d_mm, 0.0), dxfattribs={"layer": "HIDDEN"})
 
-        # 1:30 Cap-beam cross-section with exact GL1 & GL2 circle counts
+        msp.add_line(vb.pt(-hw + 80.0, cap_h_mm - 75.0), vb.pt(hw - 80.0, cap_h_mm - 75.0), dxfattribs={"layer": "REBAR"})
+        msp.add_line(vb.pt(-hw + overhang_cap + 60.0, 75.0), vb.pt(hw - overhang_cap - 60.0, 75.0), dxfattribs={"layer": "REBAR"})
+        msp.add_lwpolyline([vb.pt(-0.84 * hw, cap_h_mm - 95.0), vb.pt(-0.42 * hw, 95.0), vb.pt(0.42 * hw, 95.0), vb.pt(0.84 * hw, cap_h_mm - 95.0)], close=False, dxfattribs={"layer": "REBAR"})
+        for k in range(17):
+            rxs = -hw + 220.0 + k * ((cap_len_mm - 440.0) / 16.0)
+            ry_bot_st = 75.0 + max(0.0, (abs(rxs) - (hw - overhang_cap)) / max(1.0, overhang_cap)) * haunch_cap
+            msp.add_line(vb.pt(rxs, min(cap_h_mm - 180.0, ry_bot_st)), vb.pt(rxs, cap_h_mm - 75.0), dxfattribs={"layer": "REBAR_STIRRUP"})
+
+        x_aa_cap = vb.x(0.5 * col_sp_cap_mm - 350.0)
+        draw_section_cut_symbol(msp, x_aa_cap, vb.y(0.0) - 1.5, x_aa_cap, vb.y(cap_h_mm) + 1.5, "A", look_dx=1.0, look_dy=0.0, tick_len=2.6, arrow_len=2.6)
+        add_arch_dim(msp, vb.pt(-hw, cap_h_mm), vb.pt(hw, cap_h_mm), (vb.x(0.0), vb.y(cap_h_mm) + 9.0), f"盖梁长 {cap_len_mm:g}")
+        add_arch_dim(msp, vb.pt(-0.5 * col_sp_cap_mm, 0.0), vb.pt(0.5 * col_sp_cap_mm, 0.0), (vb.x(0.0), vb.y(0.0) - 7.5), f"墩距 {col_sp_cap_mm:g}")
+        add_arch_dim(msp, vb.pt(hw, 0.0), vb.pt(hw, cap_h_mm), (vb.x(hw) + 8.0, vb.y(0.5 * cap_h_mm)), f"{cap_h_mm:g}", angle=90.0)
+        add_civil_text(msp, "一、桥墩盖梁配筋立面图 (1:65)", vb.x(0.0), 152.0, height=2.35, align="CENTER")
+        vb.register(doc, msp, paper_bounds=(20.0, 150.0, 208.0, 232.0))
+
+        # Lower-Left: 1:30 A-A Cap-Beam Cross-Section with 6-leg Stirrups & Exact GL1 / GL2 Circle Counts!
         vb_sec = ViewBox("pier_cap_section", 114.0, 68.0, 30.0, "mm")
         hcw = 0.5 * cap_w_mm
         msp.add_lwpolyline([vb_sec.pt(-hcw, 0.0), vb_sec.pt(hcw, 0.0), vb_sec.pt(hcw, cap_h_mm), vb_sec.pt(-hcw, cap_h_mm)], close=True, dxfattribs={"layer": "CONCRETE"})
+        # Multi-leg stirrups: outer closed loop + 2 inner closed loops = 6 vertical legs!
         msp.add_lwpolyline([vb_sec.pt(-hcw + 55.0, 55.0), vb_sec.pt(hcw - 55.0, 55.0), vb_sec.pt(hcw - 55.0, cap_h_mm - 55.0), vb_sec.pt(-hcw + 55.0, cap_h_mm - 55.0)], close=True, dxfattribs={"layer": "REBAR_STIRRUP"})
+        n_legs_cap = int(calc["substructure_checks"]["cap_beam"].get("stirrup_legs", 6))
+        if n_legs_cap >= 6:
+            msp.add_lwpolyline([vb_sec.pt(-0.52 * hcw, 55.0), vb_sec.pt(-0.16 * hcw, 55.0), vb_sec.pt(-0.16 * hcw, cap_h_mm - 55.0), vb_sec.pt(-0.52 * hcw, cap_h_mm - 55.0)], close=True, dxfattribs={"layer": "REBAR_STIRRUP"})
+            msp.add_lwpolyline([vb_sec.pt(0.16 * hcw, 55.0), vb_sec.pt(0.52 * hcw, 55.0), vb_sec.pt(0.52 * hcw, cap_h_mm - 55.0), vb_sec.pt(0.16 * hcw, cap_h_mm - 55.0)], close=True, dxfattribs={"layer": "REBAR_STIRRUP"})
+        elif n_legs_cap >= 4:
+            msp.add_lwpolyline([vb_sec.pt(-0.35 * hcw, 55.0), vb_sec.pt(0.35 * hcw, 55.0), vb_sec.pt(0.35 * hcw, cap_h_mm - 55.0), vb_sec.pt(-0.35 * hcw, cap_h_mm - 55.0)], close=True, dxfattribs={"layer": "REBAR_STIRRUP"})
+
         gl1_cnt = int(bars_by_id["GL1"]["count"])
         gl1_r1 = min(12, (gl1_cnt + 1) // 2) if gl1_cnt > 12 else gl1_cnt
         gl1_pts = _draw_row_bar_circles(msp, vb_sec, gl1_r1, -hcw + 85.0, hcw - 85.0, cap_h_mm - 75.0, dot_r_mm=0.9)
@@ -1363,14 +1662,50 @@ def _draw_rebar_detail(spec: dict[str, Any]) -> ezdxf.document.Drawing:
         gl2_pts = _draw_row_bar_circles(msp, vb_sec, gl2_r1, -hcw + 85.0, hcw - 85.0, 75.0, dot_r_mm=0.9)
         if gl2_cnt > gl2_r1:
             gl2_pts += _draw_row_bar_circles(msp, vb_sec, gl2_cnt - gl2_r1, -hcw + 105.0, hcw - 105.0, 140.0, dot_r_mm=0.9)
+        add_civil_text(msp, f"GL3 {n_legs_cap}肢Φ12@100", vb_sec.x(0.0), vb_sec.y(cap_h_mm) + 3.5, height=1.82, align="CENTER")
         add_arch_dim(msp, vb_sec.pt(-hcw, 0.0), vb_sec.pt(hcw, 0.0), (vb_sec.x(0.0), vb_sec.y(0.0) - 6.5), f"盖梁宽 {cap_w_mm:g}")
-        add_civil_text(msp, "盖梁配筋横断面 (1:30)", vb_sec.x(0.0), 50.0, height=2.3, align="CENTER")
-        vb_sec.register(doc, msp, paper_bounds=(74.0, 48.0, 158.0, 134.0))
+        add_civil_text(msp, "二、A-A 盖梁支点配筋横断面 (1:30)", vb_sec.x(0.0), 50.0, height=2.25, align="CENTER")
+        vb_sec.register(doc, msp, paper_bounds=(72.0, 48.0, 158.0, 134.0))
+
+        # Upper-Right: 1:35 Cap-Beam Cantilever End & Seismic Shear Block Detail (盖梁悬臂端及防震挡块配筋详图)
+        vb_blk = ViewBox("pier_cap_end_detail", 322.0, 162.0, 35.0, "mm")
+        msp.add_lwpolyline(
+            [
+                vb_blk.pt(-1400.0, haunch_cap),
+                vb_blk.pt(-1400.0, cap_h_mm),
+                vb_blk.pt(-1050.0, cap_h_mm),
+                vb_blk.pt(-1050.0, cap_h_mm + 550.0),
+                vb_blk.pt(-1400.0, cap_h_mm + 550.0),
+            ],
+            close=False,
+            dxfattribs={"layer": "CONCRETE"},
+        )
+        msp.add_lwpolyline(
+            [
+                vb_blk.pt(-1400.0, haunch_cap),
+                vb_blk.pt(-200.0, 0.0),
+                vb_blk.pt(1200.0, 0.0),
+                vb_blk.pt(1200.0, cap_h_mm),
+                vb_blk.pt(-1050.0, cap_h_mm),
+            ],
+            close=False,
+            dxfattribs={"layer": "CONCRETE"},
+        )
+        # Edge pedestal + seismic block loop rebar + GL1 end anchorage hook
+        msp.add_lwpolyline([vb_blk.pt(-850.0, cap_h_mm), vb_blk.pt(-350.0, cap_h_mm), vb_blk.pt(-350.0, cap_h_mm + 150.0), vb_blk.pt(-850.0, cap_h_mm + 150.0)], close=True, dxfattribs={"layer": "CONCRETE"})
+        msp.add_lwpolyline([vb_blk.pt(1150.0, cap_h_mm - 80.0), vb_blk.pt(-1320.0, cap_h_mm - 80.0), vb_blk.pt(-1320.0, haunch_cap + 120.0)], close=False, dxfattribs={"layer": "REBAR"})
+        msp.add_lwpolyline([vb_blk.pt(-1330.0, cap_h_mm - 420.0), vb_blk.pt(-1330.0, cap_h_mm + 490.0), vb_blk.pt(-1110.0, cap_h_mm + 490.0), vb_blk.pt(-1110.0, cap_h_mm - 420.0)], close=False, dxfattribs={"layer": "REBAR_STIRRUP"})
+        add_arch_dim(msp, vb_blk.pt(-1400.0, cap_h_mm + 550.0), vb_blk.pt(-1050.0, cap_h_mm + 550.0), (vb_blk.x(-1225.0), vb_blk.y(cap_h_mm + 550.0) + 5.5), "挡块 350")
+        add_arch_dim(msp, vb_blk.pt(-1400.0, cap_h_mm), vb_blk.pt(-1400.0, cap_h_mm + 550.0), (vb_blk.x(-1400.0) - 6.0, vb_blk.y(cap_h_mm + 275.0)), "550", angle=90.0)
+        add_civil_text(msp, "GL1梁端弯折锚固+抗震防落梁挡块箍筋", vb_blk.x(-100.0), 146.0, height=1.82, align="CENTER")
+        add_civil_text(msp, "三、盖梁悬臂端及防震挡块详图 (1:35)", vb_blk.x(-100.0), 138.0, height=2.2, align="CENTER")
+        vb_blk.register(doc, msp, paper_bounds=(246.0, 136.0, 396.0, 246.0))
+
         anchor_by_id = {
             "GL1": gl1_pts[-1] if gl1_pts else vb.pt(0.0, cap_h_mm - 75.0),
             "GL2": gl2_pts[-1] if gl2_pts else vb.pt(0.0, 75.0),
-            "GL3": vb.pt(0.28 * hw, 0.5 * cap_h_mm),
-            "GL4": vb.pt(-0.62 * hw, 0.5 * cap_h_mm),
+            "GL3": vb.pt(0.28 * hw, cap_h_mm - 75.0),
+            "GL4": vb.pt(-0.62 * hw, 0.48 * cap_h_mm),
         }
 
     elif comp == "pier_column_pile":
@@ -1514,8 +1849,10 @@ def _draw_rebar_detail(spec: dict[str, Any]) -> ezdxf.document.Drawing:
         # ZJ1 pile bars anchored up into tie-beam joint (1050mm >= 40d)
         for rx_zp in (-0.42 * pile_d_mm, 0.42 * pile_d_mm):
             msp.add_line(vb_tj.pt(rx_zp, -820.0), vb_tj.pt(rx_zp, 1050.0), dxfattribs={"layer": "REBAR"})
-        # XL1 tie-beam top & bottom longitudinal bars entering column/pile core (anchorage 780mm >= 35d + 90° inward hook!)
-        anch_xl_mm = 780.0
+        # XL1 tie-beam top & bottom longitudinal bars entering column/pile core (anchorage 780mm >= 35d=770 + 90° inward hook!)
+        anch_xl_mm = float(
+            ((calc["substructure_checks"].get("joint_anchorage") or {}).get("xl1_tie_beam_to_pier") or {}).get("design_la_mm", 780.0)
+        )
         rx_face = -0.5 * col_d_mm
         rx_end = rx_face + anch_xl_mm  # -600 + 780 = +180mm past column centerline!
         msp.add_lwpolyline(
@@ -1536,7 +1873,7 @@ def _draw_rebar_detail(spec: dict[str, Any]) -> ezdxf.document.Drawing:
 
         add_arch_dim(msp, vb_tj.pt(rx_face, tie_h_mm), vb_tj.pt(rx_end, tie_h_mm), (vb_tj.x(0.5 * (rx_face + rx_end)), vb_tj.y(tie_h_mm + 850.0) + 5.0), f"锚固 {anch_xl_mm:g}")
         add_arch_dim(msp, vb_tj.pt(850.0, 0.0), vb_tj.pt(850.0, tie_h_mm), (vb_tj.x(850.0) + 7.5, vb_tj.y(0.5 * tie_h_mm)), f"{tie_h_mm:g}", angle=90.0)
-        add_civil_text(msp, "XL1伸入墩桩核心780(≥35d)+弯钩", vb_tj.x(-260.0), 141.5, height=1.82, align="CENTER")
+        add_civil_text(msp, "XL1锚入核心la=780≥35d=770(JTG3362§9.3.2)", vb_tj.x(-260.0), 141.5, height=1.75, align="CENTER")
         add_civil_text(msp, "I 系梁与墩柱/桩顶连接详图 (1:30)", vb_tj.x(-260.0), 134.5, height=2.1, align="CENTER")
         vb_tj.register(doc, msp, paper_bounds=(230.0, 132.0, 324.0, 256.0))
 
@@ -1608,27 +1945,34 @@ def _draw_rebar_detail(spec: dict[str, Any]) -> ezdxf.document.Drawing:
             msp.add_circle(vb_plan.pt(rx_pl, 0.0), vb_plan.span(0.5 * pile_d_mm), dxfattribs={"layer": "HIDDEN"})
             msp.add_line(vb_plan.pt(rx_pl - 900.0, 0.0), vb_plan.pt(rx_pl + 900.0, 0.0), dxfattribs={"layer": "CENTER"})
             msp.add_line(vb_plan.pt(rx_pl, -900.0), vb_plan.pt(rx_pl, 900.0), dxfattribs={"layer": "CENTER"})
-        # 5 Bearing pedestals along span side (y = -240)
+        # 5 Bearing pedestals (520x520) along span side (y_plan = -600 .. -80, cleanly clear of backwall y=+350..+900)
+        ped_centers_ab: list[float] = []
         for i_p in range(n_ped_ab):
             rx_pd = (i_p - 0.5 * (n_ped_ab - 1)) * ped_sp_ab
+            ped_centers_ab.append(rx_pd)
             msp.add_lwpolyline(
-                [vb_plan.pt(rx_pd - 250.0, -490.0), vb_plan.pt(rx_pd + 250.0, -490.0), vb_plan.pt(rx_pd + 250.0, 10.0), vb_plan.pt(rx_pd - 250.0, 10.0)],
+                [vb_plan.pt(rx_pd - 260.0, -600.0), vb_plan.pt(rx_pd + 260.0, -600.0), vb_plan.pt(rx_pd + 260.0, -80.0), vb_plan.pt(rx_pd - 260.0, -80.0)],
                 close=True,
                 dxfattribs={"layer": "THIN"},
             )
-        # Road centerline + directional labels + A-A vertical section cut
+        # Target pedestal for A-A cut: 2# pedestal (rx = -1950mm, clear of road centerline & clear of pile circle!)
+        aa_target_rx = ped_centers_ab[1] if len(ped_centers_ab) >= 2 else 0.0
+        add_civil_text(msp, "2#垫石", vb_plan.x(aa_target_rx + 280.0), vb_plan.y(-540.0), height=1.68, align="LEFT")
+
+        # Road centerline + directional labels + A-A vertical section cut passing dead-center through 2# pedestal & backwall!
         msp.add_line((vb_plan.x(0.0), vb_plan.y(-hcw) - 10.0), (vb_plan.x(0.0), vb_plan.y(hcw + ew_len) + 8.0), dxfattribs={"layer": "CENTER"})
         add_civil_text(msp, "道路中心线", vb_plan.x(0.0) + 1.5, vb_plan.y(hcw + ew_len) + 5.0, height=1.9, align="LEFT")
         add_civil_text(msp, "耳墙(向台后伸)", vb_plan.x(-hcl + ew_thk) + 1.5, vb_plan.y(hcw + 0.55 * ew_len), height=1.82, align="LEFT")
         add_civil_text(msp, "桩中心", vb_plan.x(h_psp + 0.5 * pile_d_mm) + 1.2, vb_plan.y(0.0) + 1.0, height=1.8, align="LEFT")
-        ax_sp = vb_plan.x(-2600.0)
+        ax_sp = vb_plan.x(-3000.0)
         ay_sp0, ay_sp1 = vb_plan.y(-hcw) - 2.0, vb_plan.y(-hcw) - 5.5
         msp.add_line((ax_sp, ay_sp0), (ax_sp, ay_sp1), dxfattribs={"layer": "DIM"})
         msp.add_lwpolyline([(ax_sp, ay_sp1), (ax_sp - 0.8, ay_sp1 + 1.5), (ax_sp + 0.8, ay_sp1 + 1.5)], close=True, dxfattribs={"layer": "DIM"})
         add_civil_text(msp, "跨径侧", ax_sp + 1.5, ay_sp1 + 0.4, height=1.82, align="LEFT")
 
-        x_aa_plan = vb_plan.x(0.5 * ped_sp_ab)
-        draw_section_cut_symbol(msp, x_aa_plan, vb_plan.y(-hcw) - 2.0, x_aa_plan, vb_plan.y(hcw) + 2.0, "A", look_dx=1.0, look_dy=0.0, tick_len=3.0, arrow_len=3.0)
+        # look_dx=+1.0 (looking right): left of A-A section = +y_plan (台背背墙), right of A-A section = -y_plan (2#支座垫石)
+        x_aa_plan = vb_plan.x(aa_target_rx)
+        draw_section_cut_symbol(msp, x_aa_plan, vb_plan.y(-hcw) - 2.2, x_aa_plan, vb_plan.y(hcw) + 2.2, "A", look_dx=1.0, look_dy=0.0, tick_len=3.0, arrow_len=3.0)
 
         add_arch_dim(msp, vb_plan.pt(-hcl, -hcw), vb_plan.pt(hcl, -hcw), (vb_plan.x(0.0), vb_plan.y(-hcw) - 8.5), f"台帽长 {ab_cap_len:g}")
         add_arch_dim(msp, vb_plan.pt(-h_psp, 0.0), vb_plan.pt(h_psp, 0.0), (vb_plan.x(0.0), vb_plan.y(hcw) + 12.0), f"桩距 {ab_pile_sp:g}")
@@ -1637,7 +1981,7 @@ def _draw_rebar_detail(spec: dict[str, Any]) -> ezdxf.document.Drawing:
         add_civil_text(msp, "桥台平面定位图 (1:80)", vb_plan.x(0.0), 178.0, height=2.25, align="CENTER")
         vb_plan.register(doc, msp, paper_bounds=(32.0, 176.0, 184.0, 266.0))
 
-        # 2) Upper-Right: 1:80 Abutment Front Elevation (桩长直段折断 + B-B剖切) + 1:60 Side View (I节点引出)
+        # 2) Upper-Right: 1:80 Abutment Front Elevation (含5块垫石 + A-A/B-B剖切 + 桩折断) + 1:60 Side View (I节点引出)
         vb_elev = ViewBox("abutment_elev", 268.0, 212.0, 80.0, "mm")
         pile_stub_mm = 2600.0
         msp.add_lwpolyline(
@@ -1650,13 +1994,23 @@ def _draw_rebar_detail(spec: dict[str, Any]) -> ezdxf.document.Drawing:
             close=True,
             dxfattribs={"layer": "CONCRETE"},
         )
+        # 5 Bearing pedestals sitting in front of backwall on cap top [abut_cap_h .. abut_cap_h + 150]
+        for rx_pd in ped_centers_ab:
+            msp.add_lwpolyline(
+                [vb_elev.pt(rx_pd - 260.0, abut_cap_h), vb_elev.pt(rx_pd + 260.0, abut_cap_h), vb_elev.pt(rx_pd + 260.0, abut_cap_h + 150.0), vb_elev.pt(rx_pd - 260.0, abut_cap_h + 150.0)],
+                close=True,
+                dxfattribs={"layer": "THIN"},
+            )
         # Cap QT1 horizontal main bars + Backwall QT2 vertical wall bars (@125)
+        anch_qt2_mm = float(
+            ((calc["substructure_checks"].get("joint_anchorage") or {}).get("qt2_wall_to_abutment_cap") or {}).get("design_la_mm", 560.0)
+        )
         msp.add_line(vb_elev.pt(-hcl + 80.0, abut_cap_h - 85.0), vb_elev.pt(hcl - 80.0, abut_cap_h - 85.0), dxfattribs={"layer": "REBAR"})
         msp.add_line(vb_elev.pt(-hcl + 80.0, 85.0), vb_elev.pt(hcl - 80.0, 85.0), dxfattribs={"layer": "REBAR"})
         for k_bw in range(15):
             rx_bw = -hcl + 220.0 + k_bw * ((ab_cap_len - 440.0) / 14.0)
-            msp.add_line(vb_elev.pt(rx_bw, abut_cap_h - 560.0), vb_elev.pt(rx_bw, abut_cap_h + bw_h - 80.0), dxfattribs={"layer": "REBAR_STIRRUP"})
-        # Twin bored piles shortened with S-break + QT3 cage + B-B section cut on right pile
+            msp.add_line(vb_elev.pt(rx_bw, abut_cap_h - anch_qt2_mm), vb_elev.pt(rx_bw, abut_cap_h + bw_h - 80.0), dxfattribs={"layer": "REBAR_STIRRUP"})
+        # Twin bored piles shortened with S-break + QT3 cage + B-B section cut on right pile + A-A section cut on 2# pedestal!
         for rx_pl in (-h_psp, h_psp):
             msp.add_line((vb_elev.x(rx_pl), vb_elev.y(-pile_stub_mm) - 4.0), (vb_elev.x(rx_pl), vb_elev.y(abut_cap_h + bw_h) + 4.0), dxfattribs={"layer": "CENTER"})
             msp.add_line(vb_elev.pt(rx_pl - 0.5 * pile_d_mm, 0.0), vb_elev.pt(rx_pl - 0.5 * pile_d_mm, -pile_stub_mm), dxfattribs={"layer": "CONCRETE"})
@@ -1667,12 +2021,14 @@ def _draw_rebar_detail(spec: dict[str, Any]) -> ezdxf.document.Drawing:
             for ry_ph in (-600.0, -1350.0, -2100.0):
                 msp.add_line(vb_elev.pt(rx_pl - 0.42 * pile_d_mm, ry_ph), vb_elev.pt(rx_pl + 0.42 * pile_d_mm, ry_ph), dxfattribs={"layer": "REBAR_STIRRUP"})
 
+        x_aa_elev = vb_elev.x(aa_target_rx)
+        draw_section_cut_symbol(msp, x_aa_elev, vb_elev.y(0.0) - 2.0, x_aa_elev, vb_elev.y(abut_cap_h + bw_h) + 2.0, "A", look_dx=1.0, look_dy=0.0, tick_len=2.8, arrow_len=2.8)
         y_bb_ab = vb_elev.y(-1450.0)
         draw_section_cut_symbol(msp, vb_elev.x(h_psp - 0.65 * pile_d_mm), y_bb_ab, vb_elev.x(h_psp + 0.65 * pile_d_mm), y_bb_ab, "B", look_dx=0.0, look_dy=-1.0, tick_len=2.8, arrow_len=2.8)
         add_arch_dim(msp, vb_elev.pt(-h_psp - 0.5 * pile_d_mm, -pile_stub_mm), vb_elev.pt(-h_psp + 0.5 * pile_d_mm, -pile_stub_mm), (vb_elev.x(-h_psp), vb_elev.y(-pile_stub_mm) - 10.2), f"桩径 {pile_d_mm:g}")
         add_arch_dim(msp, vb_elev.pt(-hcl, 0.0), vb_elev.pt(-hcl, abut_cap_h), (vb_elev.x(-hcl) - 7.5, vb_elev.y(0.5 * abut_cap_h)), f"{abut_cap_h:g}", angle=90.0)
         add_civil_text(msp, "桥台正立面配筋图 (1:80)", vb_elev.x(0.0), 162.5, height=2.2, align="CENTER")
-        vb_elev.register(doc, msp, paper_bounds=(196.0, 160.0, 332.0, 264.0))
+        vb_elev.register(doc, msp, paper_bounds=(196.0, 160.0, 332.0, 268.0))
 
         # 1:60 Side View with Detail I callout ring
         vb_ab = ViewBox("abutment_side_rebar", 374.0, 212.0, 60.0, "mm")
@@ -1697,9 +2053,9 @@ def _draw_rebar_detail(spec: dict[str, Any]) -> ezdxf.document.Drawing:
             close=True,
             dxfattribs={"layer": "HIDDEN"},
         )
-        msp.add_lwpolyline([vb_ab.pt(80.0, abut_cap_h), vb_ab.pt(580.0, abut_cap_h), vb_ab.pt(580.0, abut_cap_h + 150.0), vb_ab.pt(80.0, abut_cap_h + 150.0)], close=True, dxfattribs={"layer": "CONCRETE"})
+        msp.add_lwpolyline([vb_ab.pt(80.0, abut_cap_h), vb_ab.pt(600.0, abut_cap_h), vb_ab.pt(600.0, abut_cap_h + 150.0), vb_ab.pt(80.0, abut_cap_h + 150.0)], close=True, dxfattribs={"layer": "CONCRETE"})
         msp.add_lwpolyline(
-            [vb_ab.pt(-hcw + 65.0, abut_cap_h - 560.0), vb_ab.pt(-hcw + 65.0, abut_cap_h + bw_h - 65.0), vb_ab.pt(-hcw + bw_thk - 65.0, abut_cap_h + bw_h - 65.0), vb_ab.pt(-hcw + bw_thk - 65.0, abut_cap_h - 560.0)],
+            [vb_ab.pt(-hcw + 65.0, abut_cap_h - anch_qt2_mm), vb_ab.pt(-hcw + 65.0, abut_cap_h + bw_h - 65.0), vb_ab.pt(-hcw + bw_thk - 65.0, abut_cap_h + bw_h - 65.0), vb_ab.pt(-hcw + bw_thk - 65.0, abut_cap_h - anch_qt2_mm)],
             close=False,
             dxfattribs={"layer": "REBAR"},
         )
@@ -1719,26 +2075,57 @@ def _draw_rebar_detail(spec: dict[str, Any]) -> ezdxf.document.Drawing:
         add_civil_text(msp, "侧面图 (1:60)", vb_ab.x(0.0), 166.0, height=2.2, align="CENTER")
         vb_ab.register(doc, msp, paper_bounds=(340.0, 164.0, 408.0, 266.0))
 
-        # 3a) Lower-Left: 1:30 A-A Abutment Cap + Pedestal Cross-Section (exact QT1 count = 16!)
-        vb_ac = ViewBox("abutment_cap_section", 56.0, 86.0, 30.0, "mm")
+        # 3a) Lower-Left: 1:40 A-A Section through 2# Pedestal Center (cuts Cap 1800x1400 + Backwall 550x1750 + 2# Pedestal 520x150!)
+        vb_ac = ViewBox("abutment_cap_section", 58.0, 76.0, 40.0, "mm")
+        # Cap body [-hcw .. +hcw] x [0 .. 1400] + closed stirrup
         msp.add_lwpolyline([vb_ac.pt(-hcw, 0.0), vb_ac.pt(hcw, 0.0), vb_ac.pt(hcw, abut_cap_h), vb_ac.pt(-hcw, abut_cap_h)], close=True, dxfattribs={"layer": "CONCRETE"})
         msp.add_lwpolyline([vb_ac.pt(-hcw + 55.0, 55.0), vb_ac.pt(hcw - 55.0, 55.0), vb_ac.pt(hcw - 55.0, abut_cap_h - 55.0), vb_ac.pt(-hcw + 55.0, abut_cap_h - 55.0)], close=True, dxfattribs={"layer": "REBAR_STIRRUP"})
-        msp.add_lwpolyline([vb_ac.pt(-250.0, abut_cap_h), vb_ac.pt(250.0, abut_cap_h), vb_ac.pt(250.0, abut_cap_h + 150.0), vb_ac.pt(-250.0, abut_cap_h + 150.0)], close=True, dxfattribs={"layer": "CONCRETE"})
-        msp.add_line(vb_ac.pt(-210.0, abut_cap_h + 60.0), vb_ac.pt(210.0, abut_cap_h + 60.0), dxfattribs={"layer": "REBAR_STIRRUP"})
-        msp.add_line(vb_ac.pt(-210.0, abut_cap_h + 110.0), vb_ac.pt(210.0, abut_cap_h + 110.0), dxfattribs={"layer": "REBAR_STIRRUP"})
+        # Full-width Backwall + Corbel cut by A-A on left/rear [-hcw .. -hcw + bw_thk] x [1400 .. 3150]
+        msp.add_lwpolyline(
+            [
+                vb_ac.pt(-hcw, abut_cap_h),
+                vb_ac.pt(-hcw, abut_cap_h + bw_h - 850.0),
+                vb_ac.pt(-hcw - 300.0, abut_cap_h + bw_h - 650.0),
+                vb_ac.pt(-hcw - 300.0, abut_cap_h + bw_h - 300.0),
+                vb_ac.pt(-hcw, abut_cap_h + bw_h - 300.0),
+                vb_ac.pt(-hcw, abut_cap_h + bw_h),
+                vb_ac.pt(-hcw + bw_thk, abut_cap_h + bw_h),
+                vb_ac.pt(-hcw + bw_thk, abut_cap_h),
+            ],
+            close=False,
+            dxfattribs={"layer": "CONCRETE"},
+        )
+        # QT2 vertical backwall bars cut in A-A, anchored 560mm into cap with inward hooks!
+        msp.add_lwpolyline(
+            [vb_ac.pt(-hcw + 60.0, abut_cap_h + bw_h - 65.0), vb_ac.pt(-hcw + 60.0, abut_cap_h - anch_qt2_mm), vb_ac.pt(-hcw + 220.0, abut_cap_h - anch_qt2_mm)],
+            close=False,
+            dxfattribs={"layer": "REBAR"},
+        )
+        msp.add_lwpolyline(
+            [vb_ac.pt(-hcw + bw_thk - 60.0, abut_cap_h + bw_h - 65.0), vb_ac.pt(-hcw + bw_thk - 60.0, abut_cap_h - anch_qt2_mm), vb_ac.pt(-hcw + bw_thk - 220.0, abut_cap_h - anch_qt2_mm)],
+            close=False,
+            dxfattribs={"layer": "REBAR"},
+        )
+        # 2# Bearing Pedestal (520 x 150) cut on right/span side [80 .. 600] x [1400 .. 1550] + DS1 2-layer mesh
+        msp.add_lwpolyline([vb_ac.pt(80.0, abut_cap_h), vb_ac.pt(600.0, abut_cap_h), vb_ac.pt(600.0, abut_cap_h + 150.0), vb_ac.pt(80.0, abut_cap_h + 150.0)], close=True, dxfattribs={"layer": "CONCRETE"})
+        msp.add_line(vb_ac.pt(115.0, abut_cap_h + 55.0), vb_ac.pt(565.0, abut_cap_h + 55.0), dxfattribs={"layer": "REBAR_STIRRUP"})
+        msp.add_line(vb_ac.pt(115.0, abut_cap_h + 105.0), vb_ac.pt(565.0, abut_cap_h + 105.0), dxfattribs={"layer": "REBAR_STIRRUP"})
+
         qt1_cnt = int(bars_by_id["QT1"]["count"])
         qt1_top = qt1_cnt // 2
-        qt1_pts = _draw_row_bar_circles(msp, vb_ac, qt1_top, -hcw + 85.0, hcw - 85.0, abut_cap_h - 80.0, dot_r_mm=0.92)
-        qt1_pts += _draw_row_bar_circles(msp, vb_ac, qt1_cnt - qt1_top, -hcw + 85.0, hcw - 85.0, 80.0, dot_r_mm=0.92)
-        add_civil_text(msp, f"QT1 {qt1_cnt}Φ{bars_by_id['QT1']['dia_mm']:g}(上下各{qt1_top}根)", vb_ac.x(0.0), vb_ac.y(0.50 * abut_cap_h), height=1.88, align="CENTER")
-        add_civil_text(msp, "DS1 Φ12@100防裂网", vb_ac.x(0.0), vb_ac.y(abut_cap_h + 150.0) + 6.5, height=1.80, align="CENTER")
-        add_arch_dim(msp, vb_ac.pt(-hcw, 0.0), vb_ac.pt(hcw, 0.0), (vb_ac.x(0.0), vb_ac.y(0.0) - 6.0), f"台帽宽 {abut_cap_w:g}")
-        add_civil_text(msp, "A-A 台帽及垫石断面 (1:30)", vb_ac.x(0.0), 66.0, height=2.15, align="CENTER")
-        vb_ac.register(doc, msp, paper_bounds=(22.0, 64.0, 92.0, 152.0))
+        qt1_pts = _draw_row_bar_circles(msp, vb_ac, qt1_top, -hcw + 85.0, hcw - 85.0, abut_cap_h - 80.0, dot_r_mm=0.82)
+        qt1_pts += _draw_row_bar_circles(msp, vb_ac, qt1_cnt - qt1_top, -hcw + 85.0, hcw - 85.0, 80.0, dot_r_mm=0.82)
+        add_civil_text(msp, f"QT1 {qt1_cnt}Φ{bars_by_id['QT1']['dia_mm']:g}(上下各{qt1_top})", vb_ac.x(180.0), vb_ac.y(0.46 * abut_cap_h), height=1.70, align="CENTER")
+        add_civil_text(msp, "背墙", vb_ac.x(-hcw + 0.5 * bw_thk), vb_ac.y(abut_cap_h + 0.55 * bw_h), height=1.68, align="CENTER")
+        add_civil_text(msp, "2#垫石+DS1网", vb_ac.x(340.0), vb_ac.y(abut_cap_h + 150.0) + 4.5, height=1.68, align="CENTER")
+        add_arch_dim(msp, vb_ac.pt(-hcw, 0.0), vb_ac.pt(hcw, 0.0), (vb_ac.x(0.0), vb_ac.y(0.0) - 5.5), f"台帽宽 {abut_cap_w:g}")
+        add_arch_dim(msp, vb_ac.pt(-hcw, abut_cap_h + bw_h), vb_ac.pt(-hcw + bw_thk, abut_cap_h + bw_h), (vb_ac.x(-hcw + 0.5 * bw_thk), vb_ac.y(abut_cap_h + bw_h) + 4.8), f"{bw_thk:g}")
+        add_arch_dim(msp, vb_ac.pt(-hcw, abut_cap_h), vb_ac.pt(-hcw, abut_cap_h + bw_h), (vb_ac.x(-hcw - 300.0) - 4.2, vb_ac.y(abut_cap_h + 0.5 * bw_h)), f"{bw_h:g}", angle=90.0)
+        add_civil_text(msp, "A-A 台帽、背墙及2#垫石剖面 (1:40)", vb_ac.x(0.0), 62.5, height=2.05, align="CENTER")
+        vb_ac.register(doc, msp, paper_bounds=(20.0, 60.0, 94.0, 166.0))
 
         # 3b) Lower-Center: 1:20 Detail I — Earwall/Backwall to Cap Connection & Anchorage Detail!
         vb_jnt = ViewBox("abutment_joint_detail", 125.0, 106.0, 20.0, "mm")
-        anch_qt2_mm = 560.0  # 35d for Φ16
         # Concrete outline: cap upper portion [x=0..640, y=-700..0] + backwall [x=0..550, y=0..820] + corbel [-280..0]
         msp.add_lwpolyline(
             [
@@ -1785,9 +2172,9 @@ def _draw_rebar_detail(spec: dict[str, Any]) -> ezdxf.document.Drawing:
         add_arch_dim(msp, vb_jnt.pt(0.0, 820.0), vb_jnt.pt(bw_thk, 820.0), (vb_jnt.x(0.5 * bw_thk), vb_jnt.y(820.0) + 5.0), f"墙厚 {bw_thk:g}")
         add_arch_dim(msp, vb_jnt.pt(bw_thk, -anch_qt2_mm), vb_jnt.pt(bw_thk, 0.0), (vb_jnt.x(660.0) + 5.5, vb_jnt.y(-0.5 * anch_qt2_mm)), f"锚固 {anch_qt2_mm:g}", angle=90.0)
         add_civil_text(msp, "QT2 Φ16@125(双侧)", vb_jnt.x(0.5 * bw_thk), vb_jnt.y(220.0), height=1.78, align="CENTER")
-        add_civil_text(msp, "弯钩朝内,锚入台帽560", vb_jnt.x(0.5 * bw_thk), vb_jnt.y(-anch_qt2_mm - 110.0), height=1.75, align="CENTER")
-        add_civil_text(msp, "I 耳背墙与台帽连接详图 (1:20)", vb_jnt.x(220.0), 66.0, height=2.15, align="CENTER")
-        vb_jnt.register(doc, msp, paper_bounds=(98.0, 64.0, 168.0, 156.0))
+        add_civil_text(msp, "弯钩朝内,la=560=35d(C30)", vb_jnt.x(0.5 * bw_thk), vb_jnt.y(-anch_qt2_mm - 110.0), height=1.68, align="CENTER")
+        add_civil_text(msp, "I 耳背墙与台帽连接详图 (1:20)", vb_jnt.x(220.0), 62.5, height=2.05, align="CENTER")
+        vb_jnt.register(doc, msp, paper_bounds=(98.0, 60.0, 168.0, 158.0))
 
         # 3c) Lower-Mid-Right: 1:30 B-B Abutment Bored Pile Cross-Section (exact QT3 count = 20!)
         vb_ap = ViewBox("abutment_pile_section", 199.0, 104.0, 30.0, "mm")
@@ -1798,22 +2185,22 @@ def _draw_rebar_detail(spec: dict[str, Any]) -> ezdxf.document.Drawing:
         add_civil_text(msp, f"QT3 {qt3_cnt}Φ{bars_by_id['QT3']['dia_mm']:g}", vb_ap.x(0.0), vb_ap.y(90.0), height=1.85, align="CENTER")
         add_civil_text(msp, "环向均布", vb_ap.x(0.0), vb_ap.y(-140.0), height=1.80, align="CENTER")
         add_arch_dim(msp, vb_ap.pt(-0.5 * pile_d_mm, 0.0), vb_ap.pt(0.5 * pile_d_mm, 0.0), (vb_ap.x(0.0), vb_ap.y(0.5 * pile_d_mm) + 6.5), f"桩径 {pile_d_mm:g}")
-        add_civil_text(msp, "B-B 桩身配筋断面 (1:30)", vb_ap.x(0.0), 66.0, height=2.15, align="CENTER")
-        vb_ap.register(doc, msp, paper_bounds=(172.0, 64.0, 226.0, 150.0))
+        add_civil_text(msp, "B-B 桩身配筋断面 (1:30)", vb_ap.x(0.0), 62.5, height=2.05, align="CENTER")
+        vb_ap.register(doc, msp, paper_bounds=(172.0, 60.0, 226.0, 150.0))
 
         anchor_by_id = {
-            "QT1": qt1_pts[0] if qt1_pts else vb_ac.pt(-600.0, abut_cap_h - 80.0),
+            "QT1": qt1_pts[-1] if qt1_pts else vb_ac.pt(600.0, 80.0),
             "QT2": vb_jnt.pt(55.0, 560.0),
             "QT3": qt3_pts[3] if len(qt3_pts) > 3 else vb_ap.pt(0.0, 560.0),
-            "DS1": vb_ac.pt(120.0, abut_cap_h + 110.0),
+            "DS1": vb_ac.pt(420.0, abut_cap_h + 105.0),
         }
 
     # Draw boxed bar ID tags right alongside each bar's actual zone (zero crossing leaders!)
     custom_tag_pos: dict[str, tuple[float, float]] = {}
     if comp == "abutment_rebar":
         custom_tag_pos = {
-            "QT1": (32.0, 142.0),
-            "DS1": (82.0, 145.0),
+            "QT1": (88.0, 74.0),
+            "DS1": (86.0, 130.0),
             "QT2": (106.0, 145.0),
             "QT3": (218.0, 140.0),
         }
@@ -1825,6 +2212,13 @@ def _draw_rebar_detail(spec: dict[str, Any]) -> ezdxf.document.Drawing:
             "XL2": (396.0, 226.0),
             "ZJ1": (214.0, 136.0),
             "ZJ2": (34.0, 120.0),
+        }
+    elif comp == "pier_cap":
+        custom_tag_pos = {
+            "GL1": (182.0, 118.0),
+            "GL2": (182.0, 72.0),
+            "GL3": (194.0, 222.0),
+            "GL4": (34.0, 168.0),
         }
 
     for idx, b_item in enumerate(bars):
@@ -1840,17 +2234,27 @@ def _draw_rebar_detail(spec: dict[str, Any]) -> ezdxf.document.Drawing:
             ty = max(66.0, min(236.0, ay + (10.0 if idx % 2 == 0 else -10.0)))
         draw_boxed_tag(msp, tx, ty, bid, leader_to=(ax, ay), layer="REBAR")
 
+    def _safe_basis_str(raw_basis: str, max_chars: int = 92) -> str:
+        s_b = str(raw_basis).strip()
+        if len(s_b) <= max_chars:
+            return s_b
+        for sep in ("；", ";", "，", ","):
+            pos = s_b.rfind(sep, 0, max_chars)
+            if pos >= 24:
+                return s_b[:pos]
+        return s_b[:max_chars].rstrip("([（ ")
+
     if comp in {"pier_column_pile", "abutment_rebar"}:
         for idx, b_item in enumerate(bars[:4]):
             add_civil_text(
                 msp,
-                f"[{b_item['bar_id']}] {str(b_item['calc_basis'])[:64]}",
+                f"[{b_item['bar_id']}] {_safe_basis_str(str(b_item['calc_basis']), 78)}",
                 b["ix0"] + 6.0,
                 b["iy0"] + 31.0 - idx * 6.0,
-                height=1.80,
+                height=1.78,
             )
     else:
-        add_civil_text(msp, f"主控验算：{bars[0]['calc_basis'][:74]}", b["ix0"] + 6.0, b["iy0"] + 16.0, height=1.95)
+        add_civil_text(msp, f"主控验算：{_safe_basis_str(str(bars[0]['calc_basis']), 96)}", b["ix0"] + 6.0, b["iy0"] + 16.0, height=1.90)
     return doc
 
 
@@ -1873,36 +2277,63 @@ def _draw_bearing_layout(spec: dict[str, Any]) -> ezdxf.document.Drawing:
         project=str(spec.get("project", calc["project_summary"]["project_name"])),
         drawing_no=str(spec.get("drawing_no", "QL-12")),
         unit_note="mm",
-        scale_label="1:5 / 平面示意",
+        scale_label="1:5 / 1:10 / 平面示意",
         style_overrides=_resolve_style_overrides(spec),
     )
 
-    # Left: 1:5 Laminated Elastomeric Bearing Section (exact 1:5 ViewBox)
-    vb = ViewBox("bearing_section", 112.0, 126.0, 5.0, "mm")
+    # 1. Upper-Left: 1:5 Laminated Elastomeric Bearing Section & Plan (exact 1:5 ViewBox)
+    vb = ViewBox("bearing_section", 112.0, 166.0, 5.0, "mm")
     hl = 0.5 * bl_mm
     msp.add_lwpolyline([vb.pt(-hl, 0.0), vb.pt(hl, 0.0), vb.pt(hl, bt_mm), vb.pt(-hl, bt_mm)], close=True, dxfattribs={"layer": "OUTLINE"})
     for k in range(1, 6):
         ry_plate = bt_mm * (k / 6.0)
         msp.add_line(vb.pt(-hl + 5.0, ry_plate), vb.pt(hl - 5.0, ry_plate), dxfattribs={"layer": "REBAR"})
-    add_arch_dim(msp, vb.pt(-hl, bt_mm), vb.pt(hl, bt_mm), (vb.x(0.0), vb.y(bt_mm) + 9.0), f"{bl_mm:g}")
-    add_arch_dim(msp, vb.pt(hl, 0.0), vb.pt(hl, bt_mm), (vb.x(hl) + 9.0, vb.y(0.5 * bt_mm)), f"{bt_mm:g}", angle=90.0)
+    add_arch_dim(msp, vb.pt(-hl, bt_mm), vb.pt(hl, bt_mm), (vb.x(0.0), vb.y(bt_mm) + 7.5), f"{bl_mm:g}")
+    add_arch_dim(msp, vb.pt(hl, 0.0), vb.pt(hl, bt_mm), (vb.x(hl) + 8.5, vb.y(0.5 * bt_mm)), f"{bt_mm:g}", angle=90.0)
     # Plan of single pad above in same 1:5 ViewBox
-    ry_plan0 = bt_mm + 90.0
+    ry_plan0 = bt_mm + 65.0
     msp.add_lwpolyline([vb.pt(-hl, ry_plan0), vb.pt(hl, ry_plan0), vb.pt(hl, ry_plan0 + bw_mm), vb.pt(-hl, ry_plan0 + bw_mm)], close=True, dxfattribs={"layer": "OUTLINE"})
-    add_arch_dim(msp, vb.pt(hl, ry_plan0), vb.pt(hl, ry_plan0 + bw_mm), (vb.x(hl) + 9.0, vb.y(ry_plan0 + 0.5 * bw_mm)), f"{bw_mm:g}", angle=90.0)
-    add_civil_text(msp, f"{brg['bearing_model']} 支座剖面与平面详图 (1:5)", vb.x(0.0), 108.0, height=2.5, align="CENTER")
-    vb.register(doc, msp, paper_bounds=(45.0, 112.0, 185.0, 255.0))
+    add_arch_dim(msp, vb.pt(hl, ry_plan0), vb.pt(hl, ry_plan0 + bw_mm), (vb.x(hl) + 8.5, vb.y(ry_plan0 + 0.5 * bw_mm)), f"{bw_mm:g}", angle=90.0)
+    add_civil_text(msp, f"一、{brg['bearing_model']} 支座剖面与平面详图 (1:5)", vb.x(0.0), 156.0, height=2.3, align="CENTER")
+    vb.register(doc, msp, paper_bounds=(44.0, 154.0, 192.0, 266.0))
 
-    # Right: Single-span bearing layout & JT/T 4-2019 check summary
-    bx0, by0, bw, bh = 232.0, 96.0, 162.0, 142.0
+    # 2. Lower-Left: 1:10 Bearing Installation & C40 Pedestal Construction Detail (支座垫石及梁底调平钢板构造详图)
+    vb_ped = ViewBox("bearing_pedestal_detail", 112.0, 76.0, 10.0, "mm")
+    ped_w = max(500.0, bl_mm + 120.0)
+    ped_h = 150.0
+    # Cap beam top [-420..420, -140..0] + C40 Pedestal [-ped_w/2..ped_w/2, 0..150] + Bearing + Wedge plate + T-girder soffit
+    msp.add_lwpolyline([vb_ped.pt(-420.0, -130.0), vb_ped.pt(420.0, -130.0), vb_ped.pt(420.0, 0.0), vb_ped.pt(-420.0, 0.0)], close=False, dxfattribs={"layer": "CONCRETE"})
+    msp.add_line(vb_ped.pt(-420.0, 0.0), vb_ped.pt(420.0, 0.0), dxfattribs={"layer": "CONCRETE"})
+    msp.add_lwpolyline([vb_ped.pt(-0.5 * ped_w, 0.0), vb_ped.pt(0.5 * ped_w, 0.0), vb_ped.pt(0.5 * ped_w, ped_h), vb_ped.pt(-0.5 * ped_w, ped_h)], close=True, dxfattribs={"layer": "CONCRETE"})
+    # DS1 anti-splitting rebar mesh layers inside C40 pedestal
+    msp.add_line(vb_ped.pt(-0.5 * ped_w + 40.0, 55.0), vb_ped.pt(0.5 * ped_w - 40.0, 55.0), dxfattribs={"layer": "REBAR_STIRRUP"})
+    msp.add_line(vb_ped.pt(-0.5 * ped_w + 40.0, 105.0), vb_ped.pt(0.5 * ped_w - 40.0, 105.0), dxfattribs={"layer": "REBAR_STIRRUP"})
+    # Bearing pad [150 .. 150+bt_mm] + top wedge steel plate + T-girder bottom bulb soffit
+    msp.add_lwpolyline([vb_ped.pt(-hl, ped_h), vb_ped.pt(hl, ped_h), vb_ped.pt(hl, ped_h + bt_mm), vb_ped.pt(-hl, ped_h + bt_mm)], close=True, dxfattribs={"layer": "REBAR"})
+    y_g_bot = ped_h + bt_mm + 20.0
+    msp.add_lwpolyline([vb_ped.pt(-hl - 20.0, ped_h + bt_mm), vb_ped.pt(hl + 20.0, ped_h + bt_mm), vb_ped.pt(hl + 20.0, y_g_bot), vb_ped.pt(-hl - 20.0, y_g_bot)], close=True, dxfattribs={"layer": "THIN"})
+    msp.add_lwpolyline([vb_ped.pt(-280.0, y_g_bot + 160.0), vb_ped.pt(-280.0, y_g_bot), vb_ped.pt(280.0, y_g_bot), vb_ped.pt(280.0, y_g_bot + 160.0)], close=False, dxfattribs={"layer": "CONCRETE"})
+    add_arch_dim(msp, vb_ped.pt(-0.5 * ped_w, 0.0), vb_ped.pt(0.5 * ped_w, 0.0), (vb_ped.x(0.0), vb_ped.y(0.0) - 6.0), f"C40支座垫石 {ped_w:g}")
+    add_arch_dim(msp, vb_ped.pt(0.5 * ped_w, 0.0), vb_ped.pt(0.5 * ped_w, ped_h), (vb_ped.x(420.0) + 5.5, vb_ped.y(0.5 * ped_h)), f"{ped_h:g}", angle=90.0)
+    add_civil_text(msp, "梁底楔形调平钢板 + DS1防劈裂钢筋网", vb_ped.x(0.0), vb_ped.y(y_g_bot + 160.0) + 3.5, height=1.82, align="CENTER")
+    add_civil_text(msp, "二、支座安装及支座垫石构造剖面 (1:10)", vb_ped.x(0.0), 48.0, height=2.3, align="CENTER")
+    vb_ped.register(doc, msp, paper_bounds=(44.0, 46.0, 192.0, 138.0))
+
+    # 3. Right: Single-span bearing layout & legend
+    bx0, by0, bw, bh = 232.0, 92.0, 164.0, 148.0
     msp.add_lwpolyline([(bx0, by0), (bx0 + bw, by0), (bx0 + bw, by0 + bh), (bx0, by0 + bh)], close=True, dxfattribs={"layer": "THIN"})
-    x_z1, x_z2 = bx0 + 34.0, bx0 + bw - 34.0
+    add_civil_text(msp, "三、单跨支座平面布置示意（全桥共40块）", bx0 + 0.5 * bw, by0 + bh + 5.5, height=2.35, align="CENTER")
+    x_z1, x_z2 = bx0 + 46.0, bx0 + bw - 28.0
+    msp.add_line((x_z1, by0 + 14.0), (x_z1, by0 + bh - 16.0), dxfattribs={"layer": "CENTER"})
+    msp.add_line((x_z2, by0 + 14.0), (x_z2, by0 + bh - 16.0), dxfattribs={"layer": "CENTER"})
+    add_civil_text(msp, "固定端(桥墩)", x_z1, by0 + bh - 12.0, height=1.8, align="CENTER")
+    add_civil_text(msp, "纵向活动端", x_z2, by0 + bh - 12.0, height=1.8, align="CENTER")
     for i in range(n_ped):
-        yg = by0 + 22.0 + i * ((bh - 44.0) / max(1, n_ped - 1))
-        msp.add_line((x_z1 - 10.0, yg), (x_z2 + 10.0, yg), dxfattribs={"layer": "THIN"})
+        yg = by0 + 22.0 + i * ((bh - 48.0) / max(1, n_ped - 1))
+        msp.add_line((x_z1 - 8.0, yg), (x_z2 + 8.0, yg), dxfattribs={"layer": "THIN"})
         draw_bearing_symbol(msp, x_z1, yg, kind="fixed", size=3.4)
         draw_bearing_symbol(msp, x_z2, yg, kind="sliding_longitudinal", size=3.4)
-        add_civil_text(msp, f"{i+1}# ({ped_sp_mm:g}间距)", bx0 + 5.0, yg - 1.0, height=1.9)
+        add_civil_text(msp, f"{i+1}# ({ped_sp_mm:g}间距)", bx0 + 5.0, yg - 1.0, height=1.85)
 
     sigma_c = float(brg["compressive_stress_mpa"])
     allow_c = float(brg["allowable_stress_mpa"])
@@ -2058,35 +2489,96 @@ def _draw_deck_ancillary(spec: dict[str, Any]) -> ezdxf.document.Drawing:
     add_civil_text(msp, "三、桥面DN100泄水管及防水层接口 (1:10)", vb_scup.x(0.0), 154.0, height=2.15, align="CENTER")
     vb_scup.register(doc, msp, paper_bounds=(268.0, 152.0, 408.0, 256.0))
 
-    # 4. Bottom-Left: 1:35 Pier-Top Continuous Deck Link Detail + Debonded Strip + LX1 Rebar
-    vb_cont = ViewBox("deck_continuity_detail", 66.0, 92.0, 35.0, "mm")
+    # 4. Bottom-Left: 1:30 Pier-Top Continuous Deck Link Detail + Explicit 250+250=500 Debonded Strip Endpoints vs Beam Joint!
+    vb_cont = ViewBox("deck_continuity_detail", 68.0, 96.0, 30.0, "mm")
     msp.add_lwpolyline([vb_cont.pt(-1200.0, 0.0), vb_cont.pt(-20.0, 0.0), vb_cont.pt(-20.0, 200.0), vb_cont.pt(-1200.0, 200.0)], close=True, dxfattribs={"layer": "CONCRETE"})
     msp.add_lwpolyline([vb_cont.pt(20.0, 0.0), vb_cont.pt(1200.0, 0.0), vb_cont.pt(1200.0, 200.0), vb_cont.pt(20.0, 200.0)], close=True, dxfattribs={"layer": "CONCRETE"})
     msp.add_lwpolyline([vb_cont.pt(-1200.0, 200.0), vb_cont.pt(1200.0, 200.0), vb_cont.pt(1200.0, 280.0), vb_cont.pt(-1200.0, 280.0)], close=True, dxfattribs={"layer": "THIN"})
-    msp.add_line(vb_cont.pt(-250.0, 202.0), vb_cont.pt(250.0, 202.0), dxfattribs={"layer": "HIDDEN"})
+    msp.add_lwpolyline([vb_cont.pt(-1200.0, 280.0), vb_cont.pt(1200.0, 280.0), vb_cont.pt(1200.0, 380.0), vb_cont.pt(-1200.0, 380.0)], close=True, dxfattribs={"layer": "THIN"})
+    # Beam-end joint centerline (x = 0, gap = 40mm) + 500mm debonded strip [-250 .. +250] with explicit endpoint ticks!
+    msp.add_line((vb_cont.x(0.0), vb_cont.y(-90.0)), (vb_cont.x(0.0), vb_cont.y(410.0)), dxfattribs={"layer": "CENTER"})
+    msp.add_lwpolyline([vb_cont.pt(-250.0, 200.0), vb_cont.pt(250.0, 200.0), vb_cont.pt(250.0, 212.0), vb_cont.pt(-250.0, 212.0)], close=True, dxfattribs={"layer": "OUTLINE"})
+    for rx_db in (-250.0, 250.0):
+        msp.add_line(vb_cont.pt(rx_db, -20.0), vb_cont.pt(rx_db, 218.0), dxfattribs={"layer": "HIDDEN"})
     msp.add_line(vb_cont.pt(-1100.0, 245.0), vb_cont.pt(1100.0, 245.0), dxfattribs={"layer": "REBAR"})
-    draw_boxed_tag(msp, vb_cont.x(-550.0), vb_cont.y(280.0) + 11.0, "LX1", leader_to=vb_cont.pt(-420.0, 245.0), layer="REBAR")
-    add_civil_text(msp, "500宽无粘结隔离层", vb_cont.x(120.0), vb_cont.y(280.0) + 9.5, height=1.72, align="LEFT")
-    add_arch_dim(msp, vb_cont.pt(-1200.0, 280.0), vb_cont.pt(1200.0, 280.0), (vb_cont.x(0.0), vb_cont.y(280.0) + 19.5), "桥面连续段 2400")
-    add_civil_text(msp, "四、墩顶桥面连续构造 (1:35)", vb_cont.x(0.0), 74.0, height=2.15, align="CENTER")
-    vb_cont.register(doc, msp, paper_bounds=(24.0, 72.0, 108.0, 134.0))
+    draw_boxed_tag(msp, vb_cont.x(-720.0), vb_cont.y(380.0) + 8.5, "LX1", leader_to=vb_cont.pt(-560.0, 245.0), layer="REBAR")
+    add_civil_text(msp, "500宽无粘结隔离层(对称跨梁缝)", vb_cont.x(60.0), vb_cont.y(380.0) + 6.5, height=1.68, align="LEFT")
+    add_civil_text(msp, "梁端接缝(缝宽40)", vb_cont.x(0.0), vb_cont.y(0.0) - 18.2, height=1.68, align="CENTER")
+    add_arch_dim(msp, vb_cont.pt(-250.0, 0.0), vb_cont.pt(0.0, 0.0), (vb_cont.x(-125.0), vb_cont.y(0.0) - 5.5), "250")
+    add_arch_dim(msp, vb_cont.pt(0.0, 0.0), vb_cont.pt(250.0, 0.0), (vb_cont.x(125.0), vb_cont.y(0.0) - 5.5), "250")
+    add_arch_dim(msp, vb_cont.pt(-250.0, 0.0), vb_cont.pt(250.0, 0.0), (vb_cont.x(0.0), vb_cont.y(0.0) - 11.8), "无粘结层 500")
+    add_arch_dim(msp, vb_cont.pt(-1200.0, 380.0), vb_cont.pt(1200.0, 380.0), (vb_cont.x(0.0), vb_cont.y(380.0) + 16.0), "桥面连续段 2400")
+    add_civil_text(msp, "四、墩顶桥面连续构造 (1:30)", vb_cont.x(0.0), 68.5, height=2.10, align="CENTER")
+    vb_cont.register(doc, msp, paper_bounds=(24.0, 66.0, 114.0, 140.0))
 
-    # 5. Bottom-Center: 1:80 Abutment Corbel & 6.0m RC Approach Slab Detail (桥头搭板 + DB1/DB2)
-    vb_slab = ViewBox("approach_slab_detail", 128.0, 96.0, 80.0, "mm")
-    msp.add_lwpolyline([vb_slab.pt(-450.0, -550.0), vb_slab.pt(-250.0, -550.0), vb_slab.pt(-250.0, 300.0), vb_slab.pt(-450.0, 300.0)], close=True, dxfattribs={"layer": "CONCRETE"})
-    msp.add_lwpolyline([vb_slab.pt(-250.0, -350.0), vb_slab.pt(100.0, -350.0), vb_slab.pt(100.0, 0.0), vb_slab.pt(-250.0, 0.0)], close=True, dxfattribs={"layer": "CONCRETE"})
+    # 5. Bottom-Center Upper: 1:80 6.0m RC Approach Slab Longitudinal View + Detail I Callout Ring at Left Corbel!
+    vb_slab = ViewBox("approach_slab_detail", 136.0, 108.0, 80.0, "mm")
+    msp.add_lwpolyline([vb_slab.pt(-420.0, -520.0), vb_slab.pt(-220.0, -520.0), vb_slab.pt(-220.0, 300.0), vb_slab.pt(-420.0, 300.0)], close=True, dxfattribs={"layer": "CONCRETE"})
+    msp.add_lwpolyline([vb_slab.pt(-220.0, -350.0), vb_slab.pt(130.0, -200.0), vb_slab.pt(130.0, 0.0), vb_slab.pt(-220.0, 0.0)], close=True, dxfattribs={"layer": "CONCRETE"})
     msp.add_lwpolyline([vb_slab.pt(0.0, 0.0), vb_slab.pt(6000.0, 0.0), vb_slab.pt(6000.0, 300.0), vb_slab.pt(0.0, 300.0)], close=True, dxfattribs={"layer": "CONCRETE"})
-    msp.add_lwpolyline([vb_slab.pt(100.0, -150.0), vb_slab.pt(6000.0, -150.0), vb_slab.pt(6000.0, 0.0), vb_slab.pt(100.0, 0.0)], close=True, dxfattribs={"layer": "THIN"})
+    msp.add_lwpolyline([vb_slab.pt(130.0, -150.0), vb_slab.pt(6000.0, -150.0), vb_slab.pt(6000.0, 0.0), vb_slab.pt(130.0, 0.0)], close=True, dxfattribs={"layer": "THIN"})
     msp.add_line(vb_slab.pt(80.0, 55.0), vb_slab.pt(5920.0, 55.0), dxfattribs={"layer": "REBAR"})
     msp.add_line(vb_slab.pt(80.0, 245.0), vb_slab.pt(5920.0, 245.0), dxfattribs={"layer": "REBAR"})
-    msp.add_line(vb_slab.pt(-60.0, -260.0), vb_slab.pt(-60.0, 250.0), dxfattribs={"layer": "REBAR"})
-    draw_boxed_tag(msp, vb_slab.x(2600.0), vb_slab.y(300.0) + 10.5, "DB1", leader_to=vb_slab.pt(2600.0, 245.0), layer="REBAR")
-    draw_boxed_tag(msp, vb_slab.x(-60.0) + 10.0, vb_slab.y(-550.0) - 8.5, "DB2", leader_to=vb_slab.pt(-60.0, -180.0), layer="REBAR")
-    add_civil_text(msp, "150碎石垫层+牛腿油毛毡", vb_slab.x(3100.0), vb_slab.y(-150.0) - 6.0, height=1.72, align="CENTER")
-    add_arch_dim(msp, vb_slab.pt(0.0, 300.0), vb_slab.pt(6000.0, 300.0), (vb_slab.x(3000.0), vb_slab.y(300.0) + 19.0), "桥头搭板 6000")
-    add_arch_dim(msp, vb_slab.pt(6000.0, 0.0), vb_slab.pt(6000.0, 300.0), (vb_slab.x(6000.0) + 10.0, vb_slab.y(150.0)), "300", angle=90.0)
-    add_civil_text(msp, "五、桥头搭板及台背牛腿接口 (1:80)", vb_slab.x(2900.0), 74.0, height=2.15, align="CENTER")
-    vb_slab.register(doc, msp, paper_bounds=(114.0, 72.0, 214.0, 136.0))
+    msp.add_line(vb_slab.pt(65.0, -260.0), vb_slab.pt(65.0, 245.0), dxfattribs={"layer": "REBAR"})
+    draw_boxed_tag(msp, vb_slab.x(2800.0), vb_slab.y(300.0) + 9.5, "DB1", leader_to=vb_slab.pt(2800.0, 245.0), layer="REBAR")
+    draw_detail_callout(
+        msp,
+        vb_slab.x(20.0),
+        vb_slab.y(0.0),
+        4.2,
+        "I 牛腿(1:15)",
+        leader_to=(vb_slab.x(-380.0), vb_slab.y(300.0) + 8.5),
+    )
+    add_civil_text(msp, "150碎石垫层", vb_slab.x(3200.0), vb_slab.y(-150.0) - 5.2, height=1.68, align="CENTER")
+    add_arch_dim(msp, vb_slab.pt(0.0, 300.0), vb_slab.pt(6000.0, 300.0), (vb_slab.x(3000.0), vb_slab.y(300.0) + 17.5), "桥头搭板 6000")
+    add_arch_dim(msp, vb_slab.pt(6000.0, 0.0), vb_slab.pt(6000.0, 300.0), (vb_slab.x(6000.0) + 9.0, vb_slab.y(150.0)), "300", angle=90.0)
+    add_civil_text(msp, "五、桥头搭板纵断构造 (1:80)", vb_slab.x(2900.0), 90.0, height=2.10, align="CENTER")
+    vb_slab.register(doc, msp, paper_bounds=(122.0, 88.0, 224.0, 144.0))
+
+    # 6. Bottom-Center Lower: 1:15 Detail I — Enlarged Abutment Corbel Bearing & DB2 Anti-Slide Dowel Detail!
+    vb_cb = ViewBox("approach_corbel_detail", 156.0, 48.0, 15.0, "mm")
+    # Backwall stem [-380 .. -180] x [-400 .. +300] + Corbel [-180 .. +170] (350mm total corbel projection!)
+    msp.add_lwpolyline(
+        [
+            vb_cb.pt(-380.0, -400.0),
+            vb_cb.pt(-380.0, 300.0),
+            vb_cb.pt(-180.0, 300.0),
+            vb_cb.pt(-180.0, -20.0),
+            vb_cb.pt(170.0, -20.0),
+            vb_cb.pt(170.0, -180.0),
+            vb_cb.pt(-180.0, -360.0),
+            vb_cb.pt(-180.0, -400.0),
+        ],
+        close=False,
+        dxfattribs={"layer": "CONCRETE"},
+    )
+    # 20mm Asphalt felt bearing pad [0 .. 170] x [-20 .. 0] + 20mm joint filler [-20 .. 0] x [0 .. 300]
+    msp.add_lwpolyline([vb_cb.pt(0.0, -20.0), vb_cb.pt(170.0, -20.0), vb_cb.pt(170.0, 0.0), vb_cb.pt(0.0, 0.0)], close=True, dxfattribs={"layer": "THIN"})
+    msp.add_line(vb_cb.pt(-20.0, 0.0), vb_cb.pt(-20.0, 300.0), dxfattribs={"layer": "THIN"})
+    # Approach slab left end [0 .. 660] x [0 .. 300] + right break line
+    msp.add_lwpolyline(
+        [vb_cb.pt(660.0, 0.0), vb_cb.pt(0.0, 0.0), vb_cb.pt(0.0, 300.0), vb_cb.pt(660.0, 300.0)],
+        close=False,
+        dxfattribs={"layer": "CONCRETE"},
+    )
+    msp.add_line(vb_cb.pt(660.0, -35.0), vb_cb.pt(660.0, 335.0), dxfattribs={"layer": "THIN"})
+    # DB1 top & bottom slab bars with end hooks + Corbel inclined stirrup
+    msp.add_lwpolyline([vb_cb.pt(640.0, 245.0), vb_cb.pt(45.0, 245.0), vb_cb.pt(45.0, 175.0)], close=False, dxfattribs={"layer": "REBAR"})
+    msp.add_lwpolyline([vb_cb.pt(640.0, 55.0), vb_cb.pt(45.0, 55.0), vb_cb.pt(45.0, 125.0)], close=False, dxfattribs={"layer": "REBAR"})
+    msp.add_lwpolyline([vb_cb.pt(-310.0, -40.0), vb_cb.pt(135.0, -40.0), vb_cb.pt(135.0, -155.0), vb_cb.pt(-240.0, -320.0)], close=False, dxfattribs={"layer": "REBAR_STIRRUP"})
+    # Prominent DB2 Φ22 vertical dowel anchor bar at x = +85mm (anchored 280mm into corbel, extending +240mm into slab!)
+    msp.add_lwpolyline(
+        [vb_cb.pt(155.0, -280.0), vb_cb.pt(85.0, -280.0), vb_cb.pt(85.0, 240.0)],
+        close=False,
+        dxfattribs={"layer": "REBAR"},
+    )
+    # DB2 leader tip lands squarely on the DB2 vertical dowel bar!
+    draw_boxed_tag(msp, vb_cb.x(430.0), vb_cb.y(-165.0), "DB2", leader_to=vb_cb.pt(85.0, -110.0), layer="REBAR")
+    add_civil_text(msp, "20油毛毡垫层+沥青麻絮", vb_cb.x(200.0), vb_cb.y(-80.0), height=1.65, align="LEFT")
+    add_arch_dim(msp, vb_cb.pt(-180.0, -20.0), vb_cb.pt(170.0, -20.0), (vb_cb.x(-5.0), vb_cb.y(300.0) + 5.5), "牛腿宽 350")
+    add_arch_dim(msp, vb_cb.pt(-380.0, -280.0), vb_cb.pt(-380.0, 0.0), (vb_cb.x(-380.0) - 5.5, vb_cb.y(-140.0)), "锚入 280", angle=90.0)
+    add_civil_text(msp, "六、I 台背牛腿支承及DB2锚栓放大图 (1:15)", vb_cb.x(140.0), 15.5, height=2.05, align="CENTER")
+    vb_cb.register(doc, msp, paper_bounds=(120.0, 14.0, 224.0, 84.0))
 
     draw_rebar_schedule_table(
         doc,
@@ -2109,12 +2601,16 @@ def _draw_pier_and_abutment(spec: dict[str, Any]) -> ezdxf.document.Drawing:
     is_abutment = variant == "abutment"
     is_wenchang = str(spec.get("preset", "")).strip().lower() == "wenchang"
     cap_len_mm = float(spec.get("cap_length_mm", (9000.0 if is_abutment else 8800.0) if is_wenchang else (11750.0 if is_abutment else 10950.0)))
-    cap_h_mm = float(spec.get("cap_height_mm", 1400.0 if is_wenchang else 1500.0))
+    cap_h_mm = float(spec.get("cap_height_mm", 1400.0 if is_wenchang else (1400.0 if is_abutment else 1500.0)))
     cap_w_mm = float(spec.get("cap_width_mm", 1800.0 if is_abutment else (1600.0 if is_wenchang else 1700.0)))
     col_spacing_mm = float(spec.get("column_spacing_mm", (5400.0 if is_abutment else 5200.0) if is_wenchang else (6800.0 if is_abutment else 6650.0)))
-    col_d_mm = float(spec.get("column_diameter_mm", 1400.0 if is_abutment else 1200.0))
-    col_h_mm = float(spec.get("column_height_mm", 4200.0 if is_abutment else 5500.0))
+    col_d_mm = float(spec.get("column_diameter_mm", 1200.0))
+    col_h_mm = float(spec.get("column_height_mm", 5500.0))
+    tie_h_mm = float(spec.get("tie_beam_height_mm", 1200.0))
     pile_d_mm = float(spec.get("pile_diameter_mm", 1400.0))
+    bw_thk_mm = float(spec.get("backwall_thick_mm", 550.0))
+    bw_h_mm = float(spec.get("backwall_height_mm", 1750.0))
+    ew_len_mm = float(spec.get("earwall_length_mm", 2000.0))
     n_pedestals = int(spec.get("n_pedestals", 5))
     ped_spacing_mm = float(spec.get("pedestal_spacing_mm", 1950.0 if is_wenchang else 2348.0))
     bearing_model = str(spec.get("bearing_model", "GJZ 300×400×74" if is_wenchang else "GJZ 300×450×85"))
@@ -2125,97 +2621,185 @@ def _draw_pier_and_abutment(spec: dict[str, Any]) -> ezdxf.document.Drawing:
         sheet_size=str(spec.get("sheet_size", "A3")),
         title=str(spec.get("title", default_title)),
         project=str(spec.get("project", "4×25m 预应力混凝土简支T梁桥")),
-        drawing_no=str(spec.get("drawing_no", "QL-05" if is_abutment else "QL-04")),
+        drawing_no=str(spec.get("drawing_no", "QL-15" if is_abutment else "QL-14")),
         unit_note="mm",
         scale_label="1:80",
         style_overrides=_resolve_style_overrides(spec),
     )
 
-    # 1. Left: Front Elevation in true 1:80 ViewBox (with real 2% cap-beam roof cross-slope!)
-    vb_el = ViewBox("substructure_elev", 108.0, 224.0, 80.0, "mm")
     half_cap = 0.5 * cap_len_mm
     edge_drop = half_cap * slope
-    overhang = 0.5 * (cap_len_mm - col_spacing_mm - col_d_mm)
-    haunch_rise = 0.32 * cap_h_mm
-
-    cap_pts = [
-        vb_el.pt(-half_cap, -edge_drop),
-        vb_el.pt(0.0, 0.0),
-        vb_el.pt(half_cap, -edge_drop),
-        vb_el.pt(half_cap, -cap_h_mm + haunch_rise),
-        vb_el.pt(half_cap - overhang, -cap_h_mm),
-        vb_el.pt(-half_cap + overhang, -cap_h_mm),
-        vb_el.pt(-half_cap, -cap_h_mm + haunch_rise),
-    ]
-    msp.add_lwpolyline(cap_pts, close=True, dxfattribs={"layer": "OUTLINE"})
-
-    for i in range(n_pedestals):
-        rxp = (i - 0.5 * (n_pedestals - 1)) * ped_spacing_mm
-        ry_top = -abs(rxp) * slope
-        msp.add_lwpolyline(
-            [vb_el.pt(rxp - 200.0, ry_top), vb_el.pt(rxp + 200.0, ry_top), vb_el.pt(rxp + 200.0, ry_top + 150.0), vb_el.pt(rxp - 200.0, ry_top + 150.0)],
-            close=True,
-            dxfattribs={"layer": "OUTLINE"},
-        )
-
-    draw_slope_arrow(msp, vb_el.x(-0.48 * half_cap), vb_el.y(0.0) + 5.5, slope_text="2%", direction="left")
-    draw_slope_arrow(msp, vb_el.x(0.48 * half_cap), vb_el.y(0.0) + 5.5, slope_text="2%", direction="right")
-
-    ry_col_top = -cap_h_mm
-    ry_col_bot = ry_col_top - col_h_mm
-    ry_pile_top = ry_col_bot - 400.0
-    ry_pile_bot = ry_pile_top - 3200.0
-    for rxc in (-0.5 * col_spacing_mm, 0.5 * col_spacing_mm):
-        msp.add_lwpolyline(
-            [vb_el.pt(rxc - 0.5 * col_d_mm, ry_col_bot), vb_el.pt(rxc + 0.5 * col_d_mm, ry_col_bot), vb_el.pt(rxc + 0.5 * col_d_mm, ry_col_top), vb_el.pt(rxc - 0.5 * col_d_mm, ry_col_top)],
-            close=True,
-            dxfattribs={"layer": "OUTLINE"},
-        )
-        msp.add_lwpolyline(
-            [vb_el.pt(rxc - 0.6 * pile_d_mm, ry_pile_top), vb_el.pt(rxc + 0.6 * pile_d_mm, ry_pile_top), vb_el.pt(rxc + 0.6 * pile_d_mm, ry_col_bot), vb_el.pt(rxc - 0.6 * pile_d_mm, ry_col_bot)],
-            close=True,
-            dxfattribs={"layer": "OUTLINE"},
-        )
-        msp.add_line(vb_el.pt(rxc - 0.5 * pile_d_mm, ry_pile_top), vb_el.pt(rxc - 0.5 * pile_d_mm, ry_pile_bot), dxfattribs={"layer": "OUTLINE"})
-        msp.add_line(vb_el.pt(rxc + 0.5 * pile_d_mm, ry_pile_top), vb_el.pt(rxc + 0.5 * pile_d_mm, ry_pile_bot), dxfattribs={"layer": "OUTLINE"})
-        draw_pile_s_break(msp, vb_el.x(rxc), vb_el.y(ry_pile_bot), vb_el.span(pile_d_mm))
-        msp.add_line((vb_el.x(rxc), vb_el.y(0.0) + 10.0), (vb_el.x(rxc), vb_el.y(ry_pile_bot) - 5.0), dxfattribs={"layer": "CENTER"})
-
-    msp.add_lwpolyline(
-        [
-            vb_el.pt(-0.5 * col_spacing_mm + 0.6 * pile_d_mm, ry_col_bot - 360.0),
-            vb_el.pt(0.5 * col_spacing_mm - 0.6 * pile_d_mm, ry_col_bot - 360.0),
-            vb_el.pt(0.5 * col_spacing_mm - 0.6 * pile_d_mm, ry_col_bot - 40.0),
-            vb_el.pt(-0.5 * col_spacing_mm + 0.6 * pile_d_mm, ry_col_bot - 40.0),
-        ],
-        close=True,
-        dxfattribs={"layer": "OUTLINE"},
-    )
-    draw_ground_line(msp, vb_el.x(-half_cap) - 6.0, vb_el.y(ry_col_bot) + 5.0, vb_el.x(half_cap) + 6.0, vb_el.y(ry_col_bot) + 5.0, label="地面线", scale=0.85)
-
-    cap_label = "台帽长" if is_abutment else "盖梁长"
-    sp_label = "桩距" if is_abutment else "墩距"
-    add_arch_dim(msp, (vb_el.x(-half_cap), vb_el.y(0.0)), (vb_el.x(half_cap), vb_el.y(0.0)), (vb_el.x(0.0), vb_el.y(0.0) + 15.0), f"{cap_label} {cap_len_mm:g}")
-    add_arch_dim(msp, vb_el.pt(-0.5 * col_spacing_mm, ry_col_bot), vb_el.pt(0.5 * col_spacing_mm, ry_col_bot), (vb_el.x(0.0), vb_el.y(ry_col_bot) - 10.0), f"{sp_label} {col_spacing_mm:g}")
-    add_arch_dim(msp, (vb_el.x(half_cap), vb_el.y(ry_col_top)), (vb_el.x(half_cap), vb_el.y(0.0)), (vb_el.x(half_cap) + 8.5, vb_el.y(0.5 * ry_col_top)), f"{cap_h_mm:g}", angle=90.0)
-    add_civil_text(msp, "桥台立面图 (1:80)" if is_abutment else "桥墩立面图 (1:80)", vb_el.x(0.0), 50.0, height=2.8, align="CENTER")
-    vb_el.register(doc, msp, paper_bounds=(vb_el.x(-half_cap) - 10.0, 56.0, vb_el.x(half_cap) + 14.0, vb_el.y(0.0) + 20.0))
-
-    # 2. Center: Side View in true 1:80 ViewBox
-    vb_sd = ViewBox("substructure_side", 224.0, 224.0, 80.0, "mm")
     half_cw = 0.5 * cap_w_mm
-    msp.add_lwpolyline([vb_sd.pt(-half_cw, ry_col_top), vb_sd.pt(half_cw, ry_col_top), vb_sd.pt(half_cw, 0.0), vb_sd.pt(-half_cw, 0.0)], close=True, dxfattribs={"layer": "OUTLINE"})
-    if is_abutment:
-        bw_mm = 0.35 * cap_w_mm
-        msp.add_lwpolyline([vb_sd.pt(-half_cw, 0.0), vb_sd.pt(-half_cw + bw_mm, 0.0), vb_sd.pt(-half_cw + bw_mm, 1750.0), vb_sd.pt(-half_cw, 1750.0)], close=True, dxfattribs={"layer": "OUTLINE"})
-        msp.add_lwpolyline([vb_sd.pt(-half_cw - 1100.0, ry_col_top + 300.0), vb_sd.pt(-half_cw, ry_col_top + 300.0), vb_sd.pt(-half_cw, 1750.0), vb_sd.pt(-half_cw - 1100.0, 1750.0)], close=True, dxfattribs={"layer": "HIDDEN"})
-    msp.add_lwpolyline([vb_sd.pt(-0.5 * col_d_mm, ry_col_bot), vb_sd.pt(0.5 * col_d_mm, ry_col_bot), vb_sd.pt(0.5 * col_d_mm, ry_col_top), vb_sd.pt(-0.5 * col_d_mm, ry_col_top)], close=True, dxfattribs={"layer": "OUTLINE"})
-    msp.add_line(vb_sd.pt(-0.5 * pile_d_mm, ry_col_bot), vb_sd.pt(-0.5 * pile_d_mm, ry_pile_bot), dxfattribs={"layer": "OUTLINE"})
-    msp.add_line(vb_sd.pt(0.5 * pile_d_mm, ry_col_bot), vb_sd.pt(0.5 * pile_d_mm, ry_pile_bot), dxfattribs={"layer": "OUTLINE"})
-    draw_pile_s_break(msp, vb_sd.x(0.0), vb_sd.y(ry_pile_bot), vb_sd.span(pile_d_mm))
-    add_arch_dim(msp, vb_sd.pt(-half_cw, 0.0), vb_sd.pt(half_cw, 0.0), (vb_sd.x(0.0), vb_sd.y(0.0) + (26.0 if is_abutment else 15.0)), f"{cap_w_mm:g}")
-    add_civil_text(msp, "桥台侧面图 (1:80)" if is_abutment else "桥墩侧面图 (1:80)", vb_sd.x(0.0), 50.0, height=2.8, align="CENTER")
-    vb_sd.register(doc, msp, paper_bounds=(192.0, 56.0, 266.0, 256.0))
+
+    if not is_abutment:
+        # ---- QL-14: Double-Column Pier + 1200mm Pile-Top Tie Beam + Bored Piles (100% consistent with QL-16 & QL-17!) ----
+        vb_el = ViewBox("substructure_elev", 102.0, 234.0, 80.0, "mm")
+        overhang = max(200.0, 0.5 * (cap_len_mm - col_spacing_mm - col_d_mm))
+        haunch_rise = 0.32 * cap_h_mm
+        cap_pts = [
+            vb_el.pt(-half_cap, -edge_drop),
+            vb_el.pt(0.0, 0.0),
+            vb_el.pt(half_cap, -edge_drop),
+            vb_el.pt(half_cap, -cap_h_mm + haunch_rise),
+            vb_el.pt(half_cap - overhang, -cap_h_mm),
+            vb_el.pt(-half_cap + overhang, -cap_h_mm),
+            vb_el.pt(-half_cap, -cap_h_mm + haunch_rise),
+        ]
+        msp.add_lwpolyline(cap_pts, close=True, dxfattribs={"layer": "OUTLINE"})
+        for i in range(n_pedestals):
+            rxp = (i - 0.5 * (n_pedestals - 1)) * ped_spacing_mm
+            ry_top = -abs(rxp) * slope
+            msp.add_lwpolyline(
+                [vb_el.pt(rxp - 250.0, ry_top), vb_el.pt(rxp + 250.0, ry_top), vb_el.pt(rxp + 250.0, ry_top + 150.0), vb_el.pt(rxp - 250.0, ry_top + 150.0)],
+                close=True,
+                dxfattribs={"layer": "OUTLINE"},
+            )
+        draw_slope_arrow(msp, vb_el.x(-0.48 * half_cap), vb_el.y(0.0) + 5.2, slope_text="2%", direction="left")
+        draw_slope_arrow(msp, vb_el.x(0.48 * half_cap), vb_el.y(0.0) + 5.2, slope_text="2%", direction="right")
+
+        ry_col_top = -cap_h_mm
+        ry_col_bot = ry_col_top - col_h_mm
+        ry_pile_top = ry_col_bot - tie_h_mm
+        ry_pile_bot = ry_pile_top - 3000.0
+        collar_hw = 0.5 * pile_d_mm + 150.0
+        for rxc in (-0.5 * col_spacing_mm, 0.5 * col_spacing_mm):
+            msp.add_lwpolyline(
+                [vb_el.pt(rxc - 0.5 * col_d_mm, ry_col_bot), vb_el.pt(rxc + 0.5 * col_d_mm, ry_col_bot), vb_el.pt(rxc + 0.5 * col_d_mm, ry_col_top), vb_el.pt(rxc - 0.5 * col_d_mm, ry_col_top)],
+                close=True,
+                dxfattribs={"layer": "OUTLINE"},
+            )
+            msp.add_line(vb_el.pt(rxc - 0.5 * pile_d_mm, ry_pile_top), vb_el.pt(rxc - 0.5 * pile_d_mm, ry_pile_bot), dxfattribs={"layer": "OUTLINE"})
+            msp.add_line(vb_el.pt(rxc + 0.5 * pile_d_mm, ry_pile_top), vb_el.pt(rxc + 0.5 * pile_d_mm, ry_pile_bot), dxfattribs={"layer": "OUTLINE"})
+            draw_pile_s_break(msp, vb_el.x(rxc), vb_el.y(ry_pile_bot), vb_el.span(pile_d_mm))
+            msp.add_line((vb_el.x(rxc), vb_el.y(0.0) + 8.0), (vb_el.x(rxc), vb_el.y(ry_pile_bot) - 4.5), dxfattribs={"layer": "CENTER"})
+
+        # Full-depth 1200mm Pile-Top Tie Beam + Collars connecting both columns & piles!
+        msp.add_lwpolyline(
+            [
+                vb_el.pt(-0.5 * col_spacing_mm - collar_hw, ry_pile_top),
+                vb_el.pt(0.5 * col_spacing_mm + collar_hw, ry_pile_top),
+                vb_el.pt(0.5 * col_spacing_mm + collar_hw, ry_col_bot),
+                vb_el.pt(-0.5 * col_spacing_mm - collar_hw, ry_col_bot),
+            ],
+            close=True,
+            dxfattribs={"layer": "OUTLINE"},
+        )
+        draw_ground_line(msp, vb_el.x(-half_cap) - 4.0, vb_el.y(ry_col_bot) + 4.0, vb_el.x(-half_cap) + 18.0, vb_el.y(ry_col_bot) + 4.0, label="地面线", scale=0.82)
+
+        add_arch_dim(msp, (vb_el.x(-half_cap), vb_el.y(0.0)), (vb_el.x(half_cap), vb_el.y(0.0)), (vb_el.x(0.0), vb_el.y(0.0) + 13.5), f"盖梁长 {cap_len_mm:g}")
+        add_arch_dim(msp, vb_el.pt(-0.5 * col_spacing_mm, ry_col_top), vb_el.pt(0.5 * col_spacing_mm, ry_col_top), (vb_el.x(0.0), vb_el.y(ry_col_top) - 7.5), f"墩距 {col_spacing_mm:g}")
+        add_arch_dim(msp, vb_el.pt(-0.5 * col_spacing_mm - 0.5 * col_d_mm, ry_col_bot + 1600.0), vb_el.pt(-0.5 * col_spacing_mm + 0.5 * col_d_mm, ry_col_bot + 1600.0), (vb_el.x(-0.5 * col_spacing_mm), vb_el.y(ry_col_bot + 1600.0) + 6.0), f"墩径 {col_d_mm:g}")
+        add_arch_dim(msp, vb_el.pt(-0.5 * col_spacing_mm - 0.5 * pile_d_mm, ry_pile_bot), vb_el.pt(-0.5 * col_spacing_mm + 0.5 * pile_d_mm, ry_pile_bot), (vb_el.x(-0.5 * col_spacing_mm), vb_el.y(ry_pile_bot) - 9.5), f"桩径 {pile_d_mm:g}")
+        x_r_dim = vb_el.x(half_cap) + 7.5
+        add_arch_dim(msp, (vb_el.x(half_cap), vb_el.y(ry_col_top)), (vb_el.x(half_cap), vb_el.y(0.0)), (x_r_dim, vb_el.y(0.5 * ry_col_top)), f"{cap_h_mm:g}", angle=90.0)
+        add_arch_dim(msp, vb_el.pt(0.5 * col_spacing_mm + 0.5 * col_d_mm, ry_col_bot), vb_el.pt(0.5 * col_spacing_mm + 0.5 * col_d_mm, ry_col_top), (x_r_dim, vb_el.y(0.5 * (ry_col_bot + ry_col_top))), f"墩高 {col_h_mm:g}", angle=90.0)
+        add_arch_dim(msp, vb_el.pt(0.5 * col_spacing_mm + collar_hw, ry_pile_top), vb_el.pt(0.5 * col_spacing_mm + collar_hw, ry_col_bot), (x_r_dim, vb_el.y(0.5 * (ry_pile_top + ry_col_bot))), f"系梁 {tie_h_mm:g}", angle=90.0)
+        add_civil_text(msp, "双柱墩正立面图 (1:80)", vb_el.x(0.0), 48.0, height=2.5, align="CENTER")
+        vb_el.register(doc, msp, paper_bounds=(vb_el.x(-half_cap) - 8.0, 52.0, x_r_dim + 6.0, vb_el.y(0.0) + 18.0))
+
+        # Side View (1:80)
+        vb_sd = ViewBox("substructure_side", 236.0, 234.0, 80.0, "mm")
+        msp.add_lwpolyline([vb_sd.pt(-half_cw, ry_col_top), vb_sd.pt(half_cw, ry_col_top), vb_sd.pt(half_cw, 0.0), vb_sd.pt(-half_cw, 0.0)], close=True, dxfattribs={"layer": "OUTLINE"})
+        msp.add_lwpolyline([vb_sd.pt(-0.5 * col_d_mm, ry_col_bot), vb_sd.pt(0.5 * col_d_mm, ry_col_bot), vb_sd.pt(0.5 * col_d_mm, ry_col_top), vb_sd.pt(-0.5 * col_d_mm, ry_col_top)], close=True, dxfattribs={"layer": "OUTLINE"})
+        msp.add_lwpolyline([vb_sd.pt(-collar_hw, ry_pile_top), vb_sd.pt(collar_hw, ry_pile_top), vb_sd.pt(collar_hw, ry_col_bot), vb_sd.pt(-collar_hw, ry_col_bot)], close=True, dxfattribs={"layer": "OUTLINE"})
+        msp.add_line(vb_sd.pt(-0.5 * pile_d_mm, ry_pile_top), vb_sd.pt(-0.5 * pile_d_mm, ry_pile_bot), dxfattribs={"layer": "OUTLINE"})
+        msp.add_line(vb_sd.pt(0.5 * pile_d_mm, ry_pile_top), vb_sd.pt(0.5 * pile_d_mm, ry_pile_bot), dxfattribs={"layer": "OUTLINE"})
+        draw_pile_s_break(msp, vb_sd.x(0.0), vb_sd.y(ry_pile_bot), vb_sd.span(pile_d_mm))
+        add_arch_dim(msp, vb_sd.pt(-half_cw, 0.0), vb_sd.pt(half_cw, 0.0), (vb_sd.x(0.0), vb_sd.y(0.0) + 13.5), f"盖梁宽 {cap_w_mm:g}")
+        add_civil_text(msp, "桥墩侧面图 (1:80)", vb_sd.x(0.0), 48.0, height=2.5, align="CENTER")
+        vb_sd.register(doc, msp, paper_bounds=(204.0, 52.0, 268.0, 254.0))
+
+    else:
+        # ---- QL-15: Pile-Cap Abutment + 550 Backwall + 2000 Earwalls + Direct Φ1400 Piles (100% consistent with QL-18!) ----
+        vb_el = ViewBox("substructure_elev", 102.0, 206.0, 80.0, "mm")
+        # Cap with real 2% bridge-seat cross-slope (y in [-cap_h_mm .. 0]) + Backwall/Earwalls behind [0 .. +bw_h_mm]
+        cap_pts = [
+            vb_el.pt(-half_cap, -edge_drop),
+            vb_el.pt(0.0, 0.0),
+            vb_el.pt(half_cap, -edge_drop),
+            vb_el.pt(half_cap, -cap_h_mm),
+            vb_el.pt(-half_cap, -cap_h_mm),
+        ]
+        msp.add_lwpolyline(cap_pts, close=True, dxfattribs={"layer": "OUTLINE"})
+        msp.add_lwpolyline(
+            [
+                vb_el.pt(-half_cap, -edge_drop),
+                vb_el.pt(-half_cap, bw_h_mm - edge_drop),
+                vb_el.pt(0.0, bw_h_mm),
+                vb_el.pt(half_cap, bw_h_mm - edge_drop),
+                vb_el.pt(half_cap, -edge_drop),
+            ],
+            close=False,
+            dxfattribs={"layer": "THIN"},
+        )
+        # Inner earwall vertical edge lines at ±(half_cap - 450)
+        for sx_ew in (-1.0, 1.0):
+            rx_ew = sx_ew * (half_cap - 450.0)
+            msp.add_line(vb_el.pt(rx_ew, -abs(rx_ew) * slope), vb_el.pt(rx_ew, bw_h_mm - abs(rx_ew) * slope), dxfattribs={"layer": "HIDDEN"})
+        for i in range(n_pedestals):
+            rxp = (i - 0.5 * (n_pedestals - 1)) * ped_spacing_mm
+            ry_top = -abs(rxp) * slope
+            msp.add_lwpolyline(
+                [vb_el.pt(rxp - 250.0, ry_top), vb_el.pt(rxp + 250.0, ry_top), vb_el.pt(rxp + 250.0, ry_top + 150.0), vb_el.pt(rxp - 250.0, ry_top + 150.0)],
+                close=True,
+                dxfattribs={"layer": "OUTLINE"},
+            )
+        draw_slope_arrow(msp, vb_el.x(-0.48 * half_cap), vb_el.y(0.0) + 5.2, slope_text="2%", direction="left")
+        draw_slope_arrow(msp, vb_el.x(0.48 * half_cap), vb_el.y(0.0) + 5.2, slope_text="2%", direction="right")
+
+        # Twin Φ1400 Bored Piles connecting directly into bottom of 1400mm Abutment Cap!
+        ry_cap_bot = -cap_h_mm
+        ry_pile_bot = ry_cap_bot - 4600.0
+        for rxc in (-0.5 * col_spacing_mm, 0.5 * col_spacing_mm):
+            msp.add_line(vb_el.pt(rxc - 0.5 * pile_d_mm, ry_cap_bot), vb_el.pt(rxc - 0.5 * pile_d_mm, ry_pile_bot), dxfattribs={"layer": "OUTLINE"})
+            msp.add_line(vb_el.pt(rxc + 0.5 * pile_d_mm, ry_cap_bot), vb_el.pt(rxc + 0.5 * pile_d_mm, ry_pile_bot), dxfattribs={"layer": "OUTLINE"})
+            draw_pile_s_break(msp, vb_el.x(rxc), vb_el.y(ry_pile_bot), vb_el.span(pile_d_mm))
+            msp.add_line((vb_el.x(rxc), vb_el.y(bw_h_mm) + 4.0), (vb_el.x(rxc), vb_el.y(ry_pile_bot) - 4.5), dxfattribs={"layer": "CENTER"})
+
+        draw_ground_line(msp, vb_el.x(-half_cap) - 4.0, vb_el.y(ry_cap_bot) + 3.0, vb_el.x(-half_cap) + 18.0, vb_el.y(ry_cap_bot) + 3.0, label="地面线", scale=0.82)
+        add_arch_dim(msp, (vb_el.x(-half_cap), vb_el.y(bw_h_mm)), (vb_el.x(half_cap), vb_el.y(bw_h_mm)), (vb_el.x(0.0), vb_el.y(bw_h_mm) + 8.5), f"台帽长 {cap_len_mm:g}")
+        add_arch_dim(msp, vb_el.pt(-0.5 * col_spacing_mm, ry_cap_bot - 1400.0), vb_el.pt(0.5 * col_spacing_mm, ry_cap_bot - 1400.0), (vb_el.x(0.0), vb_el.y(ry_cap_bot - 1400.0) - 6.0), f"桩距 {col_spacing_mm:g}")
+        add_arch_dim(msp, vb_el.pt(-0.5 * col_spacing_mm - 0.5 * pile_d_mm, ry_pile_bot), vb_el.pt(-0.5 * col_spacing_mm + 0.5 * pile_d_mm, ry_pile_bot), (vb_el.x(-0.5 * col_spacing_mm), vb_el.y(ry_pile_bot) - 9.5), f"桩径 {pile_d_mm:g}")
+        x_r_ab = vb_el.x(half_cap) + 7.5
+        add_arch_dim(msp, (vb_el.x(half_cap), vb_el.y(ry_cap_bot)), (vb_el.x(half_cap), vb_el.y(0.0)), (x_r_ab, vb_el.y(-0.5 * cap_h_mm)), f"{cap_h_mm:g}", angle=90.0)
+        add_arch_dim(msp, (vb_el.x(half_cap), vb_el.y(0.0)), (vb_el.x(half_cap), vb_el.y(bw_h_mm)), (x_r_ab, vb_el.y(0.5 * bw_h_mm)), f"背墙 {bw_h_mm:g}", angle=90.0)
+        add_civil_text(msp, "桥台正立面图 (1:80)", vb_el.x(0.0), 114.0, height=2.5, align="CENTER")
+        vb_el.register(doc, msp, paper_bounds=(vb_el.x(-half_cap) - 8.0, 112.0, x_r_ab + 6.0, vb_el.y(bw_h_mm) + 14.0))
+
+        # Side View (1:80): Cap 1800×1400 + Backwall 550×1750 + Corbel + Earwall 2000 + Direct Pile Φ1400!
+        vb_sd = ViewBox("substructure_side", 242.0, 206.0, 80.0, "mm")
+        msp.add_lwpolyline([vb_sd.pt(-half_cw, ry_cap_bot), vb_sd.pt(half_cw, ry_cap_bot), vb_sd.pt(half_cw, 0.0), vb_sd.pt(-half_cw, 0.0)], close=True, dxfattribs={"layer": "OUTLINE"})
+        # Backwall (550×1750) + approach corbel (-300) + Bearing pedestal (+500×150)
+        msp.add_lwpolyline(
+            [
+                vb_sd.pt(-half_cw, 0.0),
+                vb_sd.pt(-half_cw + bw_thk_mm, 0.0),
+                vb_sd.pt(-half_cw + bw_thk_mm, bw_h_mm),
+                vb_sd.pt(-half_cw, bw_h_mm),
+                vb_sd.pt(-half_cw, bw_h_mm - 300.0),
+                vb_sd.pt(-half_cw - 300.0, bw_h_mm - 300.0),
+                vb_sd.pt(-half_cw - 300.0, bw_h_mm - 750.0),
+                vb_sd.pt(-half_cw, bw_h_mm - 950.0),
+            ],
+            close=True,
+            dxfattribs={"layer": "OUTLINE"},
+        )
+        # Earwall extending 2000mm toward embankment (-half_cw - ew_len_mm .. -half_cw)
+        msp.add_lwpolyline(
+            [vb_sd.pt(-half_cw - ew_len_mm, 250.0), vb_sd.pt(-half_cw, -350.0), vb_sd.pt(-half_cw, bw_h_mm), vb_sd.pt(-half_cw - ew_len_mm, bw_h_mm)],
+            close=True,
+            dxfattribs={"layer": "HIDDEN"},
+        )
+        msp.add_lwpolyline([vb_sd.pt(80.0, 0.0), vb_sd.pt(580.0, 0.0), vb_sd.pt(580.0, 150.0), vb_sd.pt(80.0, 150.0)], close=True, dxfattribs={"layer": "OUTLINE"})
+        msp.add_line(vb_sd.pt(-0.5 * pile_d_mm, ry_cap_bot), vb_sd.pt(-0.5 * pile_d_mm, ry_pile_bot), dxfattribs={"layer": "OUTLINE"})
+        msp.add_line(vb_sd.pt(0.5 * pile_d_mm, ry_cap_bot), vb_sd.pt(0.5 * pile_d_mm, ry_pile_bot), dxfattribs={"layer": "OUTLINE"})
+        draw_pile_s_break(msp, vb_sd.x(0.0), vb_sd.y(ry_pile_bot), vb_sd.span(pile_d_mm))
+
+        add_arch_dim(msp, vb_sd.pt(-half_cw, ry_cap_bot), vb_sd.pt(half_cw, ry_cap_bot), (vb_sd.x(0.0), vb_sd.y(ry_cap_bot) - 6.5), f"台帽宽 {cap_w_mm:g}")
+        add_arch_dim(msp, vb_sd.pt(-half_cw, bw_h_mm), vb_sd.pt(-half_cw + bw_thk_mm, bw_h_mm), (vb_sd.x(-half_cw + 0.5 * bw_thk_mm), vb_sd.y(bw_h_mm) + 6.5), f"{bw_thk_mm:g}")
+        add_arch_dim(msp, vb_sd.pt(-half_cw - ew_len_mm, bw_h_mm), vb_sd.pt(-half_cw, bw_h_mm), (vb_sd.x(-half_cw - 0.5 * ew_len_mm), vb_sd.y(bw_h_mm) + 6.5), f"耳墙 {ew_len_mm:g}")
+        add_civil_text(msp, "桥台侧面图 (1:80)", vb_sd.x(-400.0), 114.0, height=2.5, align="CENTER")
+        vb_sd.register(doc, msp, paper_bounds=(198.0, 112.0, 272.0, 252.0))
 
     # 3. Right: Bearing Layout Plan
     bx0, by0, bw, bh = 282.0, 96.0, 118.0, 134.0
@@ -2254,30 +2838,73 @@ def _draw_notes_and_boq(spec: dict[str, Any]) -> ezdxf.document.Drawing:
             scale_label="无比例",
             style_overrides=_resolve_style_overrides(spec),
         )
-        notes = [
-            f"一、工程概况：{ps['project_name']}，跨径布置 {ps['n_spans']}×{ps['standard_span_m']:g}m，计算跨径 {ps['calc_span_m']:g}m；",
-            f"二、横断面标准：桥面全宽 {ps['deck_width_m']*1000:g}mm，护栏内净宽 {ps['clear_width_m']*1000:g}mm，行车道宽 {ps['roadway_width_m']*1000:g}mm，双向横坡 {ps['cross_slope_pct']:g}%；",
-            f"三、桥面铺装：{ps.get('asphalt_thick_mm', 100):g}mm 密级配沥青混凝土 + 防水粘结层 + {ps.get('concrete_paving_thick_mm', 80):g}mm C40混凝土调平层；",
-            "四、主要材料：预制T梁采用 C50 混凝土，预应力钢束采用 Φs15.2 (fpk=1860MPa)；墩台盖梁、桥头搭板及水下桩基采用 C30 混凝土；普通钢筋 HRB400 / HPB300；",
-            "五、设计规范：《公路工程技术标准》(JTG B01-2014)、《公路桥涵设计通用规范》(JTG D60-2015)、《公路钢筋混凝土及预应力混凝土桥涵设计规范》(JTG 3362-2018)、《公路桥涵地基与基础设计规范》(JTG 3363-2019)；",
-            "六、图册构成：QL-01~QL-18 共 18 张 A3 施工图，完整覆盖总体布置、T梁构造、预应力束、上下部普通钢筋、支座、桥面附属（护栏/连续段/D80伸缩缝/泄水管/搭板）及工程量表。",
+        raw_paragraphs = [
+            f"一、工程概况：{ps['project_name']}，跨径布置 {ps['n_spans']}×{ps['standard_span_m']:g}m，计算跨径 {ps['calc_span_m']:g}m，预制梁长 {ps['beam_length_m']:g}m。",
+            f"二、横断面标准：桥面全宽 {ps['deck_width_m']*1000:g}mm，护栏内净宽 {ps['clear_width_m']*1000:g}mm，行车道宽 {ps['roadway_width_m']*1000:g}mm，双向桥面横坡 {ps['cross_slope_pct']:g}%。",
+            f"三、桥面铺装与防水：{ps.get('asphalt_thick_mm', 100):g}mm 密级配沥青混凝土 + 防水粘结层 + {ps.get('concrete_paving_thick_mm', 80):g}mm C40混凝土调平层。",
+            "四、主要材料：预制T梁及湿接缝采用 C50 混凝土；预应力钢束采用低松弛钢绞线 Φs15.2 (fpk=1860MPa)；墩台盖梁、系梁、耳背墙、搭板及水下钻孔桩采用 C30 混凝土；普通钢筋采用 HRB400 / HPB300。",
+            "五、设计规范：JTG B01-2014《公路工程技术标准》、JTG D60-2015《公路桥涵设计通用规范》、JTG 3362-2018《公路钢筋混凝土及预应力混凝土桥涵设计规范》、JTG 3363-2019《公路桥涵地基与基础设计规范》。",
+            "六、施工要点：预制T梁混凝土强度及龄期达标后对称张拉并真空压浆；架梁后先浇筑墩顶湿接缝及横隔梁湿接缝，再施工桥面连续及调平层。",
         ]
         if calc.get("unresolved_assumptions"):
-            miss_names = "、".join(u["field"] for u in calc["unresolved_assumptions"])
-            notes.append(f"七、待实测与定位确认项：{miss_names}（当前采用初拟值联动计算，补齐实测水文地勘及支座定位依据后自动同步）。")
+            miss_zh = "、".join(_UNRESOLVED_FIELD_LABELS_ZH.get(str(u["field"]), str(u["field"])) for u in calc["unresolved_assumptions"])
+            raw_paragraphs.append(f"七、待实测与定位确认项：{miss_zh}（当前采用开题初拟值联动计算，补齐实测水文地勘及支座定位依据后自动同步全套图表）。")
         pending_deliv = [d["title"] for d in calc.get("pending_graduation_deliverables", []) if d.get("status") == "pending"]
         if pending_deliv:
-            notes.append(f"八、毕业设计待完成交付项：{'；'.join(pending_deliv)}。")
+            raw_paragraphs.append(f"八、毕业设计待完成交付项：{'；'.join(pending_deliv)}。")
         if calc.get("failed_checks"):
             fc_summary = "；".join(
-                f"{fc['component']}({fc['demand']}>{fc['allowable']}{fc['unit']}, 关联{','.join(fc['related_drawings'])})"
+                f"{fc['component']}({fc['demand']}>{fc['allowable']}{fc['unit']}，关联{','.join(fc['related_drawings'])})"
                 for fc in calc["failed_checks"][:3]
             )
-            notes.append(f"【警示】结构验算未通过项：{fc_summary}！")
-        msp.add_lwpolyline([(24.0, 62.0), (402.0, 62.0), (402.0, 258.0), (24.0, 258.0)], close=True, dxfattribs={"layer": "OUTLINE"})
-        pitch = min(13.0, 178.0 / max(1, len(notes)))
-        for idx, line in enumerate(notes):
-            add_civil_text(msp, line, 30.0, 246.0 - idx * pitch, height=2.1)
+            raw_paragraphs.append(f"【警示】结构验算未通过项：{fc_summary}！")
+
+        # Left Panel: Wrapped General Design Specification Notes (x=22..204, y=18..264)
+        lx0, lx1, ly0, ly1 = 22.0, 204.0, 18.0, 264.0
+        msp.add_lwpolyline([(lx0, ly0), (lx1, ly0), (lx1, ly1), (lx0, ly1)], close=True, dxfattribs={"layer": "FRAME"})
+        msp.add_line((lx0, ly1 - 8.0), (lx1, ly1 - 8.0), dxfattribs={"layer": "FRAME"})
+        add_civil_text(msp, "一、桥梁施工图设计总说明", 0.5 * (lx0 + lx1), ly1 - 5.8, height=2.5, align="CENTER")
+
+        wrapped_lines: list[str] = []
+        for para in raw_paragraphs:
+            wrapped_lines.extend(_wrap_zh_text(para, width_chars=36))
+        line_step = min(5.4, (ly1 - ly0 - 14.0) / max(1, len(wrapped_lines)))
+        for idx, wline in enumerate(wrapped_lines):
+            wy = ly1 - 13.5 - idx * line_step
+            if wy >= ly0 + 2.5:
+                add_civil_text(msp, wline, lx0 + 3.5, wy, height=1.88)
+
+        # Right Panel: Complete 18-Sheet Construction Drawing Index Table (x=210..406, y=50..264, cleanly above Title Block!)
+        sheet_index = list(spec.get("sheet_index") or DEFAULT_18_SHEET_INDEX)
+        rx0, rx1, ry_top = 210.0, 406.0, 264.0
+        rw = rx1 - rx0
+        title_h = 7.5
+        hdr_h = 6.2
+        row_h = min(10.6, (212.0 - title_h - hdr_h) / max(1, len(sheet_index)))
+        ry_bot = ry_top - title_h - hdr_h - len(sheet_index) * row_h
+        msp.add_lwpolyline([(rx0, ry_bot), (rx1, ry_bot), (rx1, ry_top), (rx0, ry_top)], close=True, dxfattribs={"layer": "FRAME"})
+        msp.add_line((rx0, ry_top - title_h), (rx1, ry_top - title_h), dxfattribs={"layer": "FRAME"})
+        msp.add_line((rx0, ry_top - title_h - hdr_h), (rx1, ry_top - title_h - hdr_h), dxfattribs={"layer": "FRAME"})
+        add_civil_text(msp, f"二、全套施工图目录（共 {len(sheet_index)} 张 A3）", rx0 + 0.5 * rw, ry_top - 5.4, height=2.5, align="CENTER")
+
+        r_cols = (rx0, rx0 + 14.0, rx0 + 36.0, rx0 + 146.0, rx0 + 180.0, rx1)
+        for cx_col in r_cols[1:-1]:
+            msp.add_line((cx_col, ry_bot), (cx_col, ry_top - title_h), dxfattribs={"layer": "THIN"})
+        idx_headers = ("序号", "图号", "图纸名称", "比例", "图幅")
+        y_hdr_b = ry_top - title_h - hdr_h
+        for ci, hs in enumerate(idx_headers):
+            add_civil_text(msp, hs, 0.5 * (r_cols[ci] + r_cols[ci + 1]), y_hdr_b + 1.8, height=1.9, align="CENTER")
+
+        for si, (dno_s, dtitle_s, dscale_s) in enumerate(sheet_index):
+            ry_r = y_hdr_b - (si + 1) * row_h
+            if si < len(sheet_index) - 1:
+                msp.add_line((rx0, ry_r), (rx1, ry_r), dxfattribs={"layer": "THIN"})
+            cells_idx = (f"{si + 1}", str(dno_s), str(dtitle_s), str(dscale_s), "A3")
+            for ci, vs in enumerate(cells_idx):
+                th = 1.72 if (ci == 2 and len(vs) > 18) else 1.82
+                add_civil_text(msp, vs, 0.5 * (r_cols[ci] + r_cols[ci + 1]), ry_r + 0.28 * row_h, height=th, align="CENTER")
+
+        attach_sheet_metadata(doc, msp, "sheet_index", {"sheets": [{"drawing_no": d, "title": t, "scale": s} for d, t, s in sheet_index]})
         return doc
 
     doc, msp, b = setup_civil_dxf_document(
@@ -2289,12 +2916,12 @@ def _draw_notes_and_boq(spec: dict[str, Any]) -> ezdxf.document.Drawing:
         scale_label="表格",
         style_overrides=_resolve_style_overrides(spec),
     )
-    x0, y_top, w = 28.0, 256.0, 372.0
+    x0, y_top, w = 28.0, 258.0, 372.0
     rows = boq["rows"]
-    row_h = min(10.8, 186.0 / (len(rows) + 1))
+    row_h = min(10.8, 178.0 / (len(rows) + 1))
     y_bot = y_top - (len(rows) + 1) * row_h
     msp.add_lwpolyline([(x0, y_bot), (x0 + w, y_bot), (x0 + w, y_top), (x0, y_top)], close=True, dxfattribs={"layer": "FRAME"})
-    cols = (x0, x0 + 96.0, x0 + 196.0, x0 + 236.0, x0 + 306.0, x0 + w)
+    cols = (x0, x0 + 102.0, x0 + 198.0, x0 + 236.0, x0 + 306.0, x0 + w)
     for cx in cols[1:-1]:
         msp.add_line((cx, y_bot), (cx, y_top), dxfattribs={"layer": "THIN"})
     headers = ("工程部位", "材料名称及规格", "单位", "全桥数量", "对应图号")
@@ -2308,7 +2935,30 @@ def _draw_notes_and_boq(spec: dict[str, Any]) -> ezdxf.document.Drawing:
             msp.add_line((x0, ry), (x0 + w, ry), dxfattribs={"layer": "THIN"})
         vals = (str(r["category"]), str(r["material"]), str(r["unit"]), f"{r['quantity']}", str(r["sheet_ref"]))
         for ci, vs in enumerate(vals):
-            add_civil_text(msp, vs, 0.5 * (cols[ci] + cols[ci + 1]), ry + 0.30 * row_h, height=2.1, align="CENTER")
+            add_civil_text(msp, vs, 0.5 * (cols[ci] + cols[ci + 1]), ry + 0.30 * row_h, height=2.05, align="CENTER")
+
+    vbk = boq.get("volume_breakdown") or {}
+    if vbk:
+        add_civil_text(
+            msp,
+            (
+                f"算量附注：1. 下部C30砼含盖梁 {vbk['pier_cap_m3']} + 双柱 {vbk['pier_col_m3']} + 桩顶系梁 {vbk['tie_beam_m3']} "
+                f"+ 台帽 {vbk['abut_cap_m3']} + 耳背墙牛腿 {vbk['abut_wall_m3']} + 垫石 {vbk['pedestal_m3']} = {boq['c30_substructure_m3']} m3；"
+            ),
+            28.0,
+            34.0,
+            height=1.82,
+        )
+        add_civil_text(
+            msp,
+            (
+                f"2. 水下钻孔桩C30砼含桥墩桩 {vbk['pier_pile_m3']} m3 (桩长 {vbk['pier_pile_length_m']:g}m) "
+                f"+ 桥台桩 {vbk['abut_pile_m3']} m3 (桩长 {vbk['abut_pile_length_m']:g}m) = {boq['c30_underwater_pile_m3']} m3。"
+            ),
+            28.0,
+            26.0,
+            height=1.82,
+        )
 
     attach_sheet_metadata(doc, msp, "boq_summary", boq)
     return doc
@@ -2706,9 +3356,11 @@ def generate_full_bridge_drawing_set(
         ("QL-18", "cat9_substructure_rebar", "rebar_detail", {"component": "abutment_rebar"}, [b["bar_id"] for b in ledger["rebar_groups"]["abutment_rebar"]]),
     ]
 
+    title_by_no = {dno_k: t_k for dno_k, t_k, _ in DEFAULT_18_SHEET_INDEX}
     generated_sheets: list[dict[str, Any]] = []
     for dno, cat_id, dtype, sub_spec, ref_ids in sheet_plan:
-        merged_spec = {**base_spec, **sub_spec, "drawing_no": dno, "referenced_ids": ref_ids}
+        resolved_title = str(sub_spec.get("title") or title_by_no.get(dno, dtype))
+        merged_spec = {**base_spec, **sub_spec, "drawing_no": dno, "title": resolved_title, "referenced_ids": ref_ids}
         stem = f"{dno}_{dtype}"
         sheet_dir = out_root / dno
         if render_png:

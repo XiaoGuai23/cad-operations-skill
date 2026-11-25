@@ -515,8 +515,27 @@ def check_substructure_cap_pier_pile(
     ra_allow_kn = _eval_ra(pile_len_m)
     pile_passed = ra_allow_kn >= r_pile_sls_demand
 
+    # JTG 3362-2018 §9.3.2 tensile basic anchorage length in C30 concrete (ftd=1.39 MPa) for HRB400 ribbed bars (fsd=330 MPa, k1=0.14)
+    lab_over_d_c30 = 0.14 * (330.0 / 1.39)  # 33.24d (engineering standard 35d with 90-deg standard hook)
+    xl1_dia_mm = 22.0
+    xl1_lab_mm = round(lab_over_d_c30 * xl1_dia_mm, 1)
+    xl1_req_mm = round(35.0 * xl1_dia_mm, 1)
+    xl1_design_la_mm = 780.0
+    col_core_avail_mm = round(column_diameter_m * 1000.0 - 110.0, 1)
+    qt2_dia_mm = 16.0
+    qt2_lab_mm = round(lab_over_d_c30 * qt2_dia_mm, 1)
+    qt2_req_mm = round(35.0 * qt2_dia_mm, 1)
+    qt2_design_la_mm = 560.0
+    abut_cap_avail_mm = 1290.0
+    anchorage_passed = (
+        xl1_design_la_mm >= xl1_req_mm
+        and col_core_avail_mm >= xl1_design_la_mm
+        and qt2_design_la_mm >= qt2_req_mm
+        and abut_cap_avail_mm >= qt2_design_la_mm
+    )
+
     return {
-        "status": "passed" if (cap_passed and pier_passed and pile_passed) else "failed",
+        "status": "passed" if (cap_passed and pier_passed and pile_passed and anchorage_passed) else "failed",
         "cap_beam": {
             "width_m": cap_width_m,
             "height_m": cap_height_m,
@@ -556,6 +575,26 @@ def check_substructure_cap_pier_pile(
             "main_rebar_count": 22,
             "soil_layers": layers,
             "passed": pile_passed,
+        },
+        "joint_anchorage": {
+            "code_clause": "JTG 3362-2018 §9.3.2 (C30混凝土 ftd=1.39MPa, HRB400带肋钢筋 fsd=330MPa, lab=33.24d, 设计受拉锚固取≥35d+90°弯钩)",
+            "xl1_tie_beam_to_pier": {
+                "dia_mm": xl1_dia_mm,
+                "lab_mm": xl1_lab_mm,
+                "req_35d_mm": xl1_req_mm,
+                "design_la_mm": xl1_design_la_mm,
+                "core_available_mm": col_core_avail_mm,
+                "passed": xl1_design_la_mm >= xl1_req_mm and col_core_avail_mm >= xl1_design_la_mm,
+            },
+            "qt2_wall_to_abutment_cap": {
+                "dia_mm": qt2_dia_mm,
+                "lab_mm": qt2_lab_mm,
+                "req_35d_mm": qt2_req_mm,
+                "design_la_mm": qt2_design_la_mm,
+                "cap_available_mm": abut_cap_avail_mm,
+                "passed": qt2_design_la_mm >= qt2_req_mm and abut_cap_avail_mm >= qt2_design_la_mm,
+            },
+            "passed": anchorage_passed,
         },
     }
 
@@ -626,10 +665,14 @@ def build_rebar_and_tendon_ledger(
         count_per_unit: int,
         units_in_bridge: int,
         calc_basis: str,
+        *,
+        sub_part: str = "",
+        members_per_unit: int = 0,
+        unit_label: str = "",
     ) -> dict[str, Any]:
         u_wt = _bar_unit_weight_kg_m(dia_mm)
         wt_unit = round(single_len_m * count_per_unit * u_wt, 2)
-        return {
+        rec: dict[str, Any] = {
             "bar_id": bar_id,
             "component": component,
             "sheet_drawing_no": drawing_no,
@@ -644,6 +687,12 @@ def build_rebar_and_tendon_ledger(
             "bridge_total_weight_kg": round(wt_unit * units_in_bridge, 1),
             "calc_basis": calc_basis,
         }
+        if members_per_unit > 0:
+            rec["sub_part"] = sub_part
+            rec["members_per_unit"] = members_per_unit
+            rec["unit_label"] = unit_label or str(members_per_unit)
+            rec["substructure_weight_kg"] = round(wt_unit * members_per_unit, 1)
+        return rec
 
     n_mid_half_stirrups = max(1, int(round((0.5 * beam_length_m * 1000.0 - 2130.0) / 150.0)))
     n_stirrups_girder = 2 * (21 + n_mid_half_stirrups)
@@ -908,6 +957,9 @@ def build_rebar_and_tendon_ledger(
                 col_bar_n,
                 n_piers * 2,
                 f"双柱墩偏心受压验算: Nd vs Nu: {_cmp_str(float(sub_checks['pier_column']['n_uls_kn']), float(sub_checks['pier_column']['nu_capacity_kn']), 'kN')}",
+                sub_part="单根墩柱",
+                members_per_unit=2,
+                unit_label="2柱",
             ),
             _mk_bar(
                 "DZ2",
@@ -920,6 +972,9 @@ def build_rebar_and_tendon_ledger(
                 max(4, int(round(column_height_m / 0.12))),
                 n_piers * 2,
                 "JTG/T 2231-01-2020 抗震构造墩柱塑性铰区螺旋箍筋加密",
+                sub_part="单根墩柱",
+                members_per_unit=2,
+                unit_label="2柱",
             ),
             _mk_bar(
                 "XL1",
@@ -931,7 +986,10 @@ def build_rebar_and_tendon_ledger(
                 max(4.8, cap_length_m - 2.20),
                 12,
                 n_piers,
-                "双柱墩桩顶横系梁横向框架拉压弯矩及节点锚固配筋 (上下各6Φ22，锚入柱桩核心≥35d)",
+                "JTG 3362-2018 §9.3.2 C30节点受拉锚固: la=780 >= 35d=770mm (lab=731mm, 上下各6Φ22)",
+                sub_part="单道系梁",
+                members_per_unit=1,
+                unit_label="1道",
             ),
             _mk_bar(
                 "XL2",
@@ -944,6 +1002,9 @@ def build_rebar_and_tendon_ledger(
                 max(16, int(round(max(3.2, cap_length_m - 3.60) / 0.10)) + 1),
                 n_piers,
                 "桩顶横系梁斜截面抗剪及柱底节点核心区约束箍筋 (4肢Φ12@100)",
+                sub_part="单道系梁",
+                members_per_unit=1,
+                unit_label="1道",
             ),
             _mk_bar(
                 "ZJ1",
@@ -956,6 +1017,9 @@ def build_rebar_and_tendon_ledger(
                 pile_bar_n,
                 n_piers * 2,
                 f"JTG 3363-2019 摩擦桩验算: R vs [Ra]: {_cmp_str(float(sub_checks['bored_pile']['pile_top_sls_demand_kn']), float(sub_checks['bored_pile']['allowable_ra_kn']), 'kN')}",
+                sub_part="单根桩基",
+                members_per_unit=2,
+                unit_label="2桩",
             ),
             _mk_bar(
                 "ZJ2",
@@ -968,6 +1032,9 @@ def build_rebar_and_tendon_ledger(
                 max(2, int(round(pile_length_m / 0.15))),
                 n_piers * 2,
                 "水下C30钻孔灌注桩钢筋笼整体刚度及抗剪箍筋",
+                sub_part="单根桩基",
+                members_per_unit=2,
+                unit_label="2桩",
             ),
         ],
         "abutment_rebar": [
@@ -982,6 +1049,9 @@ def build_rebar_and_tendon_ledger(
                 16,
                 n_abutments,
                 "桩柱式桥台台帽弯曲及支座反力承载构造",
+                sub_part="单座台帽",
+                members_per_unit=1,
+                unit_label="1座",
             ),
             _mk_bar(
                 "QT2",
@@ -993,7 +1063,10 @@ def build_rebar_and_tendon_ledger(
                 3.40,
                 int(round(deck_width_m / 0.125)),
                 n_abutments,
-                "桥头台背主动土压力与车辆附加荷载抗弯配筋",
+                "JTG 3362-2018 §9.3.2 C30墙筋锚入台帽: la=560 >= 35d=560mm (lab=532mm, 弯钩朝内)",
+                sub_part="单座耳背墙",
+                members_per_unit=1,
+                unit_label="1座",
             ),
             _mk_bar(
                 "QT3",
@@ -1006,6 +1079,9 @@ def build_rebar_and_tendon_ledger(
                 20,
                 n_abutments * 2,
                 f"桥台桩基竖向与水平土压力验算: R vs [Ra]: {_cmp_str(float(sub_checks['bored_pile']['pile_top_sls_demand_kn']), float(sub_checks['bored_pile']['allowable_ra_kn']), 'kN')}",
+                sub_part="单根桩基",
+                members_per_unit=2,
+                unit_label="2桩",
             ),
             _mk_bar(
                 "DS1",
@@ -1015,9 +1091,12 @@ def build_rebar_and_tendon_ledger(
                 12.0,
                 "stirrup_rect",
                 1.80,
-                20,
-                n_piers + n_abutments,
-                "JTG 3362-2018 §5.7 局部承压支座垫石多层方格钢筋网",
+                4,
+                (n_piers + n_abutments) * n_girders_per_span,
+                "JTG 3362-2018 §5.7 局部承压单个支座垫石双层方格防劈裂网 (4单元/块, 每台5块)",
+                sub_part="单个垫石",
+                members_per_unit=n_girders_per_span,
+                unit_label=f"{n_girders_per_span}块",
             ),
         ],
     }
@@ -1066,15 +1145,21 @@ def compute_bridge_bill_of_quantities(
     c40_deck_pav_m3 = round(total_bridge_len * paving_width_m * concrete_pav_thick_m, 2)
     asphalt_m3 = round(total_bridge_len * paving_width_m * asphalt_thick_m, 2)
     c30_approach_slab_m3 = round(2.0 * paving_width_m * 6.0 * 0.30, 2)
-    c30_sub_m3 = round(
-        n_piers * (cap_length_m * cap_width_m * cap_height_m + 2.0 * (math.pi * 0.25 * column_diameter_m**2) * column_height_m)
-        + 2.0 * (deck_width_m * 1.6 * 1.8),
-        2,
-    )
-    c30_pile_m3 = round(
-        (n_piers * 2 + 4) * (math.pi * 0.25 * pile_diameter_m**2) * pile_length_m,
-        2,
-    )
+
+    col_sp_m = max(3.2, cap_length_m - 3.60)
+    pier_cap_m3 = round(n_piers * (cap_length_m * cap_width_m * cap_height_m), 2)
+    pier_col_m3 = round(n_piers * 2.0 * (math.pi * 0.25 * column_diameter_m**2) * column_height_m, 2)
+    tie_beam_m3 = round(n_piers * (1.00 * 1.20 * max(1.80, col_sp_m - column_diameter_m)), 2)
+    abut_cap_m3 = round(2.0 * (deck_width_m * 1.80 * 1.40), 2)
+    abut_wall_m3 = round(2.0 * (deck_width_m * (0.55 * 1.75 + 0.30 * 0.45) + 2.0 * (2.00 * 0.45 * 1.75)), 2)
+    pedestal_m3 = round((n_piers * 2 + 2) * n_girders_per_span * (0.50 * 0.50 * 0.15), 2)
+    c30_sub_m3 = round(pier_cap_m3 + pier_col_m3 + tie_beam_m3 + abut_cap_m3 + abut_wall_m3 + pedestal_m3, 2)
+
+    abut_pile_len_m = max(1.5, pile_length_m - 2.0) if pile_length_m >= 6.0 else max(1.0, pile_length_m)
+    pile_area_m2 = math.pi * 0.25 * pile_diameter_m**2
+    pier_pile_m3 = round((n_piers * 2) * pile_area_m2 * pile_length_m, 2)
+    abut_pile_m3 = round(4.0 * pile_area_m2 * abut_pile_len_m, 2)
+    c30_pile_m3 = round(pier_pile_m3 + abut_pile_m3, 2)
 
     total_strand_kg = round(sum(float(t["total_weight_bridge_kg"]) for t in ledger["tendons"]), 1)
     hrb400_kg = round(
@@ -1095,8 +1180,8 @@ def compute_bridge_bill_of_quantities(
         {"category": "预应力低松弛钢绞线", "material": "Φs15.2 (fpk=1860MPa)", "unit": "kg", "quantity": total_strand_kg, "sheet_ref": "QL-08"},
         {"category": "全桥带肋普通钢筋", "material": "HRB400", "unit": "kg", "quantity": hrb400_kg, "sheet_ref": "QL-09~QL-18"},
         {"category": "全桥光圆箍筋", "material": "HPB300", "unit": "kg", "quantity": hpb300_kg, "sheet_ref": "QL-17"},
-        {"category": "墩台盖梁及柱身", "material": "C30混凝土", "unit": "m3", "quantity": c30_sub_m3, "sheet_ref": "QL-14/QL-15"},
-        {"category": "水下钻孔灌注桩", "material": "C30水下混凝土", "unit": "m3", "quantity": c30_pile_m3, "sheet_ref": "QL-14/QL-17"},
+        {"category": "墩台盖梁、柱、系梁及耳背墙", "material": "C30混凝土", "unit": "m3", "quantity": c30_sub_m3, "sheet_ref": "QL-14/QL-15"},
+        {"category": "水下钻孔灌注桩", "material": "C30水下混凝土", "unit": "m3", "quantity": c30_pile_m3, "sheet_ref": "QL-14~QL-18"},
         {"category": "桥头钢筋混凝土搭板", "material": "C30混凝土 (6.0m×0.30m)", "unit": "m3", "quantity": c30_approach_slab_m3, "sheet_ref": "QL-13"},
         {"category": "板式橡胶支座", "material": bearing_model, "unit": "块", "quantity": total_bearings, "sheet_ref": "QL-12"},
         {"category": "桥台型钢伸缩装置", "material": "D80型钢伸缩缝", "unit": "m", "quantity": round(2.0 * deck_width_m, 1), "sheet_ref": "QL-13"},
@@ -1116,6 +1201,18 @@ def compute_bridge_bill_of_quantities(
         "bearing_count": total_bearings,
         "bearing_model": bearing_model,
         "scupper_count": scupper_count,
+        "volume_breakdown": {
+            "pier_cap_m3": pier_cap_m3,
+            "pier_col_m3": pier_col_m3,
+            "tie_beam_m3": tie_beam_m3,
+            "abut_cap_m3": abut_cap_m3,
+            "abut_wall_m3": abut_wall_m3,
+            "pedestal_m3": pedestal_m3,
+            "pier_pile_m3": pier_pile_m3,
+            "abut_pile_m3": abut_pile_m3,
+            "pier_pile_length_m": round(pile_length_m, 2),
+            "abut_pile_length_m": round(abut_pile_len_m, 2),
+        },
         "rows": rows,
     }
 
