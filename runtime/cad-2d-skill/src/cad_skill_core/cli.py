@@ -175,9 +175,31 @@ def _parser() -> argparse.ArgumentParser:
     run_reg.add_argument('--vault', type=Path, default=Path('tests/regressions'), dest='vault_dir')
     run_reg.add_argument('--json', action='store_true', dest='as_json')
 
-    bcalc = commands.add_parser('bridge-calc', help='run zero-dependency highway bridge calculations, ULS/SLS checks, ledger/BOQ, or table QA audit')
-    bcalc.add_argument('--mode', choices=('full', 'wenchang', 'hydrology', 'section', 'lateral', 'envelopes', 'prestress', 'cap-beam', 'consistency', 'table-audit'), default='full')
+    bcalc = commands.add_parser('bridge-calc', help='run zero-dependency highway bridge calculations, ULS/SLS checks, calc book, hand cross-check, or bar lookup')
+    bcalc.add_argument(
+        '--mode',
+        choices=(
+            'full',
+            'wenchang',
+            'calc-book',
+            'cross-check',
+            'lookup-bar',
+            'survey-ingest',
+            'hydrology',
+            'section',
+            'lateral',
+            'envelopes',
+            'prestress',
+            'cap-beam',
+            'consistency',
+            'table-audit',
+        ),
+        default='full',
+    )
     bcalc.add_argument('--params', type=Path, default=None, dest='params_path')
+    bcalc.add_argument('--survey', type=Path, default=None, dest='survey_path')
+    bcalc.add_argument('--bar-id', default=None, dest='bar_id')
+    bcalc.add_argument('--calc-book', type=Path, default=None, dest='calc_book_path')
     bcalc.add_argument('--table', type=Path, default=None, dest='table_path')
     bcalc.add_argument('--out', type=Path, default=None, dest='output_path')
     bcalc.add_argument('--json', action='store_true', dest='as_json')
@@ -201,9 +223,11 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     gcivil.add_argument('--spec', type=Path, default=None, dest='spec_path')
+    gcivil.add_argument('--survey', type=Path, default=None, dest='survey_path')
     gcivil.add_argument('--out', type=Path, required=True, dest='output_dir')
     gcivil.add_argument('--stem', default=None)
     gcivil.add_argument('--memory', type=Path, default=None, dest='memory_path')
+    gcivil.add_argument('--with-previews', action='store_true', dest='with_previews')
     gcivil.add_argument('--json', action='store_true', dest='as_json')
 
     for name, help_text in (
@@ -229,7 +253,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Execute one CLI command and return its documented process exit code."""
 
     for stream in (sys.stdout, sys.stderr):
-        if hasattr(stream, "reconfigure") and getattr(stream, "encoding", "").lower().startswith("cp125"):
+        enc = (getattr(stream, "encoding", None) or "").lower()
+        if hasattr(stream, "reconfigure") and not enc.startswith("utf"):
             stream.reconfigure(encoding="utf-8", errors="replace")
 
     arguments = _parser().parse_args(list(argv) if argv is not None else None)
@@ -611,20 +636,65 @@ def _civil_command(arguments: argparse.Namespace) -> int:
                 compute_superstructure_envelopes,
                 compute_t_girder_section,
                 ingest_and_audit_calc_table,
+                ingest_bridge_survey_data,
                 run_full_bridge_calculation,
                 solve_continuous_cap_beam_1d,
             )
+            from .civil.bridge_calc_book import (
+                compute_independent_hand_cross_check,
+                generate_bridge_calculation_book_markdown,
+            )
+            from .civil.bridge_checks import lookup_bar_or_tendon
 
             params = (
                 json.loads(arguments.params_path.read_text(encoding="utf-8-sig"))
                 if arguments.params_path is not None
                 else {}
             )
+            if arguments.survey_path is not None:
+                params["survey_data"] = json.loads(arguments.survey_path.read_text(encoding="utf-8-sig"))
+
             mode = arguments.mode
+            full_calc_for_book: dict[str, Any] | None = None
             if mode == "full":
                 res = run_full_bridge_calculation(params)
+                full_calc_for_book = res
             elif mode == "wenchang":
                 res = run_full_bridge_calculation({"preset": "wenchang", **params})
+                full_calc_for_book = res
+            elif mode == "calc-book":
+                base_p = {"preset": "wenchang", **params} if not params else params
+                full_calc_for_book = run_full_bridge_calculation(base_p)
+                md_book = generate_bridge_calculation_book_markdown(
+                    full_calc_for_book,
+                    output_path=arguments.calc_book_path or arguments.output_path,
+                )
+                res = {
+                    "calculation_status": full_calc_for_book["calculation_status"],
+                    "graduation_readiness_status": full_calc_for_book["graduation_readiness_status"],
+                    "independent_cross_check": full_calc_for_book["independent_cross_check"],
+                    "markdown_length_chars": len(md_book),
+                    "calc_book_path": str((arguments.calc_book_path or arguments.output_path).resolve())
+                    if (arguments.calc_book_path or arguments.output_path) is not None
+                    else None,
+                    "markdown": md_book if (arguments.calc_book_path is None and arguments.output_path is None) else None,
+                }
+            elif mode == "cross-check":
+                base_p = {"preset": "wenchang", **params} if not params else params
+                full_calc_for_book = run_full_bridge_calculation(base_p)
+                res = compute_independent_hand_cross_check(full_calc_for_book)
+            elif mode == "lookup-bar":
+                target_id = arguments.bar_id or params.get("bar_id")
+                if not target_id:
+                    raise ValueError("--bar-id or params['bar_id'] is required for --mode lookup-bar")
+                base_p = {k: v for k, v in params.items() if k != "bar_id"}
+                if not base_p:
+                    base_p = {"preset": "wenchang"}
+                full_calc_for_book = run_full_bridge_calculation(base_p)
+                res = lookup_bar_or_tendon(full_calc_for_book, str(target_id))
+            elif mode == "survey-ingest":
+                raw_sd = params.get("survey_data", params)
+                res = ingest_bridge_survey_data(raw_sd)
             elif mode == "hydrology":
                 res = compute_hydrology_and_span(**params)
             elif mode == "section":
@@ -647,8 +717,11 @@ def _civil_command(arguments: argparse.Namespace) -> int:
                     file_path=arguments.table_path,
                 )
 
+            if arguments.calc_book_path is not None and full_calc_for_book is not None and mode != "calc-book":
+                generate_bridge_calculation_book_markdown(full_calc_for_book, output_path=arguments.calc_book_path)
+
             payload = {"command": "bridge-calc", "mode": mode, "result": res}
-            if arguments.output_path is not None:
+            if arguments.output_path is not None and mode != "calc-book":
                 arguments.output_path.parent.mkdir(parents=True, exist_ok=True)
                 arguments.output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
             print(_stable_json(payload) if arguments.as_json else json.dumps(payload, ensure_ascii=False, indent=2))
@@ -661,13 +734,15 @@ def _civil_command(arguments: argparse.Namespace) -> int:
             if arguments.spec_path is not None
             else {}
         )
+        if arguments.survey_path is not None:
+            spec_obj["survey_data"] = json.loads(arguments.survey_path.read_text(encoding="utf-8-sig"))
         if arguments.memory_path is not None:
             spec_obj.setdefault("preference_memory_path", str(arguments.memory_path))
         if arguments.drawing_type == "full_set":
             full_res = generate_full_bridge_drawing_set(
                 spec_obj or {"preset": "wenchang"},
                 arguments.output_dir,
-                render_png=False,
+                render_png=bool(arguments.with_previews),
                 preference_memory_path=arguments.memory_path,
             )
             full_res.pop("calculation_report", None)

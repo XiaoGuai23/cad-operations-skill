@@ -228,6 +228,7 @@ def _draw_bridge_elevation(spec: dict[str, Any]) -> ezdxf.document.Drawing:
     pier_col_d_cm = float(spec.get("pier_diameter_cm", 120.0))
     pile_d_cm = float(spec.get("pile_diameter_cm", 140.0))
     pile_len_cm = float(spec.get("pile_length_cm", 1800.0))
+    abut_pile_len_cm = float(spec.get("abutment_pile_length_cm", pile_len_cm))
     deck_elev_m = float(spec.get("deck_elevation_m", 86.500))
     flood_elev_m = float(spec.get("flood_elevation_m", 81.200))
 
@@ -319,7 +320,7 @@ def _draw_bridge_elevation(spec: dict[str, Any]) -> ezdxf.document.Drawing:
 
     # Left & Right Abutments (backwall + cap + approach slab silhouette) + True-Scale Piles
     abut_h_cm = 315.0
-    abut_pile_cm = max(1200.0, pile_len_cm - 200.0)
+    abut_pile_cm = abut_pile_len_cm
     for rxa0, rxa1, is_left in ((rx_abut_l, rx_span_0, True), (rx_span_end, rx_abut_r, False)):
         msp.add_lwpolyline(
             [
@@ -442,7 +443,7 @@ def _draw_bridge_elevation(spec: dict[str, Any]) -> ezdxf.document.Drawing:
     notes = [
         "说明：1. 本图尺寸除高程以 m 计外，其余均以 cm 计，横竖向严格按同一比例绘制；",
         f"2. 上部结构采用 {n_spans}×{span_cm/100:g}m 装配式预应力混凝土简支T梁，主梁高度 {girder_depth_cm:g}cm；",
-        f"3. 下部桥墩采用双柱式墩（D={pier_col_d_cm:g}cm），钻孔灌注桩基础（D={pile_d_cm:g}cm，设计桩长 {pile_len_cm:g}cm）。",
+        f"3. 下部桥墩采用双柱式墩（D={pier_col_d_cm:g}cm），钻孔灌注桩（D={pile_d_cm:g}cm，桥墩桩长 {pile_len_cm:g}cm，桥台桩长 {abut_pile_cm:g}cm）。",
     ]
     for i, nt in enumerate(notes):
         add_civil_text(msp, nt, b["ix0"] + 6.0, b["iy0"] + 23.0 - i * 6.2, height=2.2)
@@ -1378,11 +1379,13 @@ def _draw_rebar_detail(spec: dict[str, Any]) -> ezdxf.document.Drawing:
         for ry_r3 in (0.35 * girder_h, 0.65 * girder_h):
             msp.add_line(vb_el.pt(80.0, ry_r3), vb_el.pt(half_l_mm, ry_r3), dxfattribs={"layer": "THIN"})
 
-        # GJ1 vertical stirrups: dense pitch in [80..2080] and standard pitch in [2080..mid_end_mm]
-        for rx_d in range(int(dense_start_mm), int(dense_end_mm) + 1, 200):
-            msp.add_line(vb_el.pt(float(rx_d), 75.0), vb_el.pt(float(rx_d), girder_h - 65.0), dxfattribs={"layer": "REBAR_STIRRUP"})
-        for rx_m in range(int(dense_end_mm) + 450, int(mid_end_mm) + 1, 450):
-            msp.add_line(vb_el.pt(float(rx_m), 75.0), vb_el.pt(float(rx_m), girder_h - 65.0), dxfattribs={"layer": "REBAR_STIRRUP"})
+        # GJ1 vertical stirrups: exact 100mm true-scale pitch in [80..2080] (21 bars) and exact 150mm pitch in (2080..mid_end_mm]
+        for k_d in range(21):
+            rx_d = dense_start_mm + k_d * 100.0
+            msp.add_line(vb_el.pt(rx_d, 75.0), vb_el.pt(rx_d, girder_h - 65.0), dxfattribs={"layer": "REBAR_STIRRUP"})
+        for k_m in range(1, n_mid_half + 1):
+            rx_m = dense_end_mm + k_m * 150.0
+            msp.add_line(vb_el.pt(rx_m, 75.0), vb_el.pt(rx_m, girder_h - 65.0), dxfattribs={"layer": "REBAR_STIRRUP"})
         # Dashed zone boundary at x = 2080mm separating dense vs standard stirrup zones
         msp.add_line((vb_el.x(dense_end_mm), vb_el.y(0.0) - 4.0), (vb_el.x(dense_end_mm), vb_el.y(girder_h) + 4.0), dxfattribs={"layer": "HIDDEN"})
 
@@ -2055,7 +2058,9 @@ def _draw_rebar_detail(spec: dict[str, Any]) -> ezdxf.document.Drawing:
         draw_section_cut_symbol(msp, x_aa_elev, vb_elev.y(0.0) - 2.0, x_aa_elev, vb_elev.y(abut_cap_h + bw_h) + 2.0, "A", look_dx=1.0, look_dy=0.0, tick_len=2.8, arrow_len=2.8)
         y_bb_ab = vb_elev.y(-1450.0)
         draw_section_cut_symbol(msp, vb_elev.x(h_psp - 0.65 * pile_d_mm), y_bb_ab, vb_elev.x(h_psp + 0.65 * pile_d_mm), y_bb_ab, "B", look_dx=0.0, look_dy=-1.0, tick_len=2.8, arrow_len=2.8)
+        abut_pile_len_m_18 = float(((calc.get("abutment_checks") or {}).get("bored_pile") or {}).get("design_length_m", 15.0))
         add_arch_dim(msp, vb_elev.pt(-h_psp - 0.5 * pile_d_mm, -pile_stub_mm), vb_elev.pt(-h_psp + 0.5 * pile_d_mm, -pile_stub_mm), (vb_elev.x(-h_psp), vb_elev.y(-pile_stub_mm) - 10.2), f"桩径 {pile_d_mm:g}")
+        add_civil_text(msp, f"桥台设计桩长 L={abut_pile_len_m_18:g}m", vb_elev.x(h_psp), vb_elev.y(-pile_stub_mm) - 10.2, height=1.72, align="CENTER")
         add_arch_dim(msp, vb_elev.pt(-hcl, 0.0), vb_elev.pt(-hcl, abut_cap_h), (vb_elev.x(-hcl) - 7.5, vb_elev.y(0.5 * abut_cap_h)), f"{abut_cap_h:g}", angle=90.0)
         add_civil_text(msp, "桥台正立面配筋图 (1:80)", vb_elev.x(0.0), 162.5, height=2.2, align="CENTER")
         vb_elev.register(doc, msp, paper_bounds=(196.0, 160.0, 332.0, 268.0))
@@ -2278,14 +2283,20 @@ def _draw_rebar_detail(spec: dict[str, Any]) -> ezdxf.document.Drawing:
         return s_b[:max_chars].rstrip("([（ ")
 
     if comp in {"pier_column_pile", "abutment_rebar"}:
+        if comp == "pier_column_pile":
+            scope_note = "统计口径说明：单件根数/单件重按单根墩柱、单道系梁、单根钻孔桩计；每墩重按整座双柱墩(2柱+1系梁+2桩)汇总。"
+        else:
+            ab_len_note = float(((calc.get("abutment_checks") or {}).get("bored_pile") or {}).get("design_length_m", 15.0))
+            scope_note = f"统计口径说明：单件根数按单座台帽、单座耳背墙、单根桩、单个垫石计；每台重按整座桥台汇总（独立求得桥台桩长 {ab_len_note:g}m）。"
+        add_civil_text(msp, scope_note, b["ix0"] + 6.0, b["iy0"] + 34.5, height=1.72)
         n_note_rows = min(5, len(bars))
         for idx, b_item in enumerate(bars[:n_note_rows]):
             add_civil_text(
                 msp,
                 f"[{b_item['bar_id']}] {_safe_basis_str(str(b_item['calc_basis']), 78)}",
                 b["ix0"] + 6.0,
-                b["iy0"] + 34.0 - idx * 5.4,
-                height=1.72,
+                b["iy0"] + 29.0 - idx * 5.0,
+                height=1.70,
             )
     else:
         add_civil_text(msp, f"主控验算：{_safe_basis_str(str(bars[0]['calc_basis']), 96)}", b["ix0"] + 6.0, b["iy0"] + 16.0, height=1.90)
@@ -2801,7 +2812,8 @@ def _draw_pier_and_abutment(spec: dict[str, Any]) -> ezdxf.document.Drawing:
         x_r_ab = vb_el.x(half_cap) + 7.5
         add_arch_dim(msp, (vb_el.x(half_cap), vb_el.y(ry_cap_bot)), (vb_el.x(half_cap), vb_el.y(0.0)), (x_r_ab, vb_el.y(-0.5 * cap_h_mm)), f"{cap_h_mm:g}", angle=90.0)
         add_arch_dim(msp, (vb_el.x(half_cap), vb_el.y(0.0)), (vb_el.x(half_cap), vb_el.y(bw_h_mm)), (x_r_ab, vb_el.y(0.5 * bw_h_mm)), f"背墙 {bw_h_mm:g}", angle=90.0)
-        add_civil_text(msp, "桥台正立面图 (1:80)", vb_el.x(0.0), 114.0, height=2.5, align="CENTER")
+        abut_len_mm_15 = float(spec.get("abutment_pile_length_mm", 15000.0))
+        add_civil_text(msp, f"桥台正立面图 (1:80，设计桩长 {abut_len_mm_15/1000:g}m)", vb_el.x(0.0), 114.0, height=2.35, align="CENTER")
         vb_el.register(doc, msp, paper_bounds=(vb_el.x(-half_cap) - 8.0, 112.0, x_r_ab + 6.0, vb_el.y(bw_h_mm) + 14.0))
 
         # Side View (1:80): Cap 1800×1400 + Backwall 550×1750 + Corbel + Earwall 2000 + Direct Pile Φ1400!
@@ -2884,12 +2896,21 @@ def _draw_notes_and_boq(spec: dict[str, Any]) -> ezdxf.document.Drawing:
             "五、设计规范：JTG B01-2014《公路工程技术标准》、JTG D60-2015《公路桥涵设计通用规范》、JTG 3362-2018《公路钢筋混凝土及预应力混凝土桥涵设计规范》、JTG 3363-2019《公路桥涵地基与基础设计规范》。",
             "六、施工要点：预制T梁混凝土强度及龄期达标后对称张拉并真空压浆；架梁后先浇筑墩顶湿接缝及横隔梁湿接缝，再施工桥面连续及调平层。",
         ]
+        calc_st_01 = "通过" if calc.get("calculation_status", calc.get("status")) == "passed" else "未通过"
+        grad_st_01 = (
+            "资料齐套"
+            if calc.get("graduation_readiness_status") == "ready"
+            else ("存在超限" if calc.get("graduation_readiness_status") == "failed" else "待确认齐套")
+        )
+        raw_paragraphs.append(
+            f"七、双状态总览：当前参数结构计算状态【{calc_st_01}】；毕业设计资料齐套状态【{grad_st_01}】。"
+        )
         if calc.get("unresolved_assumptions"):
             miss_zh = "、".join(_UNRESOLVED_FIELD_LABELS_ZH.get(str(u["field"]), str(u["field"])) for u in calc["unresolved_assumptions"])
-            raw_paragraphs.append(f"七、待实测与定位确认项：{miss_zh}（当前采用开题初拟值联动计算，补齐实测水文地勘及支座定位依据后自动同步全套图表）。")
-        pending_deliv = [d["title"] for d in calc.get("pending_graduation_deliverables", []) if d.get("status") == "pending"]
+            raw_paragraphs.append(f"八、待实测核定假定项：{miss_zh}（跨径净空、内力包络及墩台桩长结论仍基于初拟参数，补齐实测水文地勘后自动同步全套图表）。")
+        pending_deliv = [d["title"] for d in calc.get("pending_graduation_deliverables", []) if d.get("status") != "completed"]
         if pending_deliv:
-            raw_paragraphs.append(f"八、毕业设计待完成交付项：{'；'.join(pending_deliv)}。")
+            raw_paragraphs.append(f"九、毕业设计待完成交付项：{'；'.join(pending_deliv)}。")
         if calc.get("failed_checks"):
             fc_summary = "；".join(
                 f"{fc['component']}({fc['demand']}>{fc['allowable']}{fc['unit']}，关联{','.join(fc['related_drawings'])})"
@@ -3180,7 +3201,7 @@ def generate_civil_bridge_bundle(
         "geometry_verification": geom_verify,
         "rubric_score": rubric,
         "artifacts": artifacts,
-        "print_pdf_path": pdf_path,
+        "print_pdf_path": str(pdf_path.resolve()),
         "preview_png_path": png_path,
         "audit_summary": {
             "errors": len(ez_audit.errors) + geom_verify["error_count"],
@@ -3261,6 +3282,7 @@ def generate_full_bridge_drawing_set(
     edge_cant_mm = float(lat["edge_cantilever_m"]) * 1000.0
     girder_h_mm = float(calc["t_girder_section"]["mid_span_mm"]["height"])
     pile_len_cm = float(sub["bored_pile"]["design_length_m"]) * 100.0
+    abut_pile_len_cm = float(calc["abutment_checks"]["bored_pile"]["design_length_m"]) * 100.0
 
     sheet_plan: list[tuple[str, str | None, CivilDrawingType, dict[str, Any], list[str]]] = [
         ("QL-01", None, "notes_and_boq", {"variant": "notes", "title": "设计总说明及全套施工图目录"}, []),
@@ -3275,6 +3297,7 @@ def generate_full_bridge_drawing_set(
                 "span_cm": span_cm,
                 "girder_depth_cm": girder_h_mm / 10.0,
                 "pile_length_cm": pile_len_cm,
+                "abutment_pile_length_cm": abut_pile_len_cm,
                 "deck_elevation_m": ps["deck_elevation_m"],
                 "flood_elevation_m": ps["flood_elevation_m"],
             },
@@ -3382,7 +3405,8 @@ def generate_full_bridge_drawing_set(
                 "title": "桩柱式桥台一般构造图",
                 "cap_length_mm": deck_w_mm,
                 "column_spacing_mm": round(max(3600.0, deck_w_mm - 3600.0), 1),
-                "pile_diameter_mm": float(sub["bored_pile"]["diameter_m"]) * 1000.0,
+                "pile_diameter_mm": float(calc["abutment_checks"]["bored_pile"]["diameter_m"]) * 1000.0,
+                "abutment_pile_length_mm": abut_pile_len_cm * 10.0,
                 "pedestal_spacing_mm": spacing_mm,
                 "n_pedestals": lat["n_girders"],
                 "bearing_model": calc["bearing_checks"]["bearing_model"],
@@ -3432,9 +3456,13 @@ def generate_full_bridge_drawing_set(
             }
         )
 
+    from .bridge_calc_book import generate_bridge_calculation_book_markdown
+
     coverage = audit_task_book_coverage(generated_sheets, calc)
     calc_out_path = out_root / "bridge_calculation_report.json"
     calc_out_path.write_text(json.dumps(calc, ensure_ascii=False, indent=2), encoding="utf-8")
+    calc_book_path = out_root / "bridge_calculation_book.md"
+    generate_bridge_calculation_book_markdown(calc, output_path=calc_book_path)
 
     failed_checks = list(calc.get("failed_checks", []))
     failed_drawings = sorted(
@@ -3442,24 +3470,37 @@ def generate_full_bridge_drawing_set(
         | set(coverage.get("failed_sheets", []))
     )
     overall_passed = (
-        calc.get("status", "passed") == "passed"
+        calc.get("calculation_status", calc.get("status", "passed")) == "passed"
         and coverage["status"] == "passed"
         and calc["consistency_audit"]["status"] == "passed"
         and not failed_checks
         and not failed_drawings
     )
+    calc_status_final = "passed" if overall_passed else "failed"
+    grad_status_final = (
+        "failed"
+        if not overall_passed
+        else str(calc.get("graduation_readiness_status", "pending_confirmation"))
+    )
 
     manifest_out_path = out_root / "drawing_set_manifest.json"
     manifest_payload = {
-        "status": "passed" if overall_passed else "failed",
+        "status": calc_status_final,
+        "calculation_status": calc_status_final,
+        "graduation_readiness_status": grad_status_final,
+        "status_summary_zh": calc.get("status_summary_zh", ""),
         "project_summary": ps,
         "failed_checks": failed_checks,
         "failed_drawings": failed_drawings,
         "unresolved_assumptions": calc["unresolved_assumptions"],
+        "assumption_dependent_conclusions": calc.get("assumption_dependent_conclusions", []),
         "pending_graduation_deliverables": calc.get("pending_graduation_deliverables", []),
+        "seismic_verification": calc.get("seismic_verification"),
+        "independent_cross_check": calc.get("independent_cross_check"),
         "coverage_audit": coverage,
         "sheets": generated_sheets,
         "calculation_report_path": str(calc_out_path),
+        "calculation_book_path": str(calc_book_path),
     }
     manifest_out_path.write_text(json.dumps(manifest_payload, ensure_ascii=False, indent=2), encoding="utf-8")
     return {**manifest_payload, "calculation_report": calc, "manifest_path": str(manifest_out_path)}

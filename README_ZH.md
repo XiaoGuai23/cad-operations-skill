@@ -17,8 +17,8 @@
 <!-- 状态与核心能力徽章墙 -->
 <p>
   <a href="https://github.com/XiaoGuai23/cad-operations-skill/actions/workflows/smoke-test.yml"><img src="https://github.com/XiaoGuai23/cad-operations-skill/actions/workflows/smoke-test.yml/badge.svg" alt="CI Tests"></a>
-  <a href="https://github.com/XiaoGuai23/cad-operations-skill/releases"><img src="assets/badges/release.svg" alt="Release v2.4.1"></a>
-  <img src="assets/badges/tests.svg" alt="1,044+ Tests Passed">
+  <a href="https://github.com/XiaoGuai23/cad-operations-skill/releases"><img src="assets/badges/release.svg" alt="Release v2.6.0"></a>
+  <img src="assets/badges/tests.svg" alt="1,050+ Tests Passed">
   <img src="assets/badges/python.svg" alt="Python 3.12">
   <a href="references/mcp-server-guide.md"><img src="assets/badges/mcp-tools.svg" alt="MCP 28 Tools"></a>
   <a href="SKILL.md"><img src="assets/badges/agent-skill.svg" alt="Agent Skill"></a>
@@ -96,7 +96,7 @@
 - **[从文档直出审计级二维蓝图与三维 STEP](#六大核心引擎)**：自动提取参数并拦截缺失/冲突项，原生绘制直齿圆柱齿轮、轴承透盖、带筋支座、法兰、阶梯轴三视图，内置国标水平横梁 `Ra` 粗糙度、基准框 `[A]/[B]` 与带折弯引线的形位公差框。
 - **[矢量级“指哪改哪”与红绿叠图 Diff](#六大核心引擎)**：单击图元或拉出蓝色虚线框，支持口语或结构化 IR 执行**改孔径、拐角倒角（`C5`）、相切倒圆角（`R8`）、新增圆周螺栓孔阵（`PCD`）、对称镜像**，自动换算英制/公制 `$INSUNITS` 并严防污染框外尺寸。
 - **[外部存量脏图纸（Legacy DXF）防篡改体检与清洗](#六大核心引擎)**：无需内部规约，直接揪出**人为改写文字的“篡改假尺寸”**、炸开散落标注、导致激光切割中断的 `0.35 mm` 轮廓微缝、重线与文字压线，支持一键原子清洗。
-- **[土木与公路桥梁结构计算 + 全套施工图引擎（`v2.4`）](references/civil-bridge-engineering.md)**：零商业软件依赖完成曼宁水文孔径、T 梁多边形截面特性、杠杆法/偏心压力法横向分布、公路-Ⅰ级 10 单元包络、预应力损失、1D 连续盖梁刚度矩阵求解及跨图单位/限值校核，直出桥型总体布置、标准横断面、钢束布置、双柱桥墩/桩柱桥台及力学影响线等 5 类 100 分 S 级 CAD 图纸。
+- **[土木与公路桥梁结构计算 + 导师复核计算书 + 18 张 A3 施工图册（`v2.6`）](references/civil-bridge-engineering.md)**：零商业软件依赖完成实测水文断面与钻孔地勘接入、代表性 T 梁/中间双柱墩/独立桩柱式桥台及朗肯土压力计算、手算解析与电算交叉对算、任点钢筋编号 6 维溯源（数量口径、选筋依据、控制内力、荷载组合、参数出处）、“计算通过 vs 毕设资料齐全”双状态分离及 `python scripts/run_bridge_suite.py` 一键生成重开 DXF 实测验收的全套 `QL-01 ~ QL-18` 施工图与计算说明书。
 - **[通过 28 项 MCP 工具与 Web Studio 赋能任意 Agent](#mcp-与智能体接入)**：同时支持 `stdio`、Streamable HTTP、项目偏好记忆、错题回归飞轮与内置 `/studio` 交互画布。
 
 ### 8 行 Python 完成外部存量图纸体检清洗 + 四角相切倒圆角：
@@ -241,9 +241,10 @@ python -m cad_skill_core verify-roundtrip before.dxf after.dxf --json
 python -m cad_skill_core score-drawing output/part3d/sheet2d.dxf --json
 python -m cad_skill_core benchmark-cad1k --out output/cad1k-eval --json
 
-# 5) 变电站电气主接线图 & 道路路面结构专项出图
+# 5) 变电站电气主接线图、道路路面结构 & 全套18张A3桥梁施工图+逐步复核计算书一键复现
 python scripts/make_main_sld.py examples/electrical_sld_spec.json --outdir output/sld --stem demo_sld
 python scripts/generate_pavement_cad_ezdxf.py examples/pavement_structure_spec.json --out output/pavement
+python scripts/run_bridge_suite.py --out output/wenchang_18_sheets
 ```
 </details>
 

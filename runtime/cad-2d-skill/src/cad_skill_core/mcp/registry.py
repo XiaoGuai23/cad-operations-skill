@@ -425,6 +425,11 @@ class ManageRegressionsArgs(StrictInputModel):
 class CivilBridgeCalcArgs(StrictInputModel):
     mode: Literal[
         "full",
+        "wenchang",
+        "calc_book",
+        "cross_check",
+        "lookup_bar",
+        "survey_ingest",
         "hydrology",
         "polygon_section",
         "t_girder_section",
@@ -436,11 +441,15 @@ class CivilBridgeCalcArgs(StrictInputModel):
         "table_audit",
     ] = Field(
         default="full",
-        description="Calculation or QA audit mode under JTG D60-2015 / JTG 3362-2018.",
+        description="Calculation, calculation-book, hand cross-check, rebar lookup, survey ingestion, or QA audit mode under JTG D60-2015 / JTG 3362-2018 / JTG 3363-2019.",
     )
     params: dict[str, Any] = Field(
         default_factory=dict,
         description="Input engineering parameters dictionary for the selected calculation mode.",
+    )
+    bar_id: str | None = Field(
+        default=None,
+        description="Target tendon or rebar ID (e.g. 'N1', 'R1', 'GJ1', 'GL1', 'DZ1', 'QT3') when mode='lookup_bar'.",
     )
     table_text: str | None = Field(
         default=None,
@@ -1474,10 +1483,40 @@ def _handle_manage_regressions(
 def _handle_civil_bridge_calc(
     sandbox: MCPWorkspaceSandbox, args: CivilBridgeCalcArgs
 ) -> tuple[dict[str, Any], Path | None, bool]:
+    from cad_skill_core.civil.bridge_calc import ingest_bridge_survey_data
+    from cad_skill_core.civil.bridge_calc_book import (
+        compute_independent_hand_cross_check,
+        generate_bridge_calculation_book_markdown,
+    )
+    from cad_skill_core.civil.bridge_checks import lookup_bar_or_tendon
+
     mode = args.mode
     p = args.params
     if mode == "full":
-        result = run_full_bridge_calculation(p)
+        result: Any = run_full_bridge_calculation(p)
+    elif mode == "wenchang":
+        result = run_full_bridge_calculation({"preset": "wenchang", **p})
+    elif mode == "calc_book":
+        calc_rep = run_full_bridge_calculation(p or {"preset": "wenchang"})
+        md_text = generate_bridge_calculation_book_markdown(calc_rep)
+        result = {
+            "calculation_status": calc_rep["calculation_status"],
+            "graduation_readiness_status": calc_rep["graduation_readiness_status"],
+            "independent_cross_check": calc_rep["independent_cross_check"],
+            "markdown": md_text,
+        }
+    elif mode == "cross_check":
+        calc_rep = run_full_bridge_calculation(p or {"preset": "wenchang"})
+        result = compute_independent_hand_cross_check(calc_rep)
+    elif mode == "lookup_bar":
+        bid = args.bar_id or p.get("bar_id")
+        if not bid:
+            raise ValueError("bar_id is required when mode='lookup_bar'")
+        clean_p = {k: v for k, v in p.items() if k != "bar_id"}
+        calc_rep = run_full_bridge_calculation(clean_p or {"preset": "wenchang"})
+        result = lookup_bar_or_tendon(calc_rep, str(bid))
+    elif mode == "survey_ingest":
+        result = ingest_bridge_survey_data(p.get("survey_data", p))
     elif mode == "hydrology":
         result = compute_hydrology_and_span(**p)
     elif mode == "polygon_section":

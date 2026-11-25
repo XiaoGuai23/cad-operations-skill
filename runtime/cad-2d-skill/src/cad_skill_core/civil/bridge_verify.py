@@ -708,6 +708,76 @@ def verify_civil_dxf(
         _check_dot_count("rebar_t_girder_web", "R2", top_cnt, "主梁顶板架立筋")
         _check_dot_count("rebar_t_girder_web", "R3", mid_cnt, "主梁腹板水平防裂筋")
 
+    if "girder_web_elev" in views_by_id:
+        vb_gwe = views_by_id["girder_web_elev"]
+        gwe_b = vb_gwe.get("paper_bounds") or [0.0, 0.0, 0.0, 0.0]
+        sc_gwe = float(vb_gwe["scale_denom"])
+        ox_gwe = float(vb_gwe["origin_x"])
+        stirrup_rxs = sorted(
+            round((p0[0] - ox_gwe) * sc_gwe, 2)
+            for p0, p1, lyr in lines_geom
+            if lyr == "REBAR_STIRRUP"
+            and abs(p0[0] - p1[0]) < 0.05
+            and abs(p1[1] - p0[1]) >= 12.0
+            and _rect_distance(gwe_b, p0[0], p0[1]) <= 3.0
+        )
+        sheet_joined = " ".join(s for s, _, _ in texts if s)
+        if "@100" in sheet_joined and "@150" in sheet_joined:
+            dense_rxs = [rx for rx in stirrup_rxs if rx <= 2100.0]
+            std_rxs = [rx for rx in stirrup_rxs if rx > 2100.0]
+            checks_run += 1
+            if len(dense_rxs) < 2:
+                _fail(
+                    "STIRRUP_DRAWN_PITCH_MISMATCH",
+                    view_id="girder_web_elev",
+                    expected=100.0,
+                    measured="missing",
+                    delta=None,
+                    message="主梁腹板立面图未绘制加密区 GJ1 竖向箍筋实体",
+                )
+            else:
+                dense_dxs = [b_x - a_x for a_x, b_x in zip(dense_rxs[:-1], dense_rxs[1:])]
+                avg_dense_mm = sum(dense_dxs) / len(dense_dxs)
+                if any(abs(dx - 100.0) > 2.0 for dx in dense_dxs):
+                    _fail(
+                        "STIRRUP_DRAWN_PITCH_MISMATCH",
+                        view_id="girder_web_elev",
+                        expected=100.0,
+                        measured=round(avg_dense_mm, 1),
+                        delta=round(avg_dense_mm - 100.0, 1),
+                        message=f"QL-09 加密区标注 @100，但图面实画箍筋间距为 {avg_dense_mm:.1f} mm（与 @100 标注不符）",
+                    )
+            if std_rxs:
+                anchor_std = [dense_rxs[-1]] + std_rxs if dense_rxs else std_rxs
+                std_dxs = [b_x - a_x for a_x, b_x in zip(anchor_std[:-1], anchor_std[1:])]
+                avg_std_mm = sum(std_dxs) / len(std_dxs)
+                checks_run += 1
+                if any(abs(dx - 150.0) > 2.0 for dx in std_dxs):
+                    _fail(
+                        "STIRRUP_DRAWN_PITCH_MISMATCH",
+                        view_id="girder_web_elev",
+                        expected=150.0,
+                        measured=round(avg_std_mm, 1),
+                        delta=round(avg_std_mm - 150.0, 1),
+                        message=f"QL-09 普通区标注 @150，但图面实画箍筋间距为 {avg_std_mm:.1f} mm（与 @150 标注不符）",
+                    )
+        if "GJ1" in visible_bars and visible_bars["GJ1"]["count"] is not None:
+            exp_gj1_full = int(visible_bars["GJ1"]["count"])
+            meas_gj1_full = 2 * len(stirrup_rxs)
+            checks_run += 1
+            if meas_gj1_full != exp_gj1_full:
+                _fail(
+                    "STIRRUP_DRAWN_COUNT_MISMATCH",
+                    view_id="girder_web_elev",
+                    expected=exp_gj1_full,
+                    measured=meas_gj1_full,
+                    delta=float(meas_gj1_full - exp_gj1_full),
+                    message=(
+                        f"QL-09 半跨立面实画箍筋 {len(stirrup_rxs)} 根（全梁对称折算 {meas_gj1_full} 根），"
+                        f"与钢筋表 GJ1 根数 ({exp_gj1_full} 根) 不一致"
+                    ),
+                )
+
     if "rebar_t_girder_flange" in views_by_id or drawing_no == "QL-10":
         for req_vid in ("rebar_t_girder_flange", "wet_joint_rebar_detail"):
             checks_run += 1
@@ -819,6 +889,19 @@ def verify_civil_dxf(
             _check_dot_count("bored_pile_section", "ZJ1", len(dots_by_view.get("bored_pile_section", [])), "钻孔灌注桩主筋")
         if "tie_beam_section" in views_by_id:
             _check_dot_count("tie_beam_section", "XL1", len(dots_by_view.get("tie_beam_section", [])), "桩顶横系梁主筋")
+        # Enforce explicit counting scope declaration on QL-17 (single column / tie beam / pile vs whole pier!)
+        ql17_joined = " ".join(s for s, _, _ in texts if s)
+        has_mult_tbl_17 = any(t.get("has_unit_mult") for t in visible_tables)
+        has_scope_tokens_17 = all(tok in ql17_joined for tok in ("单根墩柱", "单道系梁", "单根", "每墩"))
+        checks_run += 1
+        if not (has_mult_tbl_17 and has_scope_tokens_17):
+            _fail(
+                "MISSING_REBAR_UNIT_SCOPE_DECLARATION",
+                expected="构件部位(单根墩柱/单道系梁/单根桩基) + 每墩件数/每墩重",
+                measured=f"has_unit_mult={has_mult_tbl_17},has_scope_text={has_scope_tokens_17}",
+                delta=None,
+                message="QL-17 桥墩钢筋明细表未明确区分按单柱/单桩/单道系梁统计还是按整座双柱墩汇总",
+            )
 
     if "abutment_side_rebar" in views_by_id or drawing_no == "QL-18":
         for req_vid in ("abutment_plan", "abutment_elev", "abutment_side_rebar", "abutment_cap_section", "abutment_joint_detail", "abutment_pile_section"):
@@ -835,44 +918,57 @@ def verify_civil_dxf(
             _check_dot_count("abutment_cap_section", "QT1", len(dots_by_view.get("abutment_cap_section", [])), "桥台台帽主筋")
         if "abutment_pile_section" in views_by_id:
             _check_dot_count("abutment_pile_section", "QT3", len(dots_by_view.get("abutment_pile_section", [])), "桥台钻孔桩主筋")
-        # Verify A-A section cut in abutment_plan aligns with a drawn bearing pedestal center (not midway between pedestals!)
-        if "abutment_plan" in views_by_id and "abutment_cap_section" in views_by_id and "DS1" in visible_bars:
-            v_pl = views_by_id["abutment_plan"]
-            pl_b = v_pl.get("paper_bounds") or [0.0, 0.0, 0.0, 0.0]
-            ped_cxs = [
-                0.5 * (min(p[0] for p in pts) + max(p[0] for p in pts))
-                for pts in polylines
-                if len(pts) == 4
-                and all(_rect_distance(pl_b, p[0], p[1]) <= 2.0 for p in pts)
-                and 4.5 <= (max(p[0] for p in pts) - min(p[0] for p in pts)) <= 8.5
-                and 4.5 <= (max(p[1] for p in pts) - min(p[1] for p in pts)) <= 8.5
-            ]
-            a_lbl_xs = [
-                tx for s, tx, ty in texts if s == "A" and _rect_distance(pl_b, tx, ty) <= 4.0
-            ]
-            if ped_cxs and a_lbl_xs:
-                # Section-cut line x is ~3.3mm behind the 'A' label in look_dx direction; find vertical DIM tick line near 'A'
+        # Verify A-A section cut in BOTH abutment_plan AND abutment_elev passes through a drawn bearing pedestal!
+        if "abutment_cap_section" in views_by_id and "DS1" in visible_bars:
+            for ped_vid, ped_h_min, ped_h_max, zh_v in (
+                ("abutment_plan", 4.5, 8.5, "桥台平面图"),
+                ("abutment_elev", 1.2, 3.2, "桥台正立面图"),
+            ):
+                if ped_vid not in views_by_id:
+                    continue
+                v_pv = views_by_id[ped_vid]
+                pv_b = v_pv.get("paper_bounds") or [0.0, 0.0, 0.0, 0.0]
+                ped_cxs = [
+                    0.5 * (min(p[0] for p in pts) + max(p[0] for p in pts))
+                    for pts in polylines
+                    if len(pts) == 4
+                    and all(_rect_distance(pv_b, p[0], p[1]) <= 2.0 for p in pts)
+                    and 4.5 <= (max(p[0] for p in pts) - min(p[0] for p in pts)) <= 8.5
+                    and ped_h_min <= (max(p[1] for p in pts) - min(p[1] for p in pts)) <= ped_h_max
+                ]
+                a_lbl_xs = [
+                    tx for s, tx, ty in texts if s == "A" and _rect_distance(pv_b, tx, ty) <= 4.5
+                ]
                 cut_xs = [
                     p0[0]
                     for p0, p1, lyr in lines_geom
-                    if lyr == "DIM"
+                    if lyr in {"FRAME", "DIM"}
                     and abs(p0[0] - p1[0]) < 0.05
-                    and abs(p0[1] - p1[1]) >= 2.2
-                    and _rect_distance(pl_b, p0[0], p0[1]) <= 4.0
-                    and any(abs(p0[0] - ax) <= 6.0 for ax in a_lbl_xs)
+                    and 2.0 <= abs(p0[1] - p1[1]) <= 6.5
+                    and _rect_distance(pv_b, p0[0], p0[1]) <= 6.5
+                    and any(abs(p0[0] - ax) <= 7.0 for ax in a_lbl_xs)
                 ]
-                if cut_xs:
+                checks_run += 1
+                if not ped_cxs or not cut_xs:
+                    _fail(
+                        "SECTION_CUT_PEDESTAL_MISALIGNED",
+                        view_id=ped_vid,
+                        expected="pedestals+A-A_cut",
+                        measured=f"pedestals={len(ped_cxs)},cuts={len(cut_xs)}",
+                        delta=None,
+                        message=f"{zh_v} 缺少所画支座垫石或 A-A 剖切线，无法核对 A-A 剖面垫石位置",
+                    )
+                else:
                     aa_cx = cut_xs[0]
                     min_ped_dist = min(abs(aa_cx - pcx) for pcx in ped_cxs)
-                    checks_run += 1
                     if min_ped_dist > 1.8:
                         _fail(
                             "SECTION_CUT_PEDESTAL_MISALIGNED",
-                            view_id="abutment_plan",
+                            view_id=ped_vid,
                             expected=0.0,
                             measured=round(min_ped_dist, 2),
                             delta=min_ped_dist,
-                            message="桥台平面图 A-A 剖切线位于垫石间隙处，但 A-A 断面却画出了支座垫石与 DS1 防裂网",
+                            message=f"{zh_v} A-A 剖切线未穿过所画支座垫石（偏离最近垫石中心 {min_ped_dist:.2f} mm），但 A-A 断面画出了垫石与 DS1",
                         )
 
     # ------------------------------------------------------------------

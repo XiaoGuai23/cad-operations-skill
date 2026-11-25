@@ -17,12 +17,13 @@ Implements traceable Chinese Highway Bridge Code formulas (JTG D60-2015 / JTG 33
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 import csv
 import io
 import math
 from pathlib import Path
 import re
-from typing import Any, Literal, Sequence
+from typing import Any, Literal
 
 
 def compute_hydrology_and_span(
@@ -73,6 +74,8 @@ def compute_hydrology_and_span(
     total_bridge_length_m = recommended_spans * standard_span_m
 
     return {
+        "area_m2": round(area_m2, 3),
+        "wetted_perimeter_m": round(wetted_perimeter_m, 3),
         "hydraulic_radius_m": round(hydraulic_radius_m, 4),
         "roughness_inv": round(inv_n, 4),
         "slope_i": slope_i,
@@ -833,10 +836,13 @@ def solve_continuous_cap_beam_1d(
         for i in range(n_girders)
     ]
 
-    # Build sorted mesh nodes including ends, columns, girders, quarter/mid points
-    raw_nodes = {0.0, round(cap_length_m, 6), round(half_cap, 6), *col_xs, *girder_xs}
+    # Build sorted mesh nodes; prevent near-zero-length sliver elements (<80mm) next to supports/loads
+    key_nodes = sorted({0.0, round(cap_length_m, 6), round(half_cap, 6), *col_xs, *girder_xs})
+    raw_nodes = set(key_nodes)
     for k in range(21):
-        raw_nodes.add(round(cap_length_m * k / 20.0, 6))
+        cand = round(cap_length_m * k / 20.0, 6)
+        if min(abs(cand - kn) for kn in key_nodes) >= 0.08:
+            raw_nodes.add(cand)
     nodes = sorted(x for x in raw_nodes if -1e-6 <= x <= cap_length_m + 1e-6)
     n_nodes = len(nodes)
     ndof = 2 * n_nodes  # [w_0, theta_0, w_1, theta_1, ...]
@@ -926,6 +932,7 @@ def solve_continuous_cap_beam_1d(
         "cap_length_m": round(cap_length_m, 3),
         "column_positions_m": col_xs,
         "girder_positions_m": girder_xs,
+        "girder_reactions_kn": [round(float(x), 2) for x in girder_reactions_kn],
         "support_reactions": reactions_kn,
         "max_sagging_moment_knm": round(max_sag_m, 2),
         "max_hogging_moment_knm": round(min_hog_m, 2),
@@ -1360,6 +1367,284 @@ def _deep_merge_dict(base: dict[str, Any], over: dict[str, Any]) -> dict[str, An
     return out
 
 
+def _normalize_soil_layers(raw_layers: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    for idx, item in enumerate(raw_layers):
+        lyr = dict(item)
+        if "thickness_m" in lyr:
+            thk = float(lyr["thickness_m"])
+        elif "top_elev_m" in lyr and "bot_elev_m" in lyr:
+            thk = float(lyr["top_elev_m"]) - float(lyr["bot_elev_m"])
+        else:
+            raise ValueError(f"soil layer #{idx + 1} requires 'thickness_m' or ('top_elev_m', 'bot_elev_m')")
+        if thk <= 0:
+            raise ValueError(f"soil layer #{idx + 1} thickness_m must be > 0 (got {thk})")
+        normalized.append(
+            {
+                "name": str(lyr.get("name", f"Layer-{idx + 1}")),
+                "thickness_m": round(thk, 3),
+                "qik_kpa": float(lyr["qik_kpa"]),
+                "fa0_kpa": float(lyr["fa0_kpa"]),
+            }
+        )
+    if not normalized:
+        raise ValueError("soil_layers must contain at least 1 soil stratum")
+    return normalized
+
+
+def ingest_bridge_survey_data(survey_data: Mapping[str, Any]) -> dict[str, Any]:
+    """Ingest real site hydrology cross-section, route profile, and borehole geotechnical survey data.
+
+    Supports:
+    - `river_cross_section`: `stations` (`[(x_m, z_m), ...]` or `[{"x_m": .., "z_m": ..}]`), `flood_elevation_m`
+      (exact submerged polygonal integration of area A, wetted perimeter chi, and water surface width Bw),
+      `roughness_n` (Manning n) or `roughness_inv` (1/n), `slope_permille` (or `hydraulic_slope`), `design_discharge_m3_s`.
+    - `route_profile`: `deck_elevation_m`, `min_freeboard_m`.
+    - `pier_borehole` / `pier_soil_layers` & `abutment_borehole` / `abutment_soil_layers` & `backfill`.
+    - `bearing_positioning`: `beam_length_m`, `bearing_center_offset_m`.
+    """
+    sd = dict(survey_data or {})
+    overrides: dict[str, Any] = {}
+    summary: dict[str, Any] = {"ingested_sections": []}
+
+    # 1. Flood elevation & Route deck elevation
+    river_sec = dict(sd.get("river_cross_section") or {})
+    route_prof = dict(sd.get("route_profile") or {})
+
+    flood_z: float | None = None
+    for src_d, k_f in (
+        (sd, "flood_elevation_m"),
+        (sd, "design_flood_level_m"),
+        (river_sec, "flood_elevation_m"),
+        (river_sec, "design_flood_level_m"),
+    ):
+        if k_f in src_d and src_d[k_f] is not None:
+            flood_z = float(src_d[k_f])
+            break
+    if flood_z is not None:
+        overrides["flood_elevation_m"] = round(flood_z, 3)
+        summary["flood_elevation_m"] = overrides["flood_elevation_m"]
+
+    deck_z: float | None = None
+    for src_d, k_d in (
+        (sd, "deck_elevation_m"),
+        (route_prof, "deck_elevation_m"),
+        (route_prof, "center_stake_elevation_m"),
+    ):
+        if k_d in src_d and src_d[k_d] is not None:
+            deck_z = float(src_d[k_d])
+            break
+    if deck_z is not None:
+        overrides["deck_elevation_m"] = round(deck_z, 3)
+        summary["deck_elevation_m"] = overrides["deck_elevation_m"]
+        summary["ingested_sections"].append("route_profile")
+
+    # 2. River cross-section polygonal integration below flood_z
+    raw_stations = river_sec.get("stations") or sd.get("river_stations")
+    if raw_stations:
+        if flood_z is None:
+            raise ValueError("flood_elevation_m is required when river_cross_section.stations is provided")
+        pts: list[tuple[float, float]] = []
+        for st in raw_stations:
+            if isinstance(st, Mapping):
+                pts.append((float(st["x_m"]), float(st["z_m"])))
+            else:
+                pts.append((float(st[0]), float(st[1])))
+        pts.sort(key=lambda p: p[0])
+        if len(pts) < 3:
+            raise ValueError("river_cross_section.stations requires at least 3 (x_m, z_m) stations")
+
+        area_m2 = 0.0
+        wetted_p_m = 0.0
+        wet_xs: list[float] = []
+        for (x0, z0), (x1, z1) in zip(pts[:-1], pts[1:]):
+            dx = x1 - x0
+            if dx <= 1e-9:
+                continue
+            d0 = flood_z - z0
+            d1 = flood_z - z1
+            if d0 <= 0.0 and d1 <= 0.0:
+                continue
+            if d0 >= 0.0 and d1 >= 0.0:
+                area_m2 += 0.5 * (d0 + d1) * dx
+                wetted_p_m += math.hypot(dx, z1 - z0)
+                wet_xs.extend((x0, x1))
+            elif d0 > 0.0 > d1:
+                frac = d0 / (d0 - d1)
+                xi = x0 + frac * dx
+                area_m2 += 0.5 * d0 * (xi - x0)
+                wetted_p_m += math.hypot(xi - x0, flood_z - z0)
+                wet_xs.extend((x0, xi))
+            else:
+                frac = (-d0) / (d1 - d0)
+                xi = x0 + frac * dx
+                area_m2 += 0.5 * d1 * (x1 - xi)
+                wetted_p_m += math.hypot(x1 - xi, z1 - flood_z)
+                wet_xs.extend((xi, x1))
+
+        if area_m2 <= 0.0 or wetted_p_m <= 0.0 or not wet_xs:
+            raise ValueError(f"flood_elevation_m ({flood_z}m) does not submerge the provided river_cross_section")
+
+        b_water = max(wet_xs) - min(wet_xs)
+        if "roughness_n" in river_sec and river_sec["roughness_n"]:
+            r_inv = round(1.0 / float(river_sec["roughness_n"]), 4)
+        else:
+            r_inv = float(river_sec.get("roughness_inv", 22.22))
+        if "hydraulic_slope" in river_sec and river_sec["hydraulic_slope"] is not None:
+            slp_pm = float(river_sec["hydraulic_slope"]) * 1000.0
+        else:
+            slp_pm = float(river_sec.get("slope_permille", 0.5))
+
+        hydro_dict: dict[str, Any] = {
+            "area_m2": round(area_m2, 3),
+            "wetted_perimeter_m": round(wetted_p_m, 3),
+            "channel_width_m": round(float(river_sec.get("channel_width_m", b_water)), 3),
+            "roughness_inv": r_inv,
+            "slope_permille": round(slp_pm, 4),
+        }
+        if "design_discharge_m3_s" in river_sec and river_sec["design_discharge_m3_s"] is not None:
+            hydro_dict["design_discharge_m3_s"] = float(river_sec["design_discharge_m3_s"])
+        if "standard_span_m" in river_sec:
+            hydro_dict["standard_span_m"] = float(river_sec["standard_span_m"])
+        overrides["hydrology"] = hydro_dict
+        summary["river_hydraulics"] = hydro_dict
+        summary["ingested_sections"].append("river_cross_section")
+    elif "hydrology" in sd and isinstance(sd["hydrology"], Mapping):
+        overrides["hydrology"] = dict(sd["hydrology"])
+        summary["ingested_sections"].append("hydrology")
+
+    # 3. Geotechnical boreholes (pier & abutment) + backfill
+    pier_bh = dict(sd.get("pier_borehole") or {})
+    abut_bh = dict(sd.get("abutment_borehole") or {})
+    raw_pier_layers = pier_bh.get("layers") or sd.get("pier_soil_layers") or sd.get("soil_layers")
+    raw_abut_layers = abut_bh.get("layers") or sd.get("abutment_soil_layers")
+
+    if raw_pier_layers:
+        overrides["soil_layers"] = _normalize_soil_layers(raw_pier_layers)
+        summary["pier_borehole_id"] = str(pier_bh.get("borehole_id", "ZK-PIER"))
+        summary["ingested_sections"].append("pier_geotech")
+    if raw_abut_layers:
+        overrides["abutment_soil_layers"] = _normalize_soil_layers(raw_abut_layers)
+        summary["abutment_borehole_id"] = str(abut_bh.get("borehole_id", "ZK-ABUT"))
+        summary["ingested_sections"].append("abutment_geotech")
+
+    if "confirmed_pile_length_m" in pier_bh:
+        overrides["pile_length_m"] = float(pier_bh["confirmed_pile_length_m"])
+    elif "pile_length_m" in sd:
+        overrides["pile_length_m"] = float(sd["pile_length_m"])
+
+    if "confirmed_pile_length_m" in abut_bh:
+        overrides["abutment_pile_length_m"] = float(abut_bh["confirmed_pile_length_m"])
+    elif "abutment_pile_length_m" in sd:
+        overrides["abutment_pile_length_m"] = float(sd["abutment_pile_length_m"])
+
+    if "backfill" in sd and isinstance(sd["backfill"], Mapping):
+        overrides["abutment_backfill"] = dict(sd["backfill"])
+        summary["ingested_sections"].append("abutment_backfill")
+
+    # 4. Bearing positioning / span confirmation
+    brg_pos = dict(sd.get("bearing_positioning") or {})
+    if "beam_length_m" in brg_pos:
+        overrides["beam_length_m"] = float(brg_pos["beam_length_m"])
+    if "bearing_center_offset_m" in brg_pos:
+        overrides["bearing_center_offset_m"] = float(brg_pos["bearing_center_offset_m"])
+        summary["ingested_sections"].append("bearing_positioning")
+    elif "bearing_center_offset_m" in sd:
+        overrides["bearing_center_offset_m"] = float(sd["bearing_center_offset_m"])
+        summary["ingested_sections"].append("bearing_positioning")
+
+    return {"overrides": overrides, "summary": summary}
+
+
+def _evaluate_seismic_verification(raw_cfg: Mapping[str, Any]) -> dict[str, Any]:
+    """Audit E1/E2 seismic verification strictly from load cases, numerical demand/capacity results, and review record.
+
+    Passing `seismic_checks: {"status": "pending"}` or an incomplete dict without E1 & E2 numerical results
+    and review record MUST stay 'pending' (never falsely marked 'completed').
+    """
+    sc_raw = raw_cfg.get("seismic_checks")
+    if not isinstance(sc_raw, Mapping) or not sc_raw:
+        return {
+            "status": "pending",
+            "verified": False,
+            "reason": "尚未提交 E1 弹性抗震与 E2 延性/抗剪及防落梁挡块验算工况、数值结果及复核记录",
+        }
+
+    raw_st = str(sc_raw.get("status", "")).strip().lower()
+    if raw_st in {"pending", "todo", "incomplete", "draft", "unverified", ""}:
+        return {
+            "status": "pending",
+            "verified": False,
+            "reason": f"seismic_checks.status 为 '{raw_st or 'empty'}'，尚未完成实际抗震工况验算",
+        }
+
+    def _extract_case(case_obj: Any) -> tuple[bool, float | None, float | None, str]:
+        if not isinstance(case_obj, Mapping):
+            return False, None, None, "缺少工况结果字典"
+        dem_val: float | None = None
+        cap_val: float | None = None
+        for dk in ("demand", "demand_knm", "demand_kn", "demand_mm", "displacement_mm"):
+            if isinstance(case_obj.get(dk), (int, float)) and not isinstance(case_obj.get(dk), bool):
+                dem_val = float(case_obj[dk])
+                break
+        for ck in ("capacity", "capacity_knm", "capacity_kn", "capacity_mm", "allowable_mm", "allowable"):
+            if isinstance(case_obj.get(ck), (int, float)) and not isinstance(case_obj.get(ck), bool):
+                cap_val = float(case_obj[ck])
+                break
+        if dem_val is None or cap_val is None or cap_val <= 0:
+            return False, dem_val, cap_val, "缺少有效的数值型需求值(demand)或承载能力/容许值(capacity)"
+        return True, dem_val, cap_val, str(case_obj.get("unit", "-"))
+
+    ok_e1, dem_e1, cap_e1, unit_e1 = _extract_case(sc_raw.get("e1"))
+    ok_e2, dem_e2, cap_e2, unit_e2 = _extract_case(sc_raw.get("e2"))
+    reviewer = str(sc_raw.get("checked_by") or sc_raw.get("review_record") or "").strip()
+
+    if raw_st == "failed" or (ok_e1 and dem_e1 > cap_e1) or (ok_e2 and dem_e2 > cap_e2):  # type: ignore[operator]
+        bad_case = "E1" if (ok_e1 and dem_e1 > cap_e1) else "E2"  # type: ignore[operator]
+        b_dem = dem_e1 if bad_case == "E1" else dem_e2
+        b_cap = cap_e1 if bad_case == "E1" else cap_e2
+        b_unit = unit_e1 if bad_case == "E1" else unit_e2
+        return {
+            "status": "failed",
+            "verified": False,
+            "failed_case": bad_case,
+            "demand": b_dem,
+            "capacity": b_cap,
+            "unit": b_unit,
+            "reason": f"{bad_case} 地震作用抗震验算超限：需求 {b_dem} > 能力 {b_cap} {b_unit}",
+        }
+
+    if not ok_e1 or not ok_e2:
+        return {
+            "status": "pending",
+            "verified": False,
+            "reason": "需同时提供 E1 设防地震与 E2 罕遇地震的数值型需求与抗力验算结果",
+        }
+
+    if not reviewer:
+        return {
+            "status": "pending",
+            "verified": False,
+            "reason": "E1/E2 数值结果已输入，但缺少复核人或复核记录 (checked_by / review_record)",
+        }
+
+    if raw_st in {"passed", "completed", "verified"}:
+        return {
+            "status": "completed",
+            "verified": True,
+            "e1": {"demand": dem_e1, "capacity": cap_e1, "unit": unit_e1, "passed": True},
+            "e2": {"demand": dem_e2, "capacity": cap_e2, "unit": unit_e2, "passed": True},
+            "review_record": reviewer,
+            "reason": f"E1 ({dem_e1}≤{cap_e1}{unit_e1}) 与 E2 ({dem_e2}≤{cap_e2}{unit_e2}) 抗震验算通过，已复核：{reviewer}",
+        }
+
+    return {
+        "status": "pending",
+        "verified": False,
+        "reason": f"未识别的抗震验算状态 '{raw_st}'",
+    }
+
+
 def collect_failed_structural_checks(
     *,
     section: dict[str, Any],
@@ -1367,6 +1652,8 @@ def collect_failed_structural_checks(
     slab_checks: dict[str, Any],
     bearing_checks: dict[str, Any],
     substructure_checks: dict[str, Any],
+    abutment_checks: dict[str, Any] | None = None,
+    seismic_verification: dict[str, Any] | None = None,
     consistency: dict[str, Any],
 ) -> list[dict[str, Any]]:
     """Aggregate every failed structural or consistency check with governing demand, allowable limit, and sheet IDs."""
@@ -1557,13 +1844,81 @@ def collect_failed_structural_checks(
     bp = substructure_checks["bored_pile"]
     if not bp["passed"]:
         _add(
-            "钻孔灌注桩单桩竖向承载力",
+            "桥墩钻孔灌注桩单桩竖向承载力",
             "substructure_checks.bored_pile",
             bp["pile_top_sls_demand_kn"],
             bp["allowable_ra_kn"],
             "kN",
-            ["QL-03", "QL-14", "QL-15", "QL-17", "QL-18"],
-            f"钻孔灌注桩竖向承载力不足 (桩长 {bp['design_length_m']}m)：桩顶需求 R={bp['pile_top_sls_demand_kn']} kN > 容许值 [Ra]={bp['allowable_ra_kn']} kN",
+            ["QL-03", "QL-14", "QL-17"],
+            f"桥墩钻孔灌注桩竖向承载力不足 (桩长 {bp['design_length_m']}m)：桩顶需求 R={bp['pile_top_sls_demand_kn']} kN > 容许值 [Ra]={bp['allowable_ra_kn']} kN",
+        )
+
+    if abutment_checks is not None:
+        ab_cap = abutment_checks["abutment_cap"]
+        if not ab_cap["passed"]:
+            _add(
+                "桩柱式桥台台帽承载力及裂缝验算",
+                "abutment_checks.abutment_cap",
+                max(ab_cap["m_hog_uls_knm"], ab_cap["m_sag_uls_knm"]),
+                ab_cap["mu_hog_capacity_knm"],
+                "kN·m",
+                ["QL-15", "QL-18"],
+                f"桥台台帽抗弯/抗剪或裂缝超限：Md={max(ab_cap['m_hog_uls_knm'], ab_cap['m_sag_uls_knm'])} kN·m, Mu={ab_cap['mu_hog_capacity_knm']} kN·m, wcr={ab_cap['crack_width_mm']} mm",
+            )
+        ab_bw = abutment_checks["backwall"]
+        if not ab_bw["passed"]:
+            _add(
+                "桥台背墙台后土压力抗弯及锚固验算",
+                "abutment_checks.backwall",
+                ab_bw["m_uls_total_knm"],
+                ab_bw["mu_capacity_total_knm"],
+                "kN·m",
+                ["QL-15", "QL-18"],
+                f"桥台背墙抗弯或锚固不足：Md={ab_bw['m_uls_total_knm']} kN·m > Mu={ab_bw['mu_capacity_total_knm']} kN·m",
+            )
+        ab_ped = abutment_checks["pedestal_local_bearing"]
+        if not ab_ped["passed"]:
+            _add(
+                "支座垫石局部承压承载力",
+                "abutment_checks.pedestal_local_bearing",
+                ab_ped["demand_fld_kn"],
+                ab_ped["capacity_flu_kn"],
+                "kN",
+                ["QL-12", "QL-15", "QL-18"],
+                f"支座垫石局压承载力不足：Fld={ab_ped['demand_fld_kn']} kN > Flu={ab_ped['capacity_flu_kn']} kN",
+            )
+        ab_pile = abutment_checks["bored_pile"]
+        if not ab_pile["passed"]:
+            if not ab_pile.get("bearing_passed", True):
+                _add(
+                    "桥台钻孔灌注桩单桩竖向承载力",
+                    "abutment_checks.bored_pile",
+                    ab_pile["pile_top_sls_demand_kn"],
+                    ab_pile["allowable_ra_kn"],
+                    "kN",
+                    ["QL-03", "QL-15", "QL-18"],
+                    f"桥台钻孔桩竖向承载力不足 (桩长 {ab_pile['design_length_m']}m)：R={ab_pile['pile_top_sls_demand_kn']} kN > [Ra]={ab_pile['allowable_ra_kn']} kN",
+                )
+            if not ab_pile.get("section_passed", True):
+                _add(
+                    "桥台钻孔灌注桩桩身偏压承载力",
+                    "abutment_checks.bored_pile_section",
+                    ab_pile["n_uls_kn"],
+                    ab_pile["nu_section_capacity_kn"],
+                    "kN",
+                    ["QL-15", "QL-18"],
+                    f"桥台钻孔桩桩身弯压承载力不足：Nd={ab_pile['n_uls_kn']} kN > Nu={ab_pile['nu_section_capacity_kn']} kN",
+                )
+
+    if seismic_verification is not None and seismic_verification.get("status") == "failed":
+        _add(
+            "桥梁 E1/E2 抗震性能验算",
+            "seismic_verification",
+            seismic_verification.get("demand", "exceeded"),
+            seismic_verification.get("capacity", "allowable"),
+            str(seismic_verification.get("unit", "-")),
+            ["QL-01", "QL-14", "QL-17"],
+            str(seismic_verification.get("reason", "E1/E2 抗震验算未通过")),
         )
 
     for iss in consistency.get("issues", []):
@@ -1582,19 +1937,30 @@ def collect_failed_structural_checks(
 
 
 def run_full_bridge_calculation(params: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Run an end-to-end Highway PC T-Girder Bridge calculation, ULS/SLS checks, ledger, BOQ, and audit."""
+    """Run an end-to-end Highway PC T-Girder Bridge calculation, ULS/SLS checks, abutment check, ledger, BOQ, and audit."""
     from .bridge_checks import (
         build_rebar_and_tendon_ledger,
         check_deck_slab_and_diaphragm,
         check_elastomeric_bearing,
+        check_pile_bent_abutment,
         check_substructure_cap_pier_pile,
         check_t_girder_uls_sls,
         compute_bridge_bill_of_quantities,
     )
 
-    raw_cfg = dict(params or {})
+    user_raw_cfg = dict(params or {})
+    survey_ingestion_summary: dict[str, Any] | None = None
+    if isinstance(user_raw_cfg.get("survey_data"), Mapping):
+        ingested = ingest_bridge_survey_data(user_raw_cfg["survey_data"])
+        survey_ingestion_summary = ingested["summary"]
+        # Explicit top-level keys take precedence over survey_data defaults, while survey_data counts as real basis!
+        raw_cfg = _deep_merge_dict(ingested["overrides"], user_raw_cfg)
+    else:
+        raw_cfg = dict(user_raw_cfg)
+
     raw_sup_cfg = dict(raw_cfg.get("superstructure") or {})
     raw_sub_cfg = dict(raw_cfg.get("substructure") or {})
+    raw_abut_cfg = dict(raw_cfg.get("abutment") or {})
     preset_name = str(raw_cfg.get("preset", "")).strip().lower()
     if preset_name == "wenchang":
         cfg = _deep_merge_dict(wenchang_bridge_preset(), raw_cfg)
@@ -1630,7 +1996,7 @@ def run_full_bridge_calculation(params: dict[str, Any] | None = None) -> dict[st
         sup_cfg["calc_span_m"] = float(cfg["calc_span_m"])
     calc_span_m = float(sup_cfg.get("calc_span_m", 24.0))
 
-    # Track unresolved / assumed site & basis parameters against raw_cfg (never cleared without real basis!)
+    # Track unresolved / assumed site & basis parameters against raw_cfg (including ingested survey_data!)
     unresolved_assumptions: list[dict[str, Any]] = []
     if "flood_elevation_m" not in raw_cfg:
         unresolved_assumptions.append(
@@ -1662,25 +2028,33 @@ def run_full_bridge_calculation(params: dict[str, Any] | None = None) -> dict[st
                 "required_source": "桥位河道实测横断面、糙率及水文频率计算资料",
             }
         )
-    has_geotech_basis = ("soil_layers" in raw_cfg) or ("soil_layers" in raw_sub_cfg)
+    has_geotech_basis = (
+        ("soil_layers" in raw_cfg)
+        or ("soil_layers" in raw_sub_cfg)
+        or ("abutment_soil_layers" in raw_cfg)
+    )
     if not has_geotech_basis:
         unresolved_assumptions.append(
             {
                 "field": "soil_layers",
                 "assumed_value": "default_xinyang_alluvial_4_layers",
                 "unit": "kPa",
-                "impact": "钻孔灌注桩分层侧摩阻力 q_ik 与桩端承载力 f_a0 验算依据（当前采用开题报告概略地层内置初值）",
+                "impact": "桥墩与桥台钻孔灌注桩分层侧摩阻力 q_ik 与桩端承载力 f_a0 验算依据（当前采用开题报告概略地层初拟值）",
                 "required_source": "桥位钻孔地质柱状图及地勘报告分层物理力学指标表",
             }
         )
-    if "explicit_pile_length_m" not in raw_sub_cfg and "pile_length_m" not in raw_cfg:
+    has_pile_len_basis = (
+        ("explicit_pile_length_m" in raw_sub_cfg)
+        or ("pile_length_m" in raw_cfg)
+    )
+    if not has_pile_len_basis:
         unresolved_assumptions.append(
             {
                 "field": "pile_length_m",
-                "assumed_value": "auto_friction_pile",
+                "assumed_value": "auto_friction_pile_pier_and_abutment",
                 "unit": "m",
-                "impact": "钻孔灌注桩设计桩长及水下C30混凝土工程量（当前按JTG 3363-2019摩擦桩公式初算）",
-                "required_source": "结合实测钻孔地勘持力层顶面标高核定最终桩长",
+                "impact": "桥墩与桥台钻孔灌注桩设计桩长及水下C30混凝土工程量（当前分别按各自荷载及JTG 3363-2019摩擦桩公式初算）",
+                "required_source": "结合实测钻孔地勘持力层顶面标高核定墩台最终桩长",
             }
         )
     has_span_basis = (
@@ -1723,6 +2097,7 @@ def run_full_bridge_calculation(params: dict[str, Any] | None = None) -> dict[st
     asphalt_unit_wt = float(cfg.get("asphalt_unit_weight_kn_m3", 24.0))
     conc_pav_unit_wt = float(cfg.get("concrete_paving_unit_weight_kn_m3", 25.0))
     barriers_total_kn_m = float(cfg.get("barriers_total_kn_m", 18.0))
+    paving_total_kn_m2 = (asphalt_mm * 1e-3) * asphalt_unit_wt + (conc_pav_mm * 1e-3) * conc_pav_unit_wt
     q_asphalt_deck_kn_m = lateral["clear_width_m"] * (asphalt_mm * 1e-3) * asphalt_unit_wt
     q_conc_pav_deck_kn_m = lateral["clear_width_m"] * (conc_pav_mm * 1e-3) * conc_pav_unit_wt
     derived_g2_kn_m = round(
@@ -1895,6 +2270,7 @@ def run_full_bridge_calculation(params: dict[str, Any] | None = None) -> dict[st
     brg_cfg.setdefault("calc_span_m", envelopes["calc_span_m"])
     bearing_checks = check_elastomeric_bearing(**brg_cfg)
 
+    pier_soil_layers = sub_user_cfg.get("soil_layers", cfg.get("soil_layers"))
     explicit_pile_m = cfg.get("pile_length_m", sub_user_cfg.get("explicit_pile_length_m"))
     substructure_checks = check_substructure_cap_pier_pile(
         cap_beam_1d=cap_beam,
@@ -1904,10 +2280,57 @@ def run_full_bridge_calculation(params: dict[str, Any] | None = None) -> dict[st
         column_height_m=col_h_val,
         pile_diameter_m=float(sub_user_cfg.get("pile_diameter_m", 1.40)),
         concrete_grade=str(sub_user_cfg.get("concrete_grade", "C30")),
-        soil_layers=sub_user_cfg.get("soil_layers", cfg.get("soil_layers")),
+        soil_layers=pier_soil_layers,
         explicit_pile_length_m=float(explicit_pile_m) if explicit_pile_m is not None else None,
         longitudinal_moment_uls_knm=one_span_ecc_col_moment_uls_knm,
     )
+
+    # Independent Pile-Bent Abutment structural & foundation calculation (0# / N# abutments)
+    abut_user_cfg = dict(cfg.get("abutment", {}))
+    backfill_cfg = dict(cfg.get("abutment_backfill") or abut_user_cfg.get("backfill") or {})
+    abut_soil_layers = (
+        cfg.get("abutment_soil_layers")
+        or raw_abut_cfg.get("soil_layers")
+        or pier_soil_layers
+    )
+    explicit_abut_pile_m = cfg.get("abutment_pile_length_m", abut_user_cfg.get("explicit_pile_length_m"))
+    brg_parts = bearing_checks["bearing_model"].replace("GJZ", "").strip().split("×")
+    brg_w_mm = float(brg_parts[0]) if len(brg_parts) == 3 else 300.0
+    brg_l_mm = float(brg_parts[1]) if len(brg_parts) == 3 else 400.0
+
+    abutment_checks = check_pile_bent_abutment(
+        single_span_dead_per_girder_kn=single_span_dead_per_girder_kn,
+        single_span_live_per_girder_kn=per_girder_1span_live_kn,
+        girder_spacing_m=lateral["girder_spacing_m"],
+        deck_width_m=lateral["deck_width_m"],
+        clear_width_m=lateral["clear_width_m"],
+        cap_width_m=float(abut_user_cfg.get("cap_width_m", 1.80)),
+        cap_height_m=float(abut_user_cfg.get("cap_height_m", 1.40)),
+        backwall_thick_m=float(abut_user_cfg.get("backwall_thick_m", 0.55)),
+        backwall_height_m=float(abut_user_cfg.get("backwall_height_m", 1.75)),
+        earwall_length_m=float(abut_user_cfg.get("earwall_length_m", 2.00)),
+        earwall_thick_m=float(abut_user_cfg.get("earwall_thick_m", 0.45)),
+        paving_total_kn_m2=paving_total_kn_m2,
+        n_piles=int(abut_user_cfg.get("n_piles", 2)),
+        pile_spacing_m=abut_user_cfg.get("pile_spacing_m"),
+        pile_diameter_m=float(abut_user_cfg.get("pile_diameter_m", sub_user_cfg.get("pile_diameter_m", 1.40))),
+        concrete_grade=str(abut_user_cfg.get("concrete_grade", sub_user_cfg.get("concrete_grade", "C30"))),
+        backfill_gamma_kn_m3=float(backfill_cfg.get("gamma_kn_m3", abut_user_cfg.get("backfill_gamma_kn_m3", 19.0))),
+        backfill_phi_deg=float(backfill_cfg.get("phi_deg", abut_user_cfg.get("backfill_phi_deg", 32.0))),
+        embankment_fill_height_m=float(backfill_cfg.get("fill_height_m", abut_user_cfg.get("embankment_fill_height_m", 4.50))),
+        safety_factor_gamma0=gamma0,
+        soil_layers=abut_soil_layers,
+        explicit_pile_length_m=float(explicit_abut_pile_m) if explicit_abut_pile_m is not None else None,
+        bearing_width_mm=brg_w_mm,
+        bearing_length_mm=brg_l_mm,
+    )
+
+    unresolved_field_set = {str(u["field"]) for u in unresolved_assumptions}
+    pier_pile_len_m = float(substructure_checks["bored_pile"]["design_length_m"])
+    abut_pile_len_m = float(abutment_checks["bored_pile"]["design_length_m"])
+    for u_item in unresolved_assumptions:
+        if u_item["field"] == "pile_length_m":
+            u_item["assumed_value"] = f"桥墩桩长 {pier_pile_len_m:g}m / 桥台桩长 {abut_pile_len_m:g}m"
 
     ledger = build_rebar_and_tendon_ledger(
         n_spans=n_spans,
@@ -1918,11 +2341,15 @@ def run_full_bridge_calculation(params: dict[str, Any] | None = None) -> dict[st
         deck_width_m=lateral["deck_width_m"],
         cap_length_m=cap_beam["cap_length_m"],
         column_height_m=float(substructure_checks["pier_column"]["height_m"]),
-        pile_length_m=float(substructure_checks["bored_pile"]["design_length_m"]),
+        pile_length_m=pier_pile_len_m,
         prestress=prestress,
         girder_checks=girder_checks,
         slab_checks=slab_checks,
         sub_checks=substructure_checks,
+        abutment_checks=abutment_checks,
+        envelopes=envelopes,
+        lateral=lateral,
+        unresolved_fields=unresolved_field_set,
         standard_span_m=std_span_m,
     )
     boq = compute_bridge_bill_of_quantities(
@@ -1939,7 +2366,8 @@ def run_full_bridge_calculation(params: dict[str, Any] | None = None) -> dict[st
         column_diameter_m=float(substructure_checks["pier_column"]["diameter_m"]),
         column_height_m=float(substructure_checks["pier_column"]["height_m"]),
         pile_diameter_m=float(substructure_checks["bored_pile"]["diameter_m"]),
-        pile_length_m=float(substructure_checks["bored_pile"]["design_length_m"]),
+        pile_length_m=pier_pile_len_m,
+        abutment_pile_length_m=abut_pile_len_m,
         bearing_model=bearing_checks["bearing_model"],
         ledger=ledger,
         standard_span_m=std_span_m,
@@ -1987,45 +2415,117 @@ def run_full_bridge_calculation(params: dict[str, Any] | None = None) -> dict[st
         consistency["error_count"] = sum(1 for i in consistency["issues"] if i["severity"] == "error")
         consistency["status"] = "passed" if consistency["error_count"] == 0 else "failed"
 
+    seismic_verification = _evaluate_seismic_verification(raw_cfg)
     failed_checks = collect_failed_structural_checks(
         section=section,
         girder_checks=girder_checks,
         slab_checks=slab_checks,
         bearing_checks=bearing_checks,
         substructure_checks=substructure_checks,
+        abutment_checks=abutment_checks,
+        seismic_verification=seismic_verification,
         consistency=consistency,
     )
 
     confirmed_deliv = dict(raw_cfg.get("deliverables_confirmed") or {})
+    thesis_req = dict(raw_cfg.get("thesis_requirements") or {})
+    thesis_note = str(
+        thesis_req.get(
+            "note",
+            "开题报告写明正文约一万字（任务书未列1.5万字硬性下限）；生成毕业设计说明书时应按学校模板及指导教师确认的要求执行。",
+        )
+    )
     survey_complete = all(
         k in raw_cfg for k in ("flood_elevation_m", "deck_elevation_m", "hydrology")
     ) and has_geotech_basis
+    seismic_deliv_status = "completed" if seismic_verification["verified"] else (
+        "failed" if seismic_verification["status"] == "failed" else "pending"
+    )
     pending_graduation_deliverables = [
         {
             "id": "design_specification_thesis",
-            "title": "毕业设计完整计算说明书（含中英文摘要、三级目录、计算过程、内力图表与参考文献）",
+            "title": "毕业设计完整计算说明书（含中英文摘要、桥型比选、计算过程、对算校核与参考文献）",
             "status": "completed" if confirmed_deliv.get("thesis_document") is True else "pending",
-            "note": "任务书要求不少于1.5万字完整说明书；当前一键流程交付18张A3施工图册、结构验算JSON及工程量清单。",
+            "note": thesis_note,
         },
         {
             "id": "site_hydrology_and_geotech_survey",
             "title": "桥位实测水文断面及钻孔地质勘察依据核定",
             "status": "completed" if survey_complete else "pending",
-            "note": "需补充实测河床断面、1/100设计洪水位、路线纵断面设计高程及钻孔柱状图分层摩阻力实测值。",
+            "note": "需补充实测河床断面、1/100设计洪水位、路线纵断面设计高程及墩台钻孔柱状图分层摩阻力实测值。",
         },
         {
             "id": "seismic_e1_e2_verification",
             "title": "开题报告列出的 E1 / E2 地震作用抗震验算",
-            "status": "completed"
-            if (confirmed_deliv.get("seismic_e1_e2") is True or bool(raw_cfg.get("seismic_checks")))
-            else "pending",
-            "note": "需按 JTG/T 2231-01-2020 补充 E1 弹性抗震与 E2 塑性铰延性/抗剪及防落梁挡块专项验算。",
+            "status": seismic_deliv_status,
+            "note": (
+                seismic_verification["reason"]
+                if seismic_verification["verified"] or seismic_verification["status"] == "failed"
+                else f"需凭实际 E1/E2 地震工况、数值需求/抗力结果及复核记录确认完成（{seismic_verification['reason']}）。"
+            ),
         },
     ]
 
-    overall_status = "passed" if (not failed_checks and consistency["status"] == "passed") else "failed"
-    return {
-        "status": overall_status,
+    # Build explicit list of engineering conclusions still resting on preliminary assumptions
+    assumption_dependent_conclusions: list[dict[str, Any]] = []
+    if unresolved_field_set & {"hydrology", "flood_elevation_m", "deck_elevation_m"}:
+        dep_h = sorted(unresolved_field_set & {"hydrology", "flood_elevation_m", "deck_elevation_m"})
+        assumption_dependent_conclusions.append(
+            {
+                "conclusion_id": "span_layout_and_freeboard",
+                "title": "桥孔跨径布置与梁底净空高程合规性",
+                "current_conclusion": f"推荐桥孔布置 {n_spans}×{std_span_m:g}m，桥面高程 {float(cfg.get('deck_elevation_m', 86.5)):.3f}m，设计洪水位 {float(cfg.get('flood_elevation_m', 81.2)):.3f}m",
+                "depends_on_fields": dep_h,
+                "status_note": "仍基于开题概略河槽水力参数与初拟高程，待桥位实测水文横断面与路线纵断面核定。",
+            }
+        )
+    if "calc_span_m" in unresolved_field_set:
+        assumption_dependent_conclusions.append(
+            {
+                "conclusion_id": "superstructure_internal_forces_and_tendons",
+                "title": "预制T梁跨中弯矩/支点剪力包络及预应力配束结论",
+                "current_conclusion": f"按初拟计算跨径 L={envelopes['calc_span_m']:g}m 求得跨中 Md={girder_checks['uls_flexure']['demand_md_knm']} kN·m ≤ Mu={girder_checks['uls_flexure']['capacity_mu_knm']} kN·m，配 {prestress['recommended_tendons']}束×{prestress['strands_per_tendon']}股钢绞线",
+                "depends_on_fields": ["calc_span_m"],
+                "status_note": "仍基于初拟计算跨径，待梁端至支座中心线定位尺寸最终核定。",
+            }
+        )
+    if unresolved_field_set & {"soil_layers", "pile_length_m"}:
+        dep_g = sorted(unresolved_field_set & {"soil_layers", "pile_length_m"})
+        assumption_dependent_conclusions.append(
+            {
+                "conclusion_id": "pier_and_abutment_pile_foundation",
+                "title": "桥墩与桥台钻孔灌注桩桩长及水下混凝土工程量",
+                "current_conclusion": (
+                    f"桥墩桩长 {pier_pile_len_m:g}m (R={substructure_checks['bored_pile']['pile_top_sls_demand_kn']}≤[Ra]={substructure_checks['bored_pile']['allowable_ra_kn']} kN)；"
+                    f"桥台桩长 {abut_pile_len_m:g}m (R={abutment_checks['bored_pile']['pile_top_sls_demand_kn']}≤[Ra]={abutment_checks['bored_pile']['allowable_ra_kn']} kN)"
+                ),
+                "depends_on_fields": dep_g,
+                "status_note": "仍基于开题冲洪积四层地层初拟摩阻力参数按 JTG 3363-2019 推导，待墩台位实测钻孔柱状图核定。",
+            }
+        )
+
+    calculation_status = "passed" if (not failed_checks and consistency["status"] == "passed") else "failed"
+    incomplete_delivs = [d for d in pending_graduation_deliverables if d["status"] != "completed"]
+    if calculation_status == "failed":
+        graduation_readiness_status = "failed"
+        status_summary_zh = f"结构计算未通过（共 {len(failed_checks)} 项验算或一致性超限）"
+    elif unresolved_assumptions or incomplete_delivs:
+        graduation_readiness_status = "pending_confirmation"
+        status_summary_zh = (
+            f"当前参数下结构计算通过；毕业设计资料待齐套确认"
+            f"（待核定初拟参数 {len(unresolved_assumptions)} 项，待完成毕设交付物 {len(incomplete_delivs)} 项）"
+        )
+    else:
+        graduation_readiness_status = "ready"
+        status_summary_zh = "结构计算通过，且实测水文地勘依据与毕业设计交付项已全部确认齐套"
+
+    from .bridge_calc_book import compute_independent_hand_cross_check
+
+    report_out: dict[str, Any] = {
+        "status": calculation_status,
+        "calculation_status": calculation_status,
+        "graduation_readiness_status": graduation_readiness_status,
+        "status_summary_zh": status_summary_zh,
         "failed_checks": failed_checks,
         "project_summary": {
             "project_name": str(cfg.get("project_name", f"{n_spans}×{std_span_m:g}m 预应力混凝土简支T梁桥")),
@@ -2041,9 +2541,14 @@ def run_full_bridge_calculation(params: dict[str, Any] | None = None) -> dict[st
             "concrete_paving_thick_mm": conc_pav_mm,
             "flood_elevation_m": float(cfg.get("flood_elevation_m", 81.200)),
             "deck_elevation_m": float(cfg.get("deck_elevation_m", 86.500)),
+            "pier_pile_length_m": pier_pile_len_m,
+            "abutment_pile_length_m": abut_pile_len_m,
         },
         "unresolved_assumptions": unresolved_assumptions,
+        "assumption_dependent_conclusions": assumption_dependent_conclusions,
         "pending_graduation_deliverables": pending_graduation_deliverables,
+        "seismic_verification": seismic_verification,
+        "survey_ingestion_summary": survey_ingestion_summary,
         "hydrology": hydro,
         "t_girder_section": section,
         "lateral_distribution": lateral,
@@ -2055,7 +2560,10 @@ def run_full_bridge_calculation(params: dict[str, Any] | None = None) -> dict[st
         "slab_and_diaphragm_checks": slab_checks,
         "bearing_checks": bearing_checks,
         "substructure_checks": substructure_checks,
+        "abutment_checks": abutment_checks,
         "rebar_and_tendon_ledger": ledger,
         "bill_of_quantities": boq,
         "consistency_audit": consistency,
     }
+    report_out["independent_cross_check"] = compute_independent_hand_cross_check(report_out)
+    return report_out
