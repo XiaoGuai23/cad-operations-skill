@@ -700,6 +700,8 @@ def compute_prestress_estimation_and_loss(
     fpd_mpa: float = 1260.0,
     sigma_con_mpa: float = 1395.0,
     strands_per_tendon: int = 6,
+    n_tendons: int | None = None,
+    tendon_count: int | None = None,
     beam_length_m: float = 24.607,
     bend_angle_deg: float = 8.5,
     friction_mu: float = 0.25,
@@ -708,6 +710,9 @@ def compute_prestress_estimation_and_loss(
     ep_mpa: float = 195000.0,
 ) -> dict[str, Any]:
     """Estimate required 1860MPa strands/tendons and compute longitudinal prestress loss profile."""
+
+    if strands_per_tendon < 1:
+        raise ValueError(f"strands_per_tendon must be >= 1, got {strands_per_tendon}")
 
     c1_emp = 0.51
     a_uls_emp = 0.76
@@ -718,8 +723,21 @@ def compute_prestress_estimation_and_loss(
     n_strands_uls = (m_uls_knm * 1e3) / (a_uls_emp * girder_height_m * (fpd_mpa * 1e6) * ap1_m2)
 
     gov_strands = max(n_strands_sls, n_strands_uls)
-    n_tendons = max(2, math.ceil(gov_strands / strands_per_tendon))
-    provided_strands = n_tendons * strands_per_tendon
+    auto_n_tendons = max(2, math.ceil(gov_strands / strands_per_tendon))
+
+    explicit_raw = n_tendons if n_tendons is not None else tendon_count
+    if explicit_raw is not None:
+        if isinstance(explicit_raw, bool) or (isinstance(explicit_raw, float) and not explicit_raw.is_integer()):
+            raise ValueError(f"n_tendons must be an integer, got {explicit_raw!r}")
+        adopted_tendons = int(explicit_raw)
+        if adopted_tendons < 1 or adopted_tendons > 10:
+            raise ValueError(f"n_tendons must be between 1 and 10, got {adopted_tendons}")
+        tendon_count_source = "explicit_override"
+    else:
+        adopted_tendons = auto_n_tendons
+        tendon_count_source = "auto_envelope"
+
+    provided_strands = adopted_tendons * strands_per_tendon
 
     # Symmetric parabolic tendon profile loss table across 11 stations [0 .. beam_length_m]
     half_len = 0.5 * beam_length_m
@@ -765,10 +783,12 @@ def compute_prestress_estimation_and_loss(
         "eccentricity_ep_m": round(ep_ecc_m, 4),
         "required_strands_sls": round(n_strands_sls, 2),
         "required_strands_uls": round(n_strands_uls, 2),
-        "recommended_tendons": n_tendons,
+        "auto_estimated_tendons": auto_n_tendons,
+        "recommended_tendons": adopted_tendons,
+        "tendon_count_source": tendon_count_source,
         "strands_per_tendon": strands_per_tendon,
         "provided_strands": provided_strands,
-        "tendon_designation": f"{n_tendons}-Φs15.2-{strands_per_tendon}",
+        "tendon_designation": f"{adopted_tendons}-Φs15.2-{strands_per_tendon}",
         "anchorage_influence_length_m": round(lf_m, 3),
         "loss_profile": loss_rows,
     }
@@ -1290,6 +1310,369 @@ def ingest_and_audit_calc_table(
     }
 
 
+def default_opening_report_schemes(
+    n_spans: int = 4,
+    standard_span_m: float = 25.0,
+    deck_width_m: float = 9.0,
+) -> list[dict[str, Any]]:
+    """Return the three determined bridge comparison schemes aligned with the project Opening Report (开题报告).
+
+    Scheme 1 (Recommended): 4×25 m 装配式预应力混凝土简支T梁桥（桥面连续）
+    Scheme 2 (Alternative): 4×25 m 预应力混凝土连续箱梁桥
+    Scheme 3 (Alternative): 4×25 m 装配式预应力混凝土简支箱梁桥
+    """
+    layout_str = f"{n_spans}×{standard_span_m:g} m"
+    n_box = 3 if deck_width_m <= 10.5 else 4
+    return [
+        {
+            "scheme_id": "scheme_1",
+            "scheme_no": "方案一（推荐方案）",
+            "name": f"{layout_str} 装配式预应力混凝土简支T梁桥",
+            "span_layout": layout_str,
+            "is_recommended": True,
+            "superstructure_type": "5片预制C50预应力混凝土简支T梁（墩顶桥面连续）",
+            "girder_height_m": 1.75 if standard_span_m >= 24.0 else round(standard_span_m / 14.5, 2),
+            "substructure_type": "双柱式圆柱桥墩（Φ1.2m）+ 桩柱式桥台 + Φ1.4m钻孔灌注桩",
+            "structural_mechanics": "静定简支受力明确，对地基不均匀沉降不敏感；预应力高效消压抗裂，墩顶设桥面连续改善行车平顺性",
+            "construction_and_schedule": "预制场标准化台座批量预制、架桥机吊装，上、下部结构平行施工，不受河道汛期水位制约，工期最短",
+            "economy_and_maintenance": "钢模周转率高、造价最经济；湿接缝、支座与桥面连续构造通用成熟，运营期检查及更换支座便捷",
+            "elevation_figure_caption": f"{layout_str} 装配式预应力混凝土简支T梁桥立面布置图",
+            "section_figure_caption": f"{layout_str} 装配式预应力混凝土简支T梁桥标准横断面图",
+            "elevation_image_path": None,
+            "section_image_path": None,
+            "verdict": "推荐采用",
+        },
+        {
+            "scheme_id": "scheme_2",
+            "scheme_no": "方案二（比选方案）",
+            "name": f"{layout_str} 预应力混凝土连续箱梁桥",
+            "span_layout": layout_str,
+            "is_recommended": False,
+            "superstructure_type": "C50预应力混凝土连续箱梁（单箱双室/先简支后结构连续）",
+            "girder_height_m": 1.45 if standard_span_m >= 24.0 else round(standard_span_m / 17.0, 2),
+            "substructure_type": "双柱式桥墩 + 桩柱式桥台 + 钻孔灌注桩基础",
+            "structural_mechanics": "超静定连续体系，墩顶负弯矩卸载跨中正弯矩，整体抗扭刚度大、桥面伸缩缝少，但受温度梯度、收缩徐变及基础沉降次内力影响明显",
+            "construction_and_schedule": "满堂支架现浇受河道行洪期影响大，或体系转换需二次张拉墩顶负弯矩钢束并压浆，工序较复杂、施工周期较长",
+            "economy_and_maintenance": "支架与内模摊销较高、预应力锚具及负弯矩束用量增加，综合造价高于简支T梁；闭合箱室内部巡检相对不便",
+            "elevation_figure_caption": f"{layout_str} 预应力混凝土连续箱梁桥立面布置图",
+            "section_figure_caption": f"{layout_str} 预应力混凝土连续箱梁桥标准横断面图",
+            "elevation_image_path": None,
+            "section_image_path": None,
+            "verdict": "备选方案",
+        },
+        {
+            "scheme_id": "scheme_3",
+            "scheme_no": "方案三（比选方案）",
+            "name": f"{layout_str} 装配式预应力混凝土简支箱梁桥",
+            "span_layout": layout_str,
+            "is_recommended": False,
+            "superstructure_type": f"{n_box}片预制C50预应力混凝土简支小箱梁（桥面连续）",
+            "girder_height_m": 1.40 if standard_span_m >= 24.0 else round(standard_span_m / 17.5, 2),
+            "substructure_type": "双柱式桥墩 + 桩柱式桥台 + 钻孔灌注桩基础",
+            "structural_mechanics": "简支静定体系适应变形能力好，单梁闭口截面抗扭刚度较T梁大，但腹板较薄、混凝土浇筑振捣密实度控制要求高",
+            "construction_and_schedule": "工厂预制吊装可行，但箱梁内模拼拆烦琐、单片预制梁自重及吊装吨位较大，大型架桥设备进场费用较高",
+            "economy_and_maintenance": "模板及大型吊装机械单价偏高，总造价略高于装配式T梁；小箱梁内腔狭小，后期内部病害检测与维修难度较大",
+            "elevation_figure_caption": f"{layout_str} 装配式预应力混凝土简支箱梁桥立面布置图",
+            "section_figure_caption": f"{layout_str} 装配式预应力混凝土简支箱梁桥标准横断面图",
+            "elevation_image_path": None,
+            "section_image_path": None,
+            "verdict": "比选不采用",
+        },
+    ]
+
+
+def default_graduation_references() -> list[dict[str, Any]]:
+    """Return 12 curated GB/T 7714 references (>=10 Chinese + >=2 English) aligned with both Task Book and Opening Report."""
+    return [
+        {
+            "ref_no": 1,
+            "lang": "zh",
+            "citation": "中华人民共和国交通运输部. 公路工程技术标准: JTG B01—2014[S]. 北京: 人民交通出版社, 2014.",
+            "used_in_sections": ["1.1", "1.3"],
+        },
+        {
+            "ref_no": 2,
+            "lang": "zh",
+            "citation": "中华人民共和国交通运输部. 公路桥涵设计通用规范: JTG D60—2015[S]. 北京: 人民交通出版社, 2015.",
+            "used_in_sections": ["1.1", "1.2", "2.5", "4.2"],
+        },
+        {
+            "ref_no": 3,
+            "lang": "zh",
+            "citation": "中华人民共和国交通运输部. 公路钢筋混凝土及预应力混凝土桥涵设计规范: JTG 3362—2018[S]. 北京: 人民交通出版社, 2018.",
+            "used_in_sections": ["1.1", "2.1", "2.6", "3.2", "3.3", "4.3"],
+        },
+        {
+            "ref_no": 4,
+            "lang": "zh",
+            "citation": "中华人民共和国交通运输部. 公路桥涵地基与基础设计规范: JTG 3363—2019[S]. 北京: 人民交通出版社, 2019.",
+            "used_in_sections": ["1.1", "3.4", "4.4"],
+        },
+        {
+            "ref_no": 5,
+            "lang": "zh",
+            "citation": "中华人民共和国交通运输部. 公路桥梁抗震设计规范: JTG/T 2231-01—2020[S]. 北京: 人民交通出版社, 2020.",
+            "used_in_sections": ["1.1", "3.3"],
+        },
+        {
+            "ref_no": 6,
+            "lang": "zh",
+            "citation": "邵旭东. 桥梁工程（第5版）[M]. 北京: 人民交通出版社, 2021.",
+            "used_in_sections": ["1.3", "2.2", "2.4"],
+        },
+        {
+            "ref_no": 7,
+            "lang": "zh",
+            "citation": "范立础. 桥梁工程（上册）（第3版）[M]. 北京: 人民交通出版社, 2017.",
+            "used_in_sections": ["1.2", "1.3"],
+        },
+        {
+            "ref_no": 8,
+            "lang": "zh",
+            "citation": "姚玲森. 桥梁工程（第3版）[M]. 北京: 人民交通出版社, 2016.",
+            "used_in_sections": ["2.4", "5.1"],
+        },
+        {
+            "ref_no": 9,
+            "lang": "zh",
+            "citation": "闫志刚. 钢筋混凝土及预应力混凝土简支梁桥结构设计[M]. 北京: 机械工业出版社, 2018.",
+            "used_in_sections": ["2.3", "2.6", "3.1"],
+        },
+        {
+            "ref_no": 10,
+            "lang": "zh",
+            "citation": "中华人民共和国交通运输部. 公路桥梁板式橡胶支座: JT/T 4—2019[S]. 北京: 人民交通出版社, 2019.",
+            "used_in_sections": ["2.6", "4.3"],
+        },
+        {
+            "ref_no": 11,
+            "lang": "en",
+            "citation": "Barker R M, Puckett J A. Design of Highway Bridges: An LRFD Approach (4th ed.)[M]. Hoboken: John Wiley & Sons, 2021.",
+            "used_in_sections": ["1.3", "5.2"],
+        },
+        {
+            "ref_no": 12,
+            "lang": "en",
+            "citation": "AASHTO. AASHTO LRFD Bridge Design Specifications (9th ed.)[S]. Washington, D.C.: American Association of State Highway and Transportation Officials, 2020.",
+            "used_in_sections": ["2.5", "5.2"],
+        },
+    ]
+
+
+def audit_references_compliance(
+    references: Sequence[Mapping[str, Any]],
+    *,
+    body_text: str | None = None,
+) -> dict[str, Any]:
+    """Audit bibliography against Task Book (>=10 total, >=1 foreign) and Opening Report (>=10 Chinese, >=1 foreign)."""
+    zh_cnt = 0
+    foreign_cnt = 0
+    ref_nos: list[int] = []
+    for idx, item in enumerate(references, start=1):
+        rno = int(item.get("ref_no", idx))
+        ref_nos.append(rno)
+        lang = str(item.get("lang", "")).strip().lower()
+        cit = str(item.get("citation", ""))
+        if lang in {"en", "foreign", "de", "fr", "ja"} or (not lang and not re.search(r"[\u4e00-\u9fff]", cit)):
+            foreign_cnt += 1
+        else:
+            zh_cnt += 1
+
+    total = len(ref_nos)
+    task_book_ok = (total >= 10) and (foreign_cnt >= 1)
+    opening_report_ok = (zh_cnt >= 10) and (foreign_cnt >= 1)
+
+    cited_in_body: list[int] = []
+    uncited_in_body: list[int] = []
+    if body_text is not None:
+        # Match [3], [1,2], [1-5], [1～5] inline citations
+        found_set: set[int] = set()
+        for m in re.finditer(r"\[(\d+(?:\s*[,，\-~～]\s*\d+)*)\]", body_text):
+            token_grp = m.group(1)
+            for part in re.split(r"[,，]", token_grp):
+                part = part.strip()
+                rng = re.split(r"[\-~～]", part)
+                if len(rng) == 2 and rng[0].strip().isdigit() and rng[1].strip().isdigit():
+                    a_i, b_i = int(rng[0]), int(rng[1])
+                    for k_i in range(min(a_i, b_i), max(a_i, b_i) + 1):
+                        found_set.add(k_i)
+                elif part.isdigit():
+                    found_set.add(int(part))
+        cited_in_body = sorted(r for r in ref_nos if r in found_set)
+        uncited_in_body = [r for r in ref_nos if r not in found_set]
+
+    both_ok = task_book_ok and opening_report_ok and (body_text is None or len(uncited_in_body) == 0)
+    return {
+        "status": "passed" if both_ok else "failed",
+        "total_count": total,
+        "chinese_count": zh_cnt,
+        "foreign_count": foreign_cnt,
+        "task_book_compliant": task_book_ok,
+        "opening_report_compliant": opening_report_ok,
+        "cited_ref_nos": cited_in_body,
+        "uncited_ref_nos": uncited_in_body,
+    }
+
+
+_FEM_METRIC_ALIASES: dict[str, tuple[str, ...]] = {
+    "girder_mid_moment_uls_knm": (
+        "girder_mid_moment_uls_knm",
+        "mid_moment_uls_knm",
+        "mid_moment_knm",
+        "m_uls_mid",
+        "主梁跨中弯矩",
+        "跨中基本组合弯矩",
+        "跨中弯矩",
+    ),
+    "girder_support_shear_uls_kn": (
+        "girder_support_shear_uls_kn",
+        "support_shear_uls_kn",
+        "support_shear_kn",
+        "v_uls_support",
+        "主梁支点剪力",
+        "支点基本组合剪力",
+        "支点剪力",
+    ),
+    "girder_live_deflection_mm": (
+        "girder_live_deflection_mm",
+        "live_deflection_mm",
+        "deflection_live_mm",
+        "主梁活载挠度",
+        "消除自重活载挠度",
+        "活载挠度",
+    ),
+    "pier_top_reaction_uls_kn": (
+        "pier_top_reaction_uls_kn",
+        "pier_reaction_uls_kn",
+        "pier_top_reaction_kn",
+        "中墩墩顶反力",
+        "中间墩盖梁顶总反力",
+        "墩顶总反力",
+        "墩顶反力",
+    ),
+    "cap_hogging_moment_uls_knm": (
+        "cap_hogging_moment_uls_knm",
+        "盖梁墩顶负弯矩",
+        "盖梁负弯矩",
+    ),
+    "pier_column_axial_uls_kn": (
+        "pier_column_axial_uls_kn",
+        "墩柱柱底轴力",
+        "墩柱轴力",
+    ),
+}
+
+
+def ingest_independent_fem_results(
+    fem_input: Mapping[str, Any] | str | Path | None,
+) -> dict[str, Any] | None:
+    """Ingest independent commercial/external FEM results (Midas Civil / 桥梁博士 Dr.Bridge) from dict, JSON, CSV, TSV, or Markdown."""
+    if fem_input is None:
+        return None
+
+    raw_dict: dict[str, Any] = {}
+    raw_table_text: str | None = None
+
+    if isinstance(fem_input, Mapping):
+        raw_dict = dict(fem_input)
+    elif isinstance(fem_input, Path) or (
+        isinstance(fem_input, str) and "\n" not in fem_input and Path(fem_input).expanduser().is_file()
+    ):
+        p = Path(fem_input).expanduser().resolve()
+        txt = p.read_text(encoding="utf-8-sig")
+        if p.suffix.lower() == ".json":
+            raw_dict = json.loads(txt) if "json" in globals() else __import__("json").loads(txt)
+        else:
+            raw_table_text = txt
+    elif isinstance(fem_input, str):
+        s_strip = fem_input.strip()
+        if s_strip.startswith("{"):
+            raw_dict = __import__("json").loads(s_strip)
+        else:
+            raw_table_text = s_strip
+    else:
+        raise TypeError(f"unsupported independent_fem_results type: {type(fem_input).__name__}")
+
+    metrics: dict[str, float] = {}
+    if raw_table_text is not None:
+        lines_t = [ln.strip() for ln in raw_table_text.splitlines() if ln.strip()]
+        rows_t: list[list[str]] = []
+        if any("|" in ln for ln in lines_t):
+            for ln in lines_t:
+                if "|" not in ln:
+                    continue
+                cells = [c.strip() for c in ln.strip("|").split("|")]
+                if cells and all(set(c) <= {"-", ":", " "} for c in cells):
+                    continue
+                rows_t.append(cells)
+        else:
+            delim = "\t" if "\t" in raw_table_text else ","
+            rows_t = [[c.strip() for c in r] for r in csv.reader(io.StringIO(raw_table_text), delimiter=delim) if any(c.strip() for c in r)]
+
+        for row in rows_t:
+            if len(row) < 2:
+                continue
+            label_cell = row[0]
+            # Find first numeric value in remaining columns
+            num_val: float | None = None
+            for cell in row[1:]:
+                cleaned = cell.replace(",", "").replace("kN·m", "").replace("kNm", "").replace("kN", "").replace("mm", "").strip()
+                try:
+                    num_val = float(cleaned)
+                    break
+                except ValueError:
+                    continue
+            if num_val is None:
+                continue
+            for canon_key, aliases in _FEM_METRIC_ALIASES.items():
+                if any(alias.lower() in label_cell.lower() for alias in aliases):
+                    metrics[canon_key] = abs(num_val) if canon_key != "girder_live_deflection_mm" else abs(num_val)
+                    break
+
+    # Extract from dict (metrics nested under 'metrics'/'results' or top-level)
+    src_metrics = dict(raw_dict.get("metrics") or raw_dict.get("results") or raw_dict)
+    for canon_key, aliases in _FEM_METRIC_ALIASES.items():
+        for alias in aliases:
+            if alias in src_metrics and isinstance(src_metrics[alias], (int, float)) and not isinstance(src_metrics[alias], bool):
+                metrics[canon_key] = abs(float(src_metrics[alias]))
+                break
+
+    model_card_in = dict(raw_dict.get("model_card") or {})
+    software_name = str(
+        raw_dict.get("software_name")
+        or model_card_in.get("software_name")
+        or "桥梁博士 Dr.Bridge V4.4 / Midas Civil 独立杆系模型"
+    ).strip()
+    tolerance_pct = float(raw_dict.get("tolerance_pct", model_card_in.get("tolerance_pct", 8.0)))
+    fig_paths_raw = raw_dict.get("model_figure_paths") or model_card_in.get("model_figure_paths") or []
+    fig_paths = [str(p) for p in fig_paths_raw] if isinstance(fig_paths_raw, (list, tuple)) else []
+
+    return {
+        "software_name": software_name,
+        "tolerance_pct": tolerance_pct,
+        "checked_by": str(raw_dict.get("checked_by") or model_card_in.get("checked_by") or "").strip(),
+        "model_card": {
+            "software_name": software_name,
+            "girder_model": str(model_card_in.get("girder_model", "1#代表性边T梁空间梁格/10单元简支梁有限元模型")),
+            "pier_model": str(model_card_in.get("pier_model", "2#中间双柱式桥墩盖梁—双柱空间杆系模型")),
+            "boundary_conditions": str(
+                model_card_in.get(
+                    "boundary_conditions",
+                    "主梁左支点固定铰支座(约束Dx,Dy,Dz)、右支点纵向滑动铰支座(约束Dy,Dz)；双柱墩盖梁与墩柱刚接、桩土效应等效嵌固",
+                )
+            ),
+            "load_and_combinations": str(
+                model_card_in.get(
+                    "load_and_combinations",
+                    "一期自重+横隔梁+二期铺装护栏恒载；公路-I级车道荷载计入冲击系数(1+μ)；按 JTG D60-2015 基本组合 γ0(1.2G+1.4Q) 与正常使用频遇/标准组合包络",
+                )
+            ),
+            "model_figure_paths": fig_paths,
+        },
+        "metrics": metrics,
+    }
+
+
 def wenchang_bridge_preset() -> dict[str, Any]:
     """Opening-report parameters for 信阳市文昌中桥 (4×25m 装配式预应力混凝土简支T梁, 单幅9.00m双向两车道)."""
     return {
@@ -1303,6 +1686,8 @@ def wenchang_bridge_preset() -> dict[str, Any]:
         "asphalt_thick_mm": 100.0,
         "concrete_paving_thick_mm": 80.0,
         "barriers_total_kn_m": 18.0,
+        "bridge_schemes": default_opening_report_schemes(4, 25.0, 9.0),
+        "references": default_graduation_references(),
         "hydrology": {
             "area_m2": 325.0,
             "wetted_perimeter_m": 64.5,
@@ -2147,6 +2532,12 @@ def run_full_bridge_calculation(params: dict[str, Any] | None = None) -> dict[st
 
     if "sigma_con_mpa" in cfg:
         ps_cfg["sigma_con_mpa"] = float(cfg["sigma_con_mpa"])
+    if "n_tendons" in cfg and cfg["n_tendons"] is not None:
+        ps_cfg["n_tendons"] = cfg["n_tendons"]
+    elif "tendon_count" in cfg and cfg["tendon_count"] is not None:
+        ps_cfg["n_tendons"] = cfg["tendon_count"]
+    if "strands_per_tendon" in cfg and cfg["strands_per_tendon"] is not None:
+        ps_cfg["strands_per_tendon"] = int(cfg["strands_per_tendon"])
     ps_cfg.setdefault("beam_length_m", beam_len_m)
 
     prestress = compute_prestress_estimation_and_loss(
@@ -2519,7 +2910,18 @@ def run_full_bridge_calculation(params: dict[str, Any] | None = None) -> dict[st
         graduation_readiness_status = "ready"
         status_summary_zh = "结构计算通过，且实测水文地勘依据与毕业设计交付项已全部确认齐套"
 
-    from .bridge_calc_book import compute_independent_hand_cross_check
+    from .bridge_calc_book import (
+        build_defense_verification_table,
+        compute_independent_hand_cross_check,
+    )
+
+    bridge_schemes = list(
+        cfg.get("bridge_schemes")
+        or default_opening_report_schemes(n_spans, std_span_m, lateral["deck_width_m"])
+    )
+    references_list = list(cfg.get("references") or default_graduation_references())
+    references_audit = audit_references_compliance(references_list)
+    fem_ingested = ingest_independent_fem_results(raw_cfg.get("independent_fem_results"))
 
     report_out: dict[str, Any] = {
         "status": calculation_status,
@@ -2543,12 +2945,18 @@ def run_full_bridge_calculation(params: dict[str, Any] | None = None) -> dict[st
             "deck_elevation_m": float(cfg.get("deck_elevation_m", 86.500)),
             "pier_pile_length_m": pier_pile_len_m,
             "abutment_pile_length_m": abut_pile_len_m,
+            "n_tendons": int(prestress["recommended_tendons"]),
+            "strands_per_tendon": int(prestress["strands_per_tendon"]),
         },
+        "bridge_schemes": bridge_schemes,
+        "references": references_list,
+        "references_audit": references_audit,
         "unresolved_assumptions": unresolved_assumptions,
         "assumption_dependent_conclusions": assumption_dependent_conclusions,
         "pending_graduation_deliverables": pending_graduation_deliverables,
         "seismic_verification": seismic_verification,
         "survey_ingestion_summary": survey_ingestion_summary,
+        "independent_fem_results": fem_ingested,
         "hydrology": hydro,
         "t_girder_section": section,
         "lateral_distribution": lateral,
@@ -2566,4 +2974,5 @@ def run_full_bridge_calculation(params: dict[str, Any] | None = None) -> dict[st
         "consistency_audit": consistency,
     }
     report_out["independent_cross_check"] = compute_independent_hand_cross_check(report_out)
+    report_out["defense_verification_table"] = build_defense_verification_table(report_out, fem_ingested)
     return report_out

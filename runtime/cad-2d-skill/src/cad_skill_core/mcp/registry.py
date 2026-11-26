@@ -427,6 +427,10 @@ class CivilBridgeCalcArgs(StrictInputModel):
         "full",
         "wenchang",
         "calc_book",
+        "thesis_docx",
+        "calc_figures",
+        "fem_compare",
+        "change_impact",
         "cross_check",
         "lookup_bar",
         "survey_ingest",
@@ -441,7 +445,7 @@ class CivilBridgeCalcArgs(StrictInputModel):
         "table_audit",
     ] = Field(
         default="full",
-        description="Calculation, calculation-book, hand cross-check, rebar lookup, survey ingestion, or QA audit mode under JTG D60-2015 / JTG 3362-2018 / JTG 3363-2019.",
+        description="Calculation, calculation-book, formal college Word thesis, Word/PPT figures, FEM defense comparison, design change impact, hand cross-check, rebar lookup, survey ingestion, or QA audit mode.",
     )
     params: dict[str, Any] = Field(
         default_factory=dict,
@@ -1503,8 +1507,44 @@ def _handle_civil_bridge_calc(
             "calculation_status": calc_rep["calculation_status"],
             "graduation_readiness_status": calc_rep["graduation_readiness_status"],
             "independent_cross_check": calc_rep["independent_cross_check"],
+            "defense_verification_table": calc_rep["defense_verification_table"],
             "markdown": md_text,
         }
+    elif mode == "thesis_docx":
+        from cad_skill_core.civil.bridge_figures import generate_bridge_calculation_figures
+        from cad_skill_core.civil.bridge_thesis_docx import generate_college_graduation_thesis_docx
+
+        task_id, task_dir = sandbox.allocate_task_dir("thesis")
+        calc_rep = run_full_bridge_calculation(p or {"preset": "wenchang"})
+        figs = generate_bridge_calculation_figures(calc_rep, task_dir / "figures")
+        result = {
+            "task_id": task_id,
+            **generate_college_graduation_thesis_docx(
+                calc_rep,
+                task_dir / "graduation_thesis.docx",
+                figures_summary=figs,
+                student_metadata=p.get("student_metadata"),
+            ),
+        }
+    elif mode == "calc_figures":
+        from cad_skill_core.civil.bridge_figures import generate_bridge_calculation_figures
+
+        task_id, task_dir = sandbox.allocate_task_dir("bfigs")
+        calc_rep = run_full_bridge_calculation(p or {"preset": "wenchang"})
+        result = {"task_id": task_id, **generate_bridge_calculation_figures(calc_rep, task_dir / "figures")}
+    elif mode == "fem_compare":
+        base_p = {"preset": "wenchang", **p} if "preset" not in p else p
+        calc_rep = run_full_bridge_calculation(base_p)
+        result = calc_rep["defense_verification_table"]
+    elif mode == "change_impact":
+        from cad_skill_core.civil.bridge_change_impact import compute_design_change_impact
+
+        before_cfg = dict(p.get("before_params") or {"preset": "wenchang"})
+        after_cfg = dict(p.get("after_params") or {"preset": "wenchang", **{k: v for k, v in p.items() if k not in {"before_params", "after_params"}}})
+        result = compute_design_change_impact(
+            run_full_bridge_calculation(before_cfg),
+            run_full_bridge_calculation(after_cfg),
+        )
     elif mode == "cross_check":
         calc_rep = run_full_bridge_calculation(p or {"preset": "wenchang"})
         result = compute_independent_hand_cross_check(calc_rep)

@@ -2116,7 +2116,7 @@ def compute_bridge_bill_of_quantities(
         {"category": "桥面沥青上面层", "material": "密级配沥青混凝土", "unit": "m3", "quantity": asphalt_m3, "sheet_ref": "QL-05/QL-13"},
         {"category": "预应力低松弛钢绞线", "material": "Φs15.2 (fpk=1860MPa)", "unit": "kg", "quantity": total_strand_kg, "sheet_ref": "QL-08"},
         {"category": "全桥带肋普通钢筋", "material": "HRB400", "unit": "kg", "quantity": hrb400_kg, "sheet_ref": "QL-09~QL-18"},
-        {"category": "全桥光圆箍筋", "material": "HPB300", "unit": "kg", "quantity": hpb300_kg, "sheet_ref": "QL-17"},
+        {"category": "全桥光圆箍筋", "material": "HPB300", "unit": "kg", "quantity": hpb300_kg, "sheet_ref": "QL-17/QL-18"},
         {"category": "墩台盖梁、柱、系梁及耳背墙", "material": "C30混凝土", "unit": "m3", "quantity": c30_sub_m3, "sheet_ref": "QL-14/QL-15"},
         {"category": "水下钻孔灌注桩", "material": "C30水下混凝土", "unit": "m3", "quantity": c30_pile_m3, "sheet_ref": "QL-14~QL-18"},
         {"category": "桥头钢筋混凝土搭板", "material": "C30混凝土 (6.0m×0.30m)", "unit": "m3", "quantity": c30_approach_slab_m3, "sheet_ref": "QL-13"},

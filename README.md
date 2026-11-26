@@ -17,8 +17,8 @@
 <!-- Primary Status & Capability Badges -->
 <p>
   <a href="https://github.com/XiaoGuai23/cad-operations-skill/actions/workflows/smoke-test.yml"><img src="https://github.com/XiaoGuai23/cad-operations-skill/actions/workflows/smoke-test.yml/badge.svg" alt="CI Tests"></a>
-  <a href="https://github.com/XiaoGuai23/cad-operations-skill/releases"><img src="assets/badges/release.svg" alt="Release v2.6.0"></a>
-  <img src="assets/badges/tests.svg" alt="1,054+ Tests Passed">
+  <a href="https://github.com/XiaoGuai23/cad-operations-skill/releases"><img src="assets/badges/release.svg" alt="Release v2.7.0"></a>
+  <img src="assets/badges/tests.svg" alt="1,059+ Tests Passed">
   <img src="assets/badges/python.svg" alt="Python 3.12">
   <a href="references/mcp-server-guide.md"><img src="assets/badges/mcp-tools.svg" alt="MCP 28 Tools"></a>
   <a href="SKILL.md"><img src="assets/badges/agent-skill.svg" alt="Agent Skill"></a>
@@ -98,7 +98,7 @@ Use it from **Python**, the **CLI**, the built-in **Web Studio 2.2** (`/studio`)
 - **[Draft Audited 2D & 3D Engineering Deliverables](#core-modules)**: Compile briefs or tables into 3-view GB/T & ISO drawings (with native `Ra` surface roughness, `[A]/[B]` datums, GD&T frames, and auto-collision repair) plus watertight `.step` / `.glb` / `.stl` solids.
 - **[Revise Surgically with Red/Green Vector Diff](#core-modules)**: Click exact entities or drag a marquee box to resize holes, **chamfer (`C5`)**, **fillet (`R8`)**, **add bolt-circle patterns (`PCD`)**, or **mirror**—verified atomically so out-of-scope dimensions (like `120` vs `Ø12`) are never corrupted.
 - **[Audit & Clean Wild Legacy DXFs](#core-modules)**: Detect manually tampered dimensions (`"125"` written over an `100.0 mm` line), exploded fake dimensions, `0.35 mm` open contour CAM gaps, duplicate lines, and text-line collisions—with one-click deterministic cleanup.
-- **[Civil & Highway Bridge Calculation Book + 18-Sheet A3 CAD Suite (`v2.6`)](references/civil-bridge-engineering.md)**: Zero-dependency structural engine featuring real river-section & borehole survey ingestion, independent pier & pile-bent abutment (Rankine earth pressure + JTG 3363-2019 bored pile) calculations, advisor-auditable step-by-step Markdown calculation book with closed-form hand cross-checks, 6-field rebar/tendon provenance lookup (`N1..DS1`), separated `calculation_status` vs `graduation_readiness_status`, and one-command cross-platform reproduction (`python scripts/run_bridge_suite.py`) of all 18 reopen-DXF verified A3 sheets (`QL-01..QL-18`).
+- **[Civil & Highway Bridge Graduation Thesis `.docx` + 300-DPI Figures + 18-Sheet A3 CAD Suite (`v2.7`)](references/civil-bridge-engineering.md)**: Full-lifecycle highway bridge engine featuring opening-report aligned 3-scheme comparison (`4×25 m` T-girder / continuous box / precast small box), real survey ingestion, independent pier & pile-bent abutment calculations, **college-template Word `.docx` graduation specification** (`graduation_thesis.docx` with 12 GB/T 7714 Chinese & English inline-cited references), **300-DPI Word/PPT calculation figures** (structural model, M/Q envelopes, parabolic tendon & prestress losses, pier/abutment pile-soil profile), **oral-defense FEM comparison table** (`--fem-results` for Dr.Bridge / Midas Civil), and **automatic design-change impact tracking** (`change_impact_report.json`) across all 18 reopen-DXF verified A3 sheets (`QL-01..QL-18`).
 - **[Connect Any AI Agent or Team via MCP & Web Studio](#mcp--agent-integration)**: Expose 28 strict-schema MCP tools (`stdio` + HTTP), project preference memory, failure-to-regression flywheel, and an interactive HTML5 vector CAD workstation.
 
 ### Audit & surgically revise a legacy DXF in 8 lines of Python:
@@ -192,7 +192,7 @@ py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt -e "./runtime/cad-2d-skill[dev]"
 ```
 
-### 2. Run Verification Suite (`1,024+` Automated Tests)
+### 2. Run Verification Suite (`1,059+` Automated Tests)
 
 ```powershell
 python tests/smoke_test.py

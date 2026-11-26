@@ -175,13 +175,17 @@ def _parser() -> argparse.ArgumentParser:
     run_reg.add_argument('--vault', type=Path, default=Path('tests/regressions'), dest='vault_dir')
     run_reg.add_argument('--json', action='store_true', dest='as_json')
 
-    bcalc = commands.add_parser('bridge-calc', help='run zero-dependency highway bridge calculations, ULS/SLS checks, calc book, hand cross-check, or bar lookup')
+    bcalc = commands.add_parser('bridge-calc', help='run zero-dependency highway bridge calculations, ULS/SLS checks, calc book, thesis docx, figures, FEM cross-check, or change impact')
     bcalc.add_argument(
         '--mode',
         choices=(
             'full',
             'wenchang',
             'calc-book',
+            'thesis-docx',
+            'calc-figures',
+            'fem-compare',
+            'change-impact',
             'cross-check',
             'lookup-bar',
             'survey-ingest',
@@ -198,6 +202,8 @@ def _parser() -> argparse.ArgumentParser:
     )
     bcalc.add_argument('--params', type=Path, default=None, dest='params_path')
     bcalc.add_argument('--survey', type=Path, default=None, dest='survey_path')
+    bcalc.add_argument('--fem-results', type=Path, default=None, dest='fem_results_path')
+    bcalc.add_argument('--baseline', type=Path, default=None, dest='baseline_path')
     bcalc.add_argument('--bar-id', default=None, dest='bar_id')
     bcalc.add_argument('--calc-book', type=Path, default=None, dest='calc_book_path')
     bcalc.add_argument('--table', type=Path, default=None, dest='table_path')
@@ -653,6 +659,8 @@ def _civil_command(arguments: argparse.Namespace) -> int:
             )
             if arguments.survey_path is not None:
                 params["survey_data"] = json.loads(arguments.survey_path.read_text(encoding="utf-8-sig"))
+            if arguments.fem_results_path is not None:
+                params["independent_fem_results"] = str(arguments.fem_results_path.resolve())
 
             mode = arguments.mode
             full_calc_for_book: dict[str, Any] | None = None
@@ -673,12 +681,49 @@ def _civil_command(arguments: argparse.Namespace) -> int:
                     "calculation_status": full_calc_for_book["calculation_status"],
                     "graduation_readiness_status": full_calc_for_book["graduation_readiness_status"],
                     "independent_cross_check": full_calc_for_book["independent_cross_check"],
+                    "defense_verification_table": full_calc_for_book["defense_verification_table"],
                     "markdown_length_chars": len(md_book),
                     "calc_book_path": str((arguments.calc_book_path or arguments.output_path).resolve())
                     if (arguments.calc_book_path or arguments.output_path) is not None
                     else None,
                     "markdown": md_book if (arguments.calc_book_path is None and arguments.output_path is None) else None,
                 }
+            elif mode == "thesis-docx":
+                from .civil.bridge_figures import generate_bridge_calculation_figures
+                from .civil.bridge_thesis_docx import generate_college_graduation_thesis_docx
+
+                out_docx = arguments.output_path or Path("output/graduation_thesis.docx")
+                base_p = {"preset": "wenchang", **params} if not params else params
+                full_calc_for_book = run_full_bridge_calculation(base_p)
+                figs = generate_bridge_calculation_figures(full_calc_for_book, out_docx.resolve().parent / "figures")
+                res = generate_college_graduation_thesis_docx(
+                    full_calc_for_book,
+                    out_docx,
+                    figures_summary=figs,
+                    student_metadata=params.get("student_metadata"),
+                )
+            elif mode == "calc-figures":
+                from .civil.bridge_figures import generate_bridge_calculation_figures
+
+                out_fig_dir = arguments.output_path or Path("output/figures")
+                base_p = {"preset": "wenchang", **params} if not params else params
+                full_calc_for_book = run_full_bridge_calculation(base_p)
+                res = generate_bridge_calculation_figures(full_calc_for_book, out_fig_dir)
+            elif mode == "fem-compare":
+                base_p = {"preset": "wenchang", **params} if "preset" not in params and len(params) <= 1 else params
+                full_calc_for_book = run_full_bridge_calculation(base_p)
+                res = full_calc_for_book["defense_verification_table"]
+            elif mode == "change-impact":
+                from .civil.bridge_change_impact import compute_design_change_impact
+
+                base_prev = (
+                    json.loads(arguments.baseline_path.read_text(encoding="utf-8-sig"))
+                    if arguments.baseline_path is not None
+                    else run_full_bridge_calculation({"preset": "wenchang"})
+                )
+                base_p = {"preset": "wenchang", **params} if "preset" not in params else params
+                full_calc_for_book = run_full_bridge_calculation(base_p)
+                res = compute_design_change_impact(base_prev, full_calc_for_book)
             elif mode == "cross-check":
                 base_p = {"preset": "wenchang", **params} if not params else params
                 full_calc_for_book = run_full_bridge_calculation(base_p)
@@ -721,7 +766,7 @@ def _civil_command(arguments: argparse.Namespace) -> int:
                 generate_bridge_calculation_book_markdown(full_calc_for_book, output_path=arguments.calc_book_path)
 
             payload = {"command": "bridge-calc", "mode": mode, "result": res}
-            if arguments.output_path is not None and mode != "calc-book":
+            if arguments.output_path is not None and mode not in {"calc-book", "thesis-docx", "calc-figures"}:
                 arguments.output_path.parent.mkdir(parents=True, exist_ok=True)
                 arguments.output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
             print(_stable_json(payload) if arguments.as_json else json.dumps(payload, ensure_ascii=False, indent=2))

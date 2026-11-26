@@ -1,7 +1,8 @@
-"""Deterministic civil & bridge engineering calculations, checks, reopen-DXF verifier, and CAD sheets."""
+"""Deterministic civil & bridge engineering calculations, checks, figures, thesis, reopen-DXF verifier, and CAD sheets."""
 
 from .bridge_calc import (
     audit_bridge_design_consistency,
+    audit_references_compliance,
     collect_failed_structural_checks,
     compute_hydrology_and_span,
     compute_lateral_distribution,
@@ -9,15 +10,24 @@ from .bridge_calc import (
     compute_prestress_estimation_and_loss,
     compute_superstructure_envelopes,
     compute_t_girder_section,
+    default_graduation_references,
+    default_opening_report_schemes,
     ingest_and_audit_calc_table,
     ingest_bridge_survey_data,
+    ingest_independent_fem_results,
     run_full_bridge_calculation,
     solve_continuous_cap_beam_1d,
     wenchang_bridge_preset,
 )
 from .bridge_calc_book import (
+    build_defense_verification_table,
     compute_independent_hand_cross_check,
     generate_bridge_calculation_book_markdown,
+)
+from .bridge_change_impact import (
+    compute_design_change_impact,
+    save_change_impact_report,
+    verify_internal_suite_consistency,
 )
 from .bridge_checks import (
     build_rebar_and_tendon_ledger,
@@ -37,6 +47,8 @@ from .bridge_drawings import (
     generate_civil_bridge_dxf,
     generate_full_bridge_drawing_set,
 )
+from .bridge_figures import generate_bridge_calculation_figures
+from .bridge_thesis_docx import generate_college_graduation_thesis_docx
 from .bridge_verify import verify_civil_dxf
 from .symbols import (
     ViewBox,
@@ -61,7 +73,9 @@ __all__ = [
     "TASK_BOOK_9_CATEGORIES",
     "ViewBox",
     "audit_bridge_design_consistency",
+    "audit_references_compliance",
     "audit_task_book_coverage",
+    "build_defense_verification_table",
     "build_rebar_and_tendon_ledger",
     "check_deck_slab_and_diaphragm",
     "check_elastomeric_bearing",
@@ -70,6 +84,7 @@ __all__ = [
     "check_t_girder_uls_sls",
     "collect_failed_structural_checks",
     "compute_bridge_bill_of_quantities",
+    "compute_design_change_impact",
     "compute_hydrology_and_span",
     "compute_independent_hand_cross_check",
     "compute_lateral_distribution",
@@ -77,6 +92,8 @@ __all__ = [
     "compute_prestress_estimation_and_loss",
     "compute_superstructure_envelopes",
     "compute_t_girder_section",
+    "default_graduation_references",
+    "default_opening_report_schemes",
     "draw_axis_bubble",
     "draw_bearing_symbol",
     "draw_boxed_tag",
@@ -91,15 +108,20 @@ __all__ = [
     "draw_tendon_schedule_table",
     "export_civil_a3_print_pdf_png",
     "generate_bridge_calculation_book_markdown",
+    "generate_bridge_calculation_figures",
     "generate_civil_bridge_bundle",
     "generate_civil_bridge_dxf",
+    "generate_college_graduation_thesis_docx",
     "generate_full_bridge_drawing_set",
     "ingest_and_audit_calc_table",
     "ingest_bridge_survey_data",
+    "ingest_independent_fem_results",
     "lookup_bar_or_tendon",
     "run_full_bridge_calculation",
+    "save_change_impact_report",
     "setup_civil_dxf_document",
     "solve_continuous_cap_beam_1d",
     "verify_civil_dxf",
+    "verify_internal_suite_consistency",
     "wenchang_bridge_preset",
 ]

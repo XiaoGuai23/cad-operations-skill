@@ -17,8 +17,8 @@
 <!-- 状态与核心能力徽章墙 -->
 <p>
   <a href="https://github.com/XiaoGuai23/cad-operations-skill/actions/workflows/smoke-test.yml"><img src="https://github.com/XiaoGuai23/cad-operations-skill/actions/workflows/smoke-test.yml/badge.svg" alt="CI Tests"></a>
-  <a href="https://github.com/XiaoGuai23/cad-operations-skill/releases"><img src="assets/badges/release.svg" alt="Release v2.6.0"></a>
-  <img src="assets/badges/tests.svg" alt="1,054+ Tests Passed">
+  <a href="https://github.com/XiaoGuai23/cad-operations-skill/releases"><img src="assets/badges/release.svg" alt="Release v2.7.0"></a>
+  <img src="assets/badges/tests.svg" alt="1,059+ Tests Passed">
   <img src="assets/badges/python.svg" alt="Python 3.12">
   <a href="references/mcp-server-guide.md"><img src="assets/badges/mcp-tools.svg" alt="MCP 28 Tools"></a>
   <a href="SKILL.md"><img src="assets/badges/agent-skill.svg" alt="Agent Skill"></a>
@@ -96,7 +96,7 @@
 - **[从文档直出审计级二维蓝图与三维 STEP](#六大核心引擎)**：自动提取参数并拦截缺失/冲突项，原生绘制直齿圆柱齿轮、轴承透盖、带筋支座、法兰、阶梯轴三视图，内置国标水平横梁 `Ra` 粗糙度、基准框 `[A]/[B]` 与带折弯引线的形位公差框。
 - **[矢量级“指哪改哪”与红绿叠图 Diff](#六大核心引擎)**：单击图元或拉出蓝色虚线框，支持口语或结构化 IR 执行**改孔径、拐角倒角（`C5`）、相切倒圆角（`R8`）、新增圆周螺栓孔阵（`PCD`）、对称镜像**，自动换算英制/公制 `$INSUNITS` 并严防污染框外尺寸。
 - **[外部存量脏图纸（Legacy DXF）防篡改体检与清洗](#六大核心引擎)**：无需内部规约，直接揪出**人为改写文字的“篡改假尺寸”**、炸开散落标注、导致激光切割中断的 `0.35 mm` 轮廓微缝、重线与文字压线，支持一键原子清洗。
-- **[土木与公路桥梁结构计算 + 导师复核计算书 + 18 张 A3 施工图册（`v2.6`）](references/civil-bridge-engineering.md)**：零商业软件依赖完成实测水文断面与钻孔地勘接入、代表性 T 梁/中间双柱墩/独立桩柱式桥台及朗肯土压力计算、手算解析与电算交叉对算、任点钢筋编号 6 维溯源（数量口径、选筋依据、控制内力、荷载组合、参数出处）、“计算通过 vs 毕设资料齐全”双状态分离及 `python scripts/run_bridge_suite.py` 一键生成重开 DXF 实测验收的全套 `QL-01 ~ QL-18` 施工图与计算说明书。
+- **[土木与公路桥梁结构计算 + 学院模板 Word 毕业设计说明书 + 18 张 A3 施工图册（`v2.7`）](references/civil-bridge-engineering.md)**：打通开题报告三方案比选统一（`4×25 m` 装配式简支T梁 / 连续箱梁 / 装配式简支箱梁）、实测水文地勘接入、独立桩柱式桥台及桩长推导、**300 DPI 高清计算图自动绘制**（结构计算简图、弯矩剪力包络图、钢束线形与有效预应力分布图、墩台桩基土层对比图）、**答辩现场手算—程序—独立电算（桥梁博士/Midas Civil）对照表**（`--fem-results`）、**设计变更全链路受影响章节与图号追踪**（`change_impact_report.json`），以及一键输出内嵌三线表、高清插图与 12 篇中英文双口径实引文献的**学院模板正式说明书 `graduation_thesis.docx`** 与全套 `QL-01 ~ QL-18` 施工图。
 - **[通过 28 项 MCP 工具与 Web Studio 赋能任意 Agent](#mcp-与智能体接入)**：同时支持 `stdio`、Streamable HTTP、项目偏好记忆、错题回归飞轮与内置 `/studio` 交互画布。
 
 ### 8 行 Python 完成外部存量图纸体检清洗 + 四角相切倒圆角：
@@ -190,7 +190,7 @@ py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt -e "./runtime/cad-2d-skill[dev]"
 ```
 
-### 2. 运行全量验证套件（`1,024+` 项自动化测试）
+### 2. 运行全量验证套件（`1,059+` 项自动化测试）
 
 ```powershell
 python tests/smoke_test.py

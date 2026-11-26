@@ -3254,8 +3254,37 @@ def generate_full_bridge_drawing_set(
     *,
     render_png: bool = False,
     preference_memory_path: str | Path | None = None,
+    baseline_report: Mapping[str, Any] | str | Path | None = None,
+    generate_figures: bool = True,
+    generate_thesis_docx: bool = True,
+    student_metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Generate a unified 18-sheet A3 bridge construction drawing set + calculation report + coverage audit."""
+    """Generate a unified 18-sheet A3 bridge construction drawing set + calculation book + Word thesis + figures + change impact."""
+    out_root = Path(output_dir).expanduser().resolve()
+
+    # Capture existing baseline report & DXF hashes in output_dir BEFORE overwriting (if present)
+    prev_calc: dict[str, Any] | None = None
+    prev_dxf_hashes: dict[str, str] = {}
+    if isinstance(baseline_report, Mapping):
+        prev_calc = dict(baseline_report)
+    elif baseline_report is not None and Path(baseline_report).expanduser().is_file():
+        prev_calc = json.loads(Path(baseline_report).expanduser().read_text(encoding="utf-8-sig"))
+    elif (out_root / "bridge_calculation_report.json").is_file():
+        try:
+            prev_calc = json.loads((out_root / "bridge_calculation_report.json").read_text(encoding="utf-8-sig"))
+        except Exception:
+            prev_calc = None
+
+    prev_manifest_file = out_root / "drawing_set_manifest.json"
+    if prev_manifest_file.is_file():
+        try:
+            prev_man = json.loads(prev_manifest_file.read_text(encoding="utf-8-sig"))
+            for sh_p in prev_man.get("sheets", []):
+                if sh_p.get("drawing_no") and sh_p.get("dxf_sha256"):
+                    prev_dxf_hashes[str(sh_p["drawing_no"])] = str(sh_p["dxf_sha256"])
+        except Exception:
+            prev_dxf_hashes = {}
+
     cfg = dict(params or {"preset": "wenchang"})
     calc = run_full_bridge_calculation(cfg)
     ps = calc["project_summary"]
@@ -3263,7 +3292,6 @@ def generate_full_bridge_drawing_set(
     sub = calc["substructure_checks"]
     ledger = calc["rebar_and_tendon_ledger"]
 
-    out_root = Path(output_dir).expanduser().resolve()
     out_root.mkdir(parents=True, exist_ok=True)
 
     base_spec = {
@@ -3439,6 +3467,7 @@ def generate_full_bridge_drawing_set(
             pdf_file = None
             png_file = None
 
+        dxf_hash = sha256_file(dxf_file)
         generated_sheets.append(
             {
                 "drawing_no": dno,
@@ -3447,6 +3476,7 @@ def generate_full_bridge_drawing_set(
                 "title": merged_spec.get("title", dtype),
                 "sheet_size": "A3",
                 "dxf_path": str(dxf_file),
+                "dxf_sha256": dxf_hash,
                 "pdf_path": str(pdf_file) if pdf_file else None,
                 "png_path": str(png_file) if png_file else None,
                 "verify_status": ver["status"],
@@ -3457,12 +3487,45 @@ def generate_full_bridge_drawing_set(
         )
 
     from .bridge_calc_book import generate_bridge_calculation_book_markdown
+    from .bridge_change_impact import compute_design_change_impact, save_change_impact_report
+    from .bridge_figures import generate_bridge_calculation_figures
+    from .bridge_thesis_docx import generate_college_graduation_thesis_docx
+
+    new_dxf_hashes = {sh["drawing_no"]: sh["dxf_sha256"] for sh in generated_sheets}
+    change_impact = compute_design_change_impact(
+        prev_calc,
+        calc,
+        before_dxf_hashes=prev_dxf_hashes if prev_calc is not None else None,
+        after_dxf_hashes=new_dxf_hashes if prev_calc is not None else None,
+    )
+    change_impact_path = out_root / "change_impact_report.json"
+    save_change_impact_report(change_impact, change_impact_path)
+
+    figures_summary: dict[str, Any] | None = None
+    if generate_figures:
+        figures_summary = generate_bridge_calculation_figures(calc, out_root / "figures")
 
     coverage = audit_task_book_coverage(generated_sheets, calc)
     calc_out_path = out_root / "bridge_calculation_report.json"
     calc_out_path.write_text(json.dumps(calc, ensure_ascii=False, indent=2), encoding="utf-8")
     calc_book_path = out_root / "bridge_calculation_book.md"
-    generate_bridge_calculation_book_markdown(calc, output_path=calc_book_path)
+    generate_bridge_calculation_book_markdown(
+        calc,
+        output_path=calc_book_path,
+        figures_summary=figures_summary,
+        change_impact=change_impact,
+    )
+
+    thesis_summary: dict[str, Any] | None = None
+    if generate_thesis_docx:
+        resolved_meta = dict(student_metadata or cfg.get("student_metadata") or {})
+        thesis_summary = generate_college_graduation_thesis_docx(
+            calc,
+            out_root / "graduation_thesis.docx",
+            figures_summary=figures_summary,
+            change_impact=change_impact,
+            student_metadata=resolved_meta,
+        )
 
     failed_checks = list(calc.get("failed_checks", []))
     failed_drawings = sorted(
@@ -3473,6 +3536,7 @@ def generate_full_bridge_drawing_set(
         calc.get("calculation_status", calc.get("status", "passed")) == "passed"
         and coverage["status"] == "passed"
         and calc["consistency_audit"]["status"] == "passed"
+        and change_impact["internal_consistency"]["status"] == "passed"
         and not failed_checks
         and not failed_drawings
     )
@@ -3497,10 +3561,17 @@ def generate_full_bridge_drawing_set(
         "pending_graduation_deliverables": calc.get("pending_graduation_deliverables", []),
         "seismic_verification": calc.get("seismic_verification"),
         "independent_cross_check": calc.get("independent_cross_check"),
+        "defense_verification_table": calc.get("defense_verification_table"),
+        "references_audit": calc.get("references_audit"),
+        "change_impact": change_impact,
+        "calculation_figures": figures_summary,
+        "graduation_thesis": thesis_summary,
         "coverage_audit": coverage,
         "sheets": generated_sheets,
         "calculation_report_path": str(calc_out_path),
         "calculation_book_path": str(calc_book_path),
+        "graduation_thesis_docx_path": thesis_summary["docx_path"] if thesis_summary else None,
+        "change_impact_report_path": str(change_impact_path),
     }
     manifest_out_path.write_text(json.dumps(manifest_payload, ensure_ascii=False, indent=2), encoding="utf-8")
     return {**manifest_payload, "calculation_report": calc, "manifest_path": str(manifest_out_path)}
