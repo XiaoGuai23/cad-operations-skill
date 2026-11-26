@@ -234,7 +234,6 @@ def setup_civil_dxf_document(
     add_civil_text(msp, f"图名：{title}", tb_x0 + 4.0, tb_y0 + 16.5, height=tb_title_h, align="LEFT")
     add_civil_text(msp, f"比例 {scale_label}", tb_x0 + 91.0, tb_y0 + 16.5, height=2.4, align="LEFT")
     add_civil_text(msp, f"单位 {unit_note}", tb_x0 + 137.0, tb_y0 + 16.5, height=2.4, align="LEFT")
-    add_civil_text(msp, "设计：CAD-Skill   复核：JTG规范引擎", tb_x0 + 4.0, tb_y0 + 4.5, height=2.3, align="LEFT")
     add_civil_text(msp, "图号", tb_x0 + 91.0, tb_y0 + 4.5, height=2.4, align="LEFT")
     add_civil_text(msp, drawing_no, tb_x0 + 157.0, tb_y0 + 4.5, height=2.6, align="CENTER")
 
