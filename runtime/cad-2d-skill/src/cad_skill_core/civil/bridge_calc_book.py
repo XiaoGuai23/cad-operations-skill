@@ -671,6 +671,9 @@ def generate_bridge_calculation_book_markdown(
             "",
         ]
     )
+    fig_gd_md = _rel_fig_md(figs_by_id.get("fig_girder_detail"), out_dir_for_rel)
+    if fig_gd_md:
+        lines.extend([fig_gd_md, ""])
     fig1_md = _rel_fig_md(figs_by_id.get("fig1_structural_model"), out_dir_for_rel)
     if fig1_md:
         lines.extend([fig1_md, ""])

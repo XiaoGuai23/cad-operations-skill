@@ -1739,6 +1739,15 @@ def wenchang_bridge_preset() -> dict[str, Any]:
             "pile_diameter_m": 1.40,
             "concrete_grade": "C30",
         },
+        "student_metadata": {
+            "school_name": "郑州升达经贸管理学院",
+            "college_name": "建筑工程学院",
+            "major_class": "2021 级土木工程本科 1 班",
+            "student_name": "许琦莘",
+            "student_id": "202109020152",
+            "advisor_name": "李小霞（副教授）",
+            "completion_date": "2025 年 4 月",
+        },
     }
 
 
@@ -2974,5 +2983,11 @@ def run_full_bridge_calculation(params: dict[str, Any] | None = None) -> dict[st
         "consistency_audit": consistency,
     }
     report_out["independent_cross_check"] = compute_independent_hand_cross_check(report_out)
+    fem_solver_mode = str(raw_cfg.get("fem_solver", "none")).strip().lower()
+    if fem_ingested is None and fem_solver_mode in {"builtin_frame_fem", "builtin", "frame_fem"}:
+        from .bridge_fem_solver import solve_independent_frame_fem
+
+        fem_ingested = solve_independent_frame_fem(report_out)
+        report_out["independent_fem_results"] = fem_ingested
     report_out["defense_verification_table"] = build_defense_verification_table(report_out, fem_ingested)
     return report_out

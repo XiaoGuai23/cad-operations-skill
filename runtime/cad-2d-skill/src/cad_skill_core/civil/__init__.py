@@ -47,6 +47,10 @@ from .bridge_drawings import (
     generate_civil_bridge_dxf,
     generate_full_bridge_drawing_set,
 )
+from .bridge_fem_solver import (
+    generate_drbridge_modeling_guide,
+    solve_independent_frame_fem,
+)
 from .bridge_figures import generate_bridge_calculation_figures
 from .bridge_thesis_docx import generate_college_graduation_thesis_docx
 from .bridge_verify import verify_civil_dxf
@@ -112,6 +116,7 @@ __all__ = [
     "generate_civil_bridge_bundle",
     "generate_civil_bridge_dxf",
     "generate_college_graduation_thesis_docx",
+    "generate_drbridge_modeling_guide",
     "generate_full_bridge_drawing_set",
     "ingest_and_audit_calc_table",
     "ingest_bridge_survey_data",
@@ -121,6 +126,7 @@ __all__ = [
     "save_change_impact_report",
     "setup_civil_dxf_document",
     "solve_continuous_cap_beam_1d",
+    "solve_independent_frame_fem",
     "verify_civil_dxf",
     "verify_internal_suite_consistency",
     "wenchang_bridge_preset",

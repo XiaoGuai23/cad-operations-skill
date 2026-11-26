@@ -67,6 +67,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Optional independent FEM software results (Midas Civil / Dr.Bridge JSON, CSV, TSV, or Markdown table).",
     )
     parser.add_argument(
+        "--fem-solver",
+        choices=("none", "builtin_frame_fem"),
+        default="none",
+        dest="fem_solver",
+        help="Optional built-in independent 2D Timoshenko beam & pier-frame FEM solver ('none' keeps pending_external_import unless --fem-results is given).",
+    )
+    parser.add_argument(
         "--baseline",
         type=Path,
         default=None,
@@ -81,7 +88,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Optional JSON metadata for formal college thesis cover (school_name, student_name, student_id, advisor_name).",
     )
     parser.add_argument("--lookup-bar", default=None, dest="lookup_bar", help="Query full provenance for a single tendon/rebar ID (e.g. N1, GJ1, DZ1, QT3).")
-    parser.add_argument("--with-previews", action="store_true", dest="with_previews", help="Also render 1:1 A3 B&W PDF + high-DPI PNG for all 18 sheets.")
+    parser.add_argument("--with-previews", action="store_true", dest="with_previews", help="Render 1:1 A3 B&W PDFs, merged A3 print album, and high-DPI PNGs (enabled by default unless --no-previews is passed).")
+    parser.add_argument("--no-previews", action="store_true", dest="no_previews", help="Skip rendering A3 PDFs and PNG previews (faster DXF-only mode).")
     parser.add_argument("--json", action="store_true", dest="as_json", help="Emit machine-readable JSON output.")
 
     args = parser.parse_args(list(argv) if argv is not None else None)
@@ -95,6 +103,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         cfg["survey_data"] = json.loads(args.survey_path.read_text(encoding="utf-8-sig"))
     if args.fem_results_path is not None:
         cfg["independent_fem_results"] = str(args.fem_results_path.expanduser().resolve())
+    if args.fem_solver != "none":
+        cfg["fem_solver"] = args.fem_solver
     student_meta = (
         json.loads(args.student_info_path.read_text(encoding="utf-8-sig"))
         if args.student_info_path is not None
@@ -107,10 +117,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps(traced, ensure_ascii=False, indent=2))
         return 0
 
+    render_previews = False if args.no_previews else True
     suite = generate_full_bridge_drawing_set(
         cfg,
         args.output_dir,
-        render_png=bool(args.with_previews),
+        render_png=render_previews,
         baseline_report=args.baseline_path,
         student_metadata=student_meta,
     )
@@ -156,6 +167,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"   - 图册清单: {suite['manifest_path']}")
         print(f"   - 导师复核计算书(MD): {suite['calculation_book_path']}")
         print(f"   - 学院模板正式说明书(DOCX): {thesis.get('docx_path')}")
+        if suite.get("print_album_pdf_path"):
+            print(f"   - 18张A3施工图合订打印图册(PDF): {suite['print_album_pdf_path']}")
+        if suite.get("drbridge_modeling_guide_path"):
+            print(f"   - 桥梁博士/Midas独立电算建模卡(MD): {suite['drbridge_modeling_guide_path']}")
         print(f"   - 计算图目录(300DPI PNG/SVG): {figs.get('output_dir')}")
         print(f"   - 设计变更影响报告(JSON): {suite['change_impact_report_path']}")
     return 0 if suite["calculation_status"] == "passed" else 1

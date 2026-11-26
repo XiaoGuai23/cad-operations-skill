@@ -3488,8 +3488,26 @@ def generate_full_bridge_drawing_set(
 
     from .bridge_calc_book import generate_bridge_calculation_book_markdown
     from .bridge_change_impact import compute_design_change_impact, save_change_impact_report
+    from .bridge_fem_solver import generate_drbridge_modeling_guide
     from .bridge_figures import generate_bridge_calculation_figures
     from .bridge_thesis_docx import generate_college_graduation_thesis_docx
+
+    print_album_pdf_path: str | None = None
+    sheet_pdfs = [Path(sh["pdf_path"]) for sh in generated_sheets if sh.get("pdf_path") and Path(str(sh["pdf_path"])).is_file()]
+    if render_png and sheet_pdfs:
+        from pypdf import PdfReader, PdfWriter
+
+        writer = PdfWriter()
+        for spdf in sheet_pdfs:
+            reader = PdfReader(str(spdf))
+            for pg in reader.pages:
+                writer.add_page(pg)
+        album_file = out_root / "QL-01_to_QL-18_A3_print_album.pdf"
+        with album_file.open("wb") as fh:
+            writer.write(fh)
+        print_album_pdf_path = str(album_file)
+
+    drbridge_guide = generate_drbridge_modeling_guide(calc, out_root)
 
     new_dxf_hashes = {sh["drawing_no"]: sh["dxf_sha256"] for sh in generated_sheets}
     change_impact = compute_design_change_impact(
@@ -3568,6 +3586,9 @@ def generate_full_bridge_drawing_set(
         "graduation_thesis": thesis_summary,
         "coverage_audit": coverage,
         "sheets": generated_sheets,
+        "print_album_pdf_path": print_album_pdf_path,
+        "drbridge_modeling_guide_path": drbridge_guide.get("guide_markdown_path"),
+        "drbridge_import_template_path": drbridge_guide.get("template_json_path"),
         "calculation_report_path": str(calc_out_path),
         "calculation_book_path": str(calc_book_path),
         "graduation_thesis_docx_path": thesis_summary["docx_path"] if thesis_summary else None,
