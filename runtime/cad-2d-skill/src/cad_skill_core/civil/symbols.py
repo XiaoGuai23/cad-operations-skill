@@ -129,7 +129,13 @@ def setup_civil_dxf_document(
 
     overrides = dict(style_overrides or {})
     eff_font = str(overrides.get("font") or font)
-    layer_color_map = {str(k).upper(): int(v) for k, v in dict(overrides.get("layer_colors") or {}).items()}
+    eff_title_font = str(
+        overrides.get("title_font")
+        or ("simhei.ttf" if "font" not in overrides and eff_font == "Deng.ttf" else eff_font)
+    )
+    eff_width_factor = float(overrides.get("text_width_factor", 0.85))
+    layer_color_map = {str(k).upper(): int(v) for k, v in dict(overrides.get("layer_colors") or {}).items() if int(v) > 0}
+    layer_lw_map_mm = {str(k).upper(): float(v) for k, v in dict(overrides.get("layer_lineweights_mm") or {}).items() if float(v) > 0}
     dim_stack_step = float(overrides.get("dim_stack_step_mm", 8.5))
     schedule_dock = str(overrides.get("schedule_dock", "bottom_right"))
 
@@ -147,11 +153,10 @@ def setup_civil_dxf_document(
 
     if "CIVIL_TEXT" not in doc.styles:
         st = doc.styles.add("CIVIL_TEXT", font=eff_font)
-        st.dxf.width = 0.85
+        st.dxf.width = eff_width_factor
     if "CIVIL_TITLE" not in doc.styles:
-        title_font = "simhei.ttf" if "font" not in overrides and eff_font == "Deng.ttf" else eff_font
-        st_t = doc.styles.add("CIVIL_TITLE", font=title_font)
-        st_t.dxf.width = 0.90
+        st_t = doc.styles.add("CIVIL_TITLE", font=eff_title_font)
+        st_t.dxf.width = min(1.0, round(eff_width_factor + 0.05, 2))
 
     # Explicit millimeter lineweights (in 1/100 mm): Main Rebar (0.70mm) > Frame (0.50mm) > Stirrup (0.35mm) > Concrete (0.25mm) > Dim (0.15mm)
     layer_defs = [
@@ -169,37 +174,48 @@ def setup_civil_dxf_document(
         ("HATCH", 9, "CONTINUOUS", 13),
         ("TERRAIN", 32, "CONTINUOUS", 35),
     ]
+    _valid_dxf_lws = (5, 9, 13, 15, 18, 20, 25, 30, 35, 40, 50, 53, 60, 70, 80, 90, 100, 106, 120, 140, 158, 200, 211)
     for name, color, ltype, lw in layer_defs:
         eff_color = layer_color_map.get(name, color)
+        if name in layer_lw_map_mm:
+            raw_lw_100 = int(round(layer_lw_map_mm[name] * 100.0))
+            eff_lw = min(_valid_dxf_lws, key=lambda cand: abs(cand - raw_lw_100))
+        else:
+            eff_lw = lw
         if name not in doc.layers:
-            doc.layers.add(name, color=eff_color, linetype=ltype, lineweight=lw)
+            doc.layers.add(name, color=eff_color, linetype=ltype, lineweight=eff_lw)
         else:
             lyr = doc.layers.get(name)
             lyr.dxf.color = eff_color
-            lyr.dxf.lineweight = lw
+            lyr.dxf.lineweight = eff_lw
 
     if "CIVIL_ARCH" not in doc.dimstyles:
+        arrow_mode = str(overrides.get("dim_arrow_style", "archtick")).strip().lower()
+        dim_blk_val = "" if arrow_mode == "closed_filled" else ezdxf.ARROWS.architectural_tick
+        dim_col = layer_color_map.get("DIM", 3)
+        txt_col = layer_color_map.get("TEXT", 7)
         doc.dimstyles.add(
             "CIVIL_ARCH",
             dxfattribs={
                 "dimtxsty": "CIVIL_TEXT",
-                "dimblk": ezdxf.ARROWS.architectural_tick,
-                "dimtxt": 2.4,
-                "dimasz": 1.8,
-                "dimgap": 0.7,
+                "dimblk": dim_blk_val,
+                "dimtxt": float(overrides.get("dim_text_height_mm", 2.4)),
+                "dimasz": float(overrides.get("dim_arrow_size_mm", 1.8)),
+                "dimgap": float(overrides.get("dim_gap_mm", 0.7)),
                 "dimexo": 0.8,
                 "dimexe": 1.2,
                 "dimtad": 1,
                 "dimdec": 0,
-                "dimclrd": 3,
-                "dimclre": 3,
-                "dimclrt": 7,
+                "dimclrd": dim_col,
+                "dimclre": dim_col,
+                "dimclrt": txt_col,
             },
         )
 
     msp = doc.modelspace()
-    margin_left = 25.0 if size_key in {"A0", "A1", "A2"} else 15.0
-    margin_other = 10.0
+    default_ml = 25.0 if size_key in {"A0", "A1", "A2"} else 15.0
+    margin_left = float(overrides.get("margin_left_mm", default_ml))
+    margin_other = float(overrides.get("margin_other_mm", 10.0))
 
     # Outer paper edge & inner thick border
     msp.add_lwpolyline(

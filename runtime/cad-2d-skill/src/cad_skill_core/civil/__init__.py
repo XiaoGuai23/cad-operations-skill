@@ -1,5 +1,14 @@
 """Deterministic civil & bridge engineering calculations, checks, figures, thesis, reopen-DXF verifier, and CAD sheets."""
 
+from cad_skill_core.standards.template_learner import (
+    AlbumTemplateProfile,
+    ThesisTemplateProfile,
+    learn_dxf_album_profile,
+    learn_template_styles,
+    learn_thesis_template_from_docx,
+    load_album_template,
+    load_thesis_template,
+)
 from .bridge_calc import (
     audit_bridge_design_consistency,
     audit_references_compliance,
@@ -83,10 +92,17 @@ from .symbols import (
 )
 
 __all__ = [
+    "AlbumTemplateProfile",
     "CIVIL_DRAWING_TYPES",
     "TASK_BOOK_9_CATEGORIES",
+    "ThesisTemplateProfile",
     "WENCHANG_22_SHEET_INDEX",
     "ViewBox",
+    "learn_dxf_album_profile",
+    "learn_template_styles",
+    "learn_thesis_template_from_docx",
+    "load_album_template",
+    "load_thesis_template",
     "audit_bridge_design_consistency",
     "audit_references_compliance",
     "audit_task_book_coverage",

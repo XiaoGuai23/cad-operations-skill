@@ -77,7 +77,7 @@ D:\Python312\python.exe -B -m cad_skill_core.cli mcp-http --host 127.0.0.1 --por
 1. `cad_doctor`：诊断 Python 渲染栈、本机中文字体覆盖率、三维内核能力与多厂商 CAD 驱动状态。
 2. `cad_compile_spec`：解析项目书/手册/CSV/DOCX/PDF，编译 `DrawingSpec`（自动融合已确认的项目制图偏好记忆）并拦截缺失尺寸与冲突参数。
 3. `cad_validate_spec`：严格校验 `DrawingSpec` 结构、尺寸锚点与溯源完整性。
-4. `cad_learn_standard`：从参考样图 DXF 自动提取图层、线宽、字高、`DIMSTYLE`、图幅标准以及制图表达习惯（孔阵列合并标法、引线方位、粗糙度习惯）。
+4. `cad_learn_standard`：从参考样图 `.dxf`、施工图册文件夹（多张 `.dxf`）及学院参考说明书 `.docx` 自动反向提取图层、线宽、字高、`DIMSTYLE`、图号前缀习惯以及 Word 页边距/封面栏标签/三级标题字号/三线表样式，沉淀至 `.cad-memory/`（自动剥离样本学生个人信息）。
 5. `cad_generate_mechanical_2d`：生成国标/ISO 三视图零件与装配图（支持 `standard_profile` 标准预设切换、自动避让修复与实时 `rubric_score`）。
 6. `cad_generate_electrical_sld`：生成单母/分段/双母电气主接线图（DXF/SVG/PDF/PNG + 交叉审计）。
 7. `cad_generate_pavement`：生成道路路面结构设计图（原生 `HATCH` + `DIMENSION` 审计级 DXF + PNG）。

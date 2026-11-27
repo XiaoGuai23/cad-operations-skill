@@ -61,10 +61,12 @@ def build_bridge_sheet_manifest(
     custom_manifest: Sequence[Mapping[str, Any]] | None = None,
     sheet_title_overrides: Mapping[str, str] | None = None,
     extra_sheets: Sequence[Mapping[str, Any]] | None = None,
+    drawing_no_prefix: str | None = None,
 ) -> dict[str, Any]:
     """Build a single authoritative sheet manifest shared by DXF, PDF album, Calc Book, and Word Thesis."""
     scheme_norm = str(sheet_scheme or "wenchang_22").strip().lower()
     title_over = {str(k): str(v) for k, v in (sheet_title_overrides or {}).items()}
+    norm_prefix = str(drawing_no_prefix).strip() if drawing_no_prefix is not None else None
 
     entries: list[dict[str, Any]] = []
     if custom_manifest:
@@ -94,7 +96,12 @@ def build_bridge_sheet_manifest(
             if use_18 and dno_18 is None:
                 continue
             seq_i += 1
-            dno = str(dno_18 if use_18 else dno_22)
+            raw_dno = str(dno_18 if use_18 else dno_22)
+            if norm_prefix is not None:
+                bare_num = re.sub(r"^[A-Za-z]{1,4}-", "", raw_dno)
+                dno = f"{norm_prefix}{bare_num}" if norm_prefix else bare_num
+            else:
+                dno = raw_dno
             base_title = def_title
             if use_18 and role_k == "pier_cap_rebar":
                 base_title = "桥墩盖梁普通钢筋构造图"

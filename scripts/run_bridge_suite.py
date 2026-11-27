@@ -35,6 +35,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     from cad_skill_core.civil import (
         generate_bridge_calculation_book_markdown,
         generate_full_bridge_drawing_set,
+        learn_template_styles,
         lookup_bar_or_tendon,
         run_full_bridge_calculation,
     )
@@ -109,6 +110,27 @@ def main(argv: Sequence[str] | None = None) -> int:
         dest="student_info_path",
         help="Optional JSON metadata for formal college thesis cover (school_name, student_name, student_id, advisor_name).",
     )
+    parser.add_argument(
+        "--learn-docx",
+        type=Path,
+        default=None,
+        dest="learn_docx_path",
+        help="Optional reference .docx thesis/specification to automatically learn layout, fonts, cover labels & heading styles from.",
+    )
+    parser.add_argument(
+        "--learn-dxf",
+        type=Path,
+        default=None,
+        dest="learn_dxf_path",
+        help="Optional reference .dxf sheet or album folder to automatically learn CAD layers, lineweights, dimstyles & numbering prefix from.",
+    )
+    parser.add_argument(
+        "--template-dir",
+        type=Path,
+        default=None,
+        dest="template_dir",
+        help="Optional .cad-memory directory containing previously learned thesis-template.json / album-template.json.",
+    )
     parser.add_argument("--lookup-bar", default=None, dest="lookup_bar", help="Query full provenance for a single tendon/rebar ID (e.g. N1, GJ1, DZ1, QT3).")
     parser.add_argument("--with-previews", action="store_true", dest="with_previews", help="Render 1:1 A3 B&W PDFs, merged A3 print album, and high-DPI PNGs (enabled by default unless --no-previews is passed).")
     parser.add_argument("--no-previews", action="store_true", dest="no_previews", help="Skip rendering A3 PDFs and PNG previews (faster DXF-only mode).")
@@ -145,14 +167,33 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps(traced, ensure_ascii=False, indent=2))
         return 0
 
+    learned_template_summary: dict | None = None
+    eff_template_dir = args.template_dir
+    if args.learn_docx_path is not None or args.learn_dxf_path is not None:
+        eff_template_dir = eff_template_dir or (args.output_dir / ".cad-memory")
+        learned_template_summary = learn_template_styles(
+            docx_path=args.learn_docx_path,
+            dxf_path_or_dir=args.learn_dxf_path,
+            output_dir=eff_template_dir,
+            confirm_preferences=True,
+        )
+
     render_previews = False if args.no_previews else True
     suite = generate_full_bridge_drawing_set(
         cfg,
         args.output_dir,
         render_png=render_previews,
+        template_memory_dir=eff_template_dir,
+        preference_memory_path=(eff_template_dir / "project-preferences.json") if eff_template_dir else None,
         baseline_report=args.baseline_path,
         student_metadata=student_meta,
     )
+    if learned_template_summary is not None:
+        suite["learned_template_summary"] = {
+            "output_dir": learned_template_summary["output_dir"],
+            "thesis_template_path": learned_template_summary["thesis_template_path"],
+            "album_template_path": learned_template_summary["album_template_path"],
+        }
     calc = suite.pop("calculation_report")
     book_path = Path(suite["calculation_book_path"])
     if not book_path.is_file():

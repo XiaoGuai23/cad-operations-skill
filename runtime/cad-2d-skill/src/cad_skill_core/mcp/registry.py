@@ -124,8 +124,11 @@ class ValidateSpecArgs(StrictInputModel):
 
 
 class LearnStandardArgs(StrictInputModel):
-    sample_dxf_path: str = Field(description="Path to a sample DXF file inside allowed roots.")
+    sample_dxf_path: str | None = Field(default=None, description="Optional path to a sample DXF file inside allowed roots.")
+    sample_dxf_dir: str | None = Field(default=None, description="Optional path to a directory of sample DXF sheets (e.g. reference construction album).")
+    sample_docx_path: str | None = Field(default=None, description="Optional path to a reference .docx specification/thesis template inside allowed roots.")
     profile_name: str | None = Field(default=None, description="Optional custom profile name.")
+    confirm_preferences: bool = Field(default=True, description="Mark learned drafting preferences as confirmed in .cad-memory.")
 
 
 class GenerateMechanical2DArgs(StrictInputModel):
@@ -595,34 +598,86 @@ def _handle_validate_spec(
 def _handle_learn_standard(
     sandbox: MCPWorkspaceSandbox, args: LearnStandardArgs
 ) -> tuple[dict[str, Any], Path | None, bool]:
-    sample = sandbox.resolve_readable_file(args.sample_dxf_path)
+    from cad_skill_core.standards.template_learner import learn_dxf_album_profile, learn_template_styles, save_album_template
+
+    if not args.sample_dxf_path and not args.sample_dxf_dir and not args.sample_docx_path:
+        raise ValueError("provide at least one of sample_dxf_path, sample_dxf_dir, or sample_docx_path")
+
+    resolved_dxf_file = sandbox.resolve_readable_file(args.sample_dxf_path) if args.sample_dxf_path else None
+    resolved_dxf_dir = sandbox.resolve_readable_dir(args.sample_dxf_dir) if args.sample_dxf_dir else None
+    resolved_docx = sandbox.resolve_readable_file(args.sample_docx_path) if args.sample_docx_path else None
+
     task_id, task_dir = sandbox.allocate_task_dir("standard")
     out_dir = task_dir / "output"
     out_dir.mkdir()
+    mem_dir = sandbox.workspace_root / ".cad-memory"
     pref_mem = default_preference_memory_path(sandbox.workspace_root)
-    learned = learn_standard_from_dxf(
-        sample,
+
+    # Single-DXF backward-compatible path + album & optional .docx learning
+    if resolved_dxf_file is not None and resolved_dxf_dir is None and resolved_docx is None:
+        learned = learn_standard_from_dxf(
+            resolved_dxf_file,
+            profile_name=args.profile_name,
+            preference_memory_path=pref_mem,
+            confirm_preferences=args.confirm_preferences,
+        )
+        yaml_path = save_standard_yaml(learned.standard, out_dir / "learned-standard.yaml")
+        album_prof = learn_dxf_album_profile(resolved_dxf_file, profile_name=args.profile_name)
+        album_path = save_album_template(album_prof, mem_dir / "album-template.json")
+        payload: dict[str, Any] = {
+            "task_id": task_id,
+            "status": "learned",
+            "profile_name": learned.standard.name,
+            "detected_sheet": learned.detected_sheet,
+            "sample_extents_mm": learned.sample_extents_mm,
+            "matched_layers": learned.matched_layers,
+            "detected_habits": learned.detected_habits,
+            "album_template": album_prof.model_dump(mode="json"),
+            "artifacts": [
+                {
+                    "name": yaml_path.name,
+                    "path": str(yaml_path),
+                    "size": yaml_path.stat().st_size,
+                    "sha256": sha256_file(yaml_path),
+                },
+                {
+                    "name": album_path.name,
+                    "path": str(album_path),
+                    "size": album_path.stat().st_size,
+                    "sha256": sha256_file(album_path),
+                },
+            ],
+            "standard": learned.standard.model_dump(mode="json"),
+        }
+        sandbox.write_task_metadata(task_id, payload)
+        return payload, None, False
+
+    learned_bundle = learn_template_styles(
+        docx_path=resolved_docx,
+        dxf_path_or_dir=resolved_dxf_dir or resolved_dxf_file,
+        output_dir=mem_dir,
         profile_name=args.profile_name,
-        preference_memory_path=pref_mem,
+        confirm_preferences=args.confirm_preferences,
     )
-    yaml_path = save_standard_yaml(learned.standard, out_dir / "learned-standard.yaml")
+    artifacts_out: list[dict[str, Any]] = []
+    for key_p in ("thesis_template_path", "album_template_path", "standard_yaml_path", "bundle_path"):
+        fp_s = learned_bundle.get(key_p)
+        if fp_s and Path(fp_s).is_file():
+            fp = Path(fp_s)
+            dst_copy = out_dir / fp.name
+            dst_copy.write_bytes(fp.read_bytes())
+            artifacts_out.append(
+                {
+                    "name": dst_copy.name,
+                    "path": str(dst_copy),
+                    "size": dst_copy.stat().st_size,
+                    "sha256": sha256_file(dst_copy),
+                }
+            )
     payload = {
         "task_id": task_id,
-        "status": "learned",
-        "profile_name": learned.standard.name,
-        "detected_sheet": learned.detected_sheet,
-        "sample_extents_mm": learned.sample_extents_mm,
-        "matched_layers": learned.matched_layers,
-        "detected_habits": learned.detected_habits,
-        "artifacts": [
-            {
-                "name": yaml_path.name,
-                "path": str(yaml_path),
-                "size": yaml_path.stat().st_size,
-                "sha256": sha256_file(yaml_path),
-            }
-        ],
-        "standard": learned.standard.model_dump(mode="json"),
+        **learned_bundle,
+        "artifacts": artifacts_out,
     }
     sandbox.write_task_metadata(task_id, payload)
     return payload, None, False
@@ -1515,7 +1570,11 @@ def _handle_civil_bridge_calc(
         from cad_skill_core.civil.bridge_thesis_docx import generate_college_graduation_thesis_docx
 
         task_id, task_dir = sandbox.allocate_task_dir("thesis")
-        calc_rep = run_full_bridge_calculation(p or {"preset": "wenchang"})
+        mem_dir = sandbox.workspace_root / ".cad-memory"
+        eff_p = dict(p or {"preset": "wenchang"})
+        if mem_dir.is_dir() and "template_memory_dir" not in eff_p:
+            eff_p["template_memory_dir"] = str(mem_dir)
+        calc_rep = run_full_bridge_calculation(eff_p)
         figs = generate_bridge_calculation_figures(calc_rep, task_dir / "figures")
         result = {
             "task_id": task_id,
@@ -1523,7 +1582,8 @@ def _handle_civil_bridge_calc(
                 calc_rep,
                 task_dir / "graduation_thesis.docx",
                 figures_summary=figs,
-                student_metadata=p.get("student_metadata"),
+                student_metadata=eff_p.get("student_metadata"),
+                thesis_template=eff_p.get("thesis_template") or (mem_dir if mem_dir.is_dir() else None),
             ),
         }
     elif mode == "calc_figures":

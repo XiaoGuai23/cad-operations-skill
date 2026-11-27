@@ -153,15 +153,25 @@ def _safe_stem(raw: str) -> str:
 
 def _resolve_style_overrides(spec: Mapping[str, Any]) -> dict[str, Any]:
     overrides = dict(spec.get("style_overrides") or {})
+    merged: dict[str, Any] = {}
+    album_src = spec.get("album_template") or spec.get("template_memory_dir")
     mem_path = spec.get("preference_memory_path")
+    if album_src is None and mem_path:
+        mem_parent = Path(str(mem_path)).expanduser().resolve().parent
+        if (mem_parent / "album-template.json").is_file() or (mem_parent / "template-bundle.json").is_file():
+            album_src = mem_parent
+    if album_src is not None:
+        from cad_skill_core.standards.template_learner import album_template_to_style_overrides, load_album_template
+
+        merged.update(album_template_to_style_overrides(load_album_template(album_src)))
     if mem_path:
         from cad_skill_core.standards.preference_memory import resolve_civil_preferences
 
         learned = resolve_civil_preferences(mem_path, part_family=str(spec.get("part_family", "civil_bridge")))
-        # Explicit style_overrides win over learned preferences; project dimensions are never touched
-        merged = {**learned, **overrides}
-        return merged
-    return overrides
+        merged.update(learned)
+    # Explicit style_overrides win over learned templates/preferences; project dimensions are never touched
+    merged.update(overrides)
+    return merged
 
 
 def _resolve_scale_denom(
@@ -3620,6 +3630,9 @@ def generate_full_bridge_drawing_set(
     *,
     render_png: bool = False,
     preference_memory_path: str | Path | None = None,
+    template_memory_dir: str | Path | None = None,
+    thesis_template: Mapping[str, Any] | str | Path | None = None,
+    album_template: Mapping[str, Any] | str | Path | None = None,
     baseline_report: Mapping[str, Any] | str | Path | None = None,
     generate_figures: bool = True,
     generate_thesis_docx: bool = True,
@@ -3661,6 +3674,15 @@ def generate_full_bridge_drawing_set(
     cfg = dict(params or {"preset": "wenchang"})
     if student_metadata:
         cfg["student_metadata"] = {**dict(cfg.get("student_metadata") or {}), **dict(student_metadata)}
+    eff_mem_dir = template_memory_dir or cfg.get("template_memory_dir")
+    if eff_mem_dir is None and preference_memory_path is not None:
+        cand_mem = Path(preference_memory_path).expanduser().resolve().parent
+        if (cand_mem / "album-template.json").is_file() or (cand_mem / "thesis-template.json").is_file():
+            eff_mem_dir = cand_mem
+    eff_album_tpl = album_template or cfg.get("album_template") or eff_mem_dir
+    eff_thesis_tpl = thesis_template or cfg.get("thesis_template") or eff_mem_dir
+    if eff_album_tpl is not None and "album_template" not in cfg:
+        cfg["album_template"] = eff_album_tpl
     calc = run_full_bridge_calculation(cfg)
     ps = calc["project_summary"]
     lat = calc["lateral_distribution"]
@@ -3676,6 +3698,7 @@ def generate_full_bridge_drawing_set(
         "preset": cfg.get("preset", ""),
         "_calc_report": calc,
         "preference_memory_path": str(preference_memory_path) if preference_memory_path else None,
+        "album_template": eff_album_tpl,
         "style_overrides": cfg.get("style_overrides"),
     }
 
@@ -3928,6 +3951,7 @@ def generate_full_bridge_drawing_set(
             figures_summary=figures_summary,
             change_impact=change_impact,
             student_metadata=resolved_meta,
+            thesis_template=eff_thesis_tpl,
         )
 
     failed_checks = list(calc.get("failed_checks", []))

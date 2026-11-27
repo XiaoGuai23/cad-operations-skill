@@ -131,6 +131,33 @@ class MCPWorkspaceSandbox:
             f"path {raw!r} escapes allowed sandbox roots {[str(r) for r in self.allowed_read_roots]}"
         )
 
+    def resolve_readable_dir(self, supplied_dir: str | Path) -> Path:
+        raw = str(supplied_dir).strip()
+        if not raw:
+            raise MCPSandboxError("empty directory path")
+        path_obj = Path(raw).expanduser()
+        candidates = (
+            [path_obj]
+            if path_obj.is_absolute()
+            else [self.workspace_root / path_obj, default_repo_root() / path_obj]
+        )
+        for cand in candidates:
+            try:
+                resolved = cand.resolve(strict=False)
+            except OSError as exc:
+                raise MCPSandboxError(f"invalid path {raw!r}: {exc}") from exc
+            if any(self._is_within(resolved, root) for root in self.allowed_read_roots):
+                if not resolved.is_dir():
+                    raise MCPSandboxError(f"directory does not exist: {raw}")
+                if resolved.is_symlink():
+                    raise MCPSandboxError(f"symlinks are not permitted in sandbox: {raw}")
+                for dxf_child in resolved.rglob("*.dxf"):
+                    self.resolve_readable_file(dxf_child)
+                return resolved
+        raise MCPSandboxError(
+            f"directory {raw!r} escapes allowed sandbox roots {[str(r) for r in self.allowed_read_roots]}"
+        )
+
     def write_task_metadata(self, task_id: str, metadata: dict[str, Any]) -> Path:
         task_dir = self.resolve_task_dir(task_id)
         meta_path = task_dir / "task-meta.json"

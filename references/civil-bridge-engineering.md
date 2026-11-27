@@ -40,6 +40,12 @@ python scripts/run_bridge_suite.py --out output/wenchang_suite --fem-results fem
 # 3. 兼容旧版 18 张 QL-01~QL-18 图册编号方案
 python scripts/run_bridge_suite.py --out output/wenchang_ql18 --sheet-scheme ql_18
 
-# 4. 任点图面一个钢筋/钢束编号（如 N4、DW1、GL3、EB1、QT3），一键查询 6 维选筋溯源信息
+# 4. 从参考说明书 .docx 与参考施工图 DXF/文件夹自动学习模板样式并一键出全套成果
+python scripts/run_bridge_suite.py --out output/custom_school_suite --learn-docx ref_thesis.docx --learn-dxf ref_dxf_dir
+
+# 5. 单独提取模板并存入 .cad-memory/ 供后续所有项目复用
+python -m cad_skill_core.cli learn-template --docx ref_thesis.docx --dxf ref_dxf_dir --out .cad-memory
+
+# 6. 任点图面一个钢筋/钢束编号（如 N4、DW1、GL3、EB1、QT3），一键查询 6 维选筋溯源信息
 python scripts/run_bridge_suite.py --lookup-bar EB1
 ```

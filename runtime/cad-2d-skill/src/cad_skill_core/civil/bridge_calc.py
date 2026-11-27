@@ -3163,13 +3163,25 @@ def run_full_bridge_calculation(params: dict[str, Any] | None = None) -> dict[st
         if u_item["field"] == "pile_length_m":
             u_item["assumed_value"] = f"桥墩桩长 {pier_pile_len_m:g}m / 桥台桩长 {abut_pile_len_m:g}m"
 
-    # Unified Sheet Manifest (`wenchang_22` default for Wenchang, `ql_18` for generic legacy)
+    # Unified Sheet Manifest (`wenchang_22` default for Wenchang, `ql_18` for generic legacy; respects learned album prefix)
+    from cad_skill_core.standards.template_learner import load_album_template
+
+    learned_album = load_album_template(
+        raw_cfg.get("album_template") or raw_cfg.get("template_memory_dir") or cfg.get("album_template")
+    )
+    learned_dno_prefix: str | None = None
+    if "drawing_no_prefix" in raw_cfg:
+        learned_dno_prefix = str(raw_cfg["drawing_no_prefix"])
+    elif learned_album is not None and "sheet_scheme" not in raw_cfg and learned_album.drawing_no_prefix:
+        learned_dno_prefix = learned_album.drawing_no_prefix
+
     default_scheme = "wenchang_22" if preset_name == "wenchang" else "ql_18"
     sheet_manifest = build_bridge_sheet_manifest(
         sheet_scheme=str(cfg.get("sheet_scheme", default_scheme)),
         custom_manifest=cfg.get("sheet_manifest"),
         sheet_title_overrides=cfg.get("sheet_title_overrides"),
         extra_sheets=cfg.get("extra_sheets"),
+        drawing_no_prefix=learned_dno_prefix,
     )
 
     # Shared Support Coordinate & Dimension Chain (480 + 40 + 480 = 1000 mm & 20 + 74 + 150 = 244 mm)

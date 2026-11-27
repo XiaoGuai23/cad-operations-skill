@@ -153,6 +153,14 @@ def _parser() -> argparse.ArgumentParser:
     cad1k_cmd.add_argument('--standard-profile', default='gb-mechanical', dest='standard_profile')
     cad1k_cmd.add_argument('--json', action='store_true', dest='as_json')
 
+    learn_tpl = commands.add_parser('learn-template', help='automatically learn Word (.docx) thesis formatting and/or CAD (.dxf) album styles into .cad-memory')
+    learn_tpl.add_argument('--docx', type=Path, default=None, dest='docx_path', help='Reference .docx specification/thesis file.')
+    learn_tpl.add_argument('--dxf', type=Path, default=None, dest='dxf_path', help='Reference .dxf file or directory of .dxf sheets.')
+    learn_tpl.add_argument('--out', type=Path, default=Path('.cad-memory'), dest='output_dir', help='Output directory for learned profiles (default: .cad-memory).')
+    learn_tpl.add_argument('--name', default=None, dest='profile_name')
+    learn_tpl.add_argument('--candidate-only', action='store_true', dest='candidate_only')
+    learn_tpl.add_argument('--json', action='store_true', dest='as_json')
+
     pref_cmd = commands.add_parser('preferences', help='list, teach, learn, or confirm project-level drafting preferences')
     pref_cmd.add_argument('action', choices=('list', 'teach', 'learn-sample', 'confirm', 'reject'))
     pref_cmd.add_argument('--memory', type=Path, default=Path('.cad-memory/project-preferences.json'), dest='memory_path')
@@ -206,6 +214,8 @@ def _parser() -> argparse.ArgumentParser:
     bcalc.add_argument('--baseline', type=Path, default=None, dest='baseline_path')
     bcalc.add_argument('--bar-id', default=None, dest='bar_id')
     bcalc.add_argument('--calc-book', type=Path, default=None, dest='calc_book_path')
+    bcalc.add_argument('--thesis-template', type=Path, default=None, dest='thesis_template_path')
+    bcalc.add_argument('--template-dir', type=Path, default=None, dest='template_dir')
     bcalc.add_argument('--table', type=Path, default=None, dest='table_path')
     bcalc.add_argument('--out', type=Path, default=None, dest='output_path')
     bcalc.add_argument('--json', action='store_true', dest='as_json')
@@ -233,6 +243,7 @@ def _parser() -> argparse.ArgumentParser:
     gcivil.add_argument('--out', type=Path, required=True, dest='output_dir')
     gcivil.add_argument('--stem', default=None)
     gcivil.add_argument('--memory', type=Path, default=None, dest='memory_path')
+    gcivil.add_argument('--template-dir', type=Path, default=None, dest='template_dir')
     gcivil.add_argument('--with-previews', action='store_true', dest='with_previews')
     gcivil.add_argument('--json', action='store_true', dest='as_json')
 
@@ -282,7 +293,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _phase4_command(arguments)
     if arguments.command in {'score-drawing', 'benchmark-cad1k'}:
         return _cad1k_command(arguments)
-    if arguments.command in {'preferences', 'record-regression', 'run-regressions'}:
+    if arguments.command in {'learn-template', 'preferences', 'record-regression', 'run-regressions'}:
         return _learning_command(arguments)
     if arguments.command in {'bridge-calc', 'generate-civil'}:
         return _civil_command(arguments)
@@ -565,6 +576,20 @@ def _cad1k_command(arguments: argparse.Namespace) -> int:
 
 def _learning_command(arguments: argparse.Namespace) -> int:
     try:
+        if arguments.command == "learn-template":
+            from .standards.template_learner import learn_template_styles
+
+            learned = learn_template_styles(
+                docx_path=arguments.docx_path,
+                dxf_path_or_dir=arguments.dxf_path,
+                output_dir=arguments.output_dir,
+                profile_name=arguments.profile_name,
+                confirm_preferences=not bool(arguments.candidate_only),
+            )
+            payload = {"command": "learn-template", **learned}
+            print(_stable_json(payload) if arguments.as_json else json.dumps(payload, ensure_ascii=False, indent=2))
+            return 0
+
         if arguments.command == "preferences":
             from .standards.preference_memory import (
                 learn_preferences_from_sample_dxf,
@@ -661,6 +686,10 @@ def _civil_command(arguments: argparse.Namespace) -> int:
                 params["survey_data"] = json.loads(arguments.survey_path.read_text(encoding="utf-8-sig"))
             if arguments.fem_results_path is not None:
                 params["independent_fem_results"] = str(arguments.fem_results_path.resolve())
+            if arguments.template_dir is not None:
+                params["template_memory_dir"] = str(arguments.template_dir.resolve())
+            if arguments.thesis_template_path is not None:
+                params["thesis_template"] = str(arguments.thesis_template_path.resolve())
 
             mode = arguments.mode
             full_calc_for_book: dict[str, Any] | None = None
@@ -701,6 +730,7 @@ def _civil_command(arguments: argparse.Namespace) -> int:
                     out_docx,
                     figures_summary=figs,
                     student_metadata=params.get("student_metadata"),
+                    thesis_template=arguments.thesis_template_path or arguments.template_dir or params.get("thesis_template"),
                 )
             elif mode == "calc-figures":
                 from .civil.bridge_figures import generate_bridge_calculation_figures
@@ -783,12 +813,15 @@ def _civil_command(arguments: argparse.Namespace) -> int:
             spec_obj["survey_data"] = json.loads(arguments.survey_path.read_text(encoding="utf-8-sig"))
         if arguments.memory_path is not None:
             spec_obj.setdefault("preference_memory_path", str(arguments.memory_path))
+        if arguments.template_dir is not None:
+            spec_obj.setdefault("template_memory_dir", str(arguments.template_dir))
         if arguments.drawing_type == "full_set":
             full_res = generate_full_bridge_drawing_set(
                 spec_obj or {"preset": "wenchang"},
                 arguments.output_dir,
                 render_png=bool(arguments.with_previews),
                 preference_memory_path=arguments.memory_path,
+                template_memory_dir=arguments.template_dir,
             )
             full_res.pop("calculation_report", None)
             payload = {"command": "generate-civil", "drawing_type": "full_set", **full_res}

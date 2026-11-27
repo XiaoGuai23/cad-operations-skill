@@ -33,6 +33,11 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Cm, Pt, RGBColor
 
+from cad_skill_core.standards.template_learner import (
+    DEFAULT_COVER_FIELD_LABELS,
+    ThesisTemplateProfile,
+    load_thesis_template,
+)
 from .bridge_calc import (
     audit_references_compliance,
     default_graduation_references,
@@ -50,6 +55,24 @@ from .bridge_tendon_and_support import (
 )
 
 _PAGE_CONTENT_WIDTH_CM = 15.5  # 21.0 cm A4 - 3.0 cm left margin - 2.5 cm right margin
+_ZH_NUMERALS: tuple[str, ...] = ("", "一", "二", "三", "四", "五", "六", "七", "八", "九", "十", "十一", "十二", "十三", "十四", "十五")
+
+
+def _doc_tpl(doc: Any) -> ThesisTemplateProfile:
+    tpl = getattr(doc, "_thesis_template", None)
+    return tpl if isinstance(tpl, ThesisTemplateProfile) else ThesisTemplateProfile()
+
+
+def _format_h1_title_by_template(title: str, tpl: ThesisTemplateProfile) -> str:
+    if tpl.h1_numbering_style != "chapter_zh":
+        return title
+    m = re.match(r"^(\d{1,2})\s+(.+)$", title.strip())
+    if not m:
+        return title
+    idx_n = int(m.group(1))
+    rest = m.group(2).strip()
+    zh_num = _ZH_NUMERALS[idx_n] if 1 <= idx_n < len(_ZH_NUMERALS) else str(idx_n)
+    return f"第{zh_num}章  {rest}"
 
 
 def _set_run_fonts(
@@ -85,28 +108,29 @@ def _enable_auto_update_fields(doc: Document) -> None:
 
 
 def _configure_heading_styles(doc: Document) -> None:
+    tpl = _doc_tpl(doc)
     specs = (
-        ("Heading 1", "黑体", 16.0, WD_ALIGN_PARAGRAPH.LEFT),
-        ("Heading 2", "黑体", 15.0, WD_ALIGN_PARAGRAPH.LEFT),
-        ("Heading 3", "黑体", 14.0, WD_ALIGN_PARAGRAPH.LEFT),
+        ("Heading 1", tpl.h1_zh_font, tpl.h1_en_font, tpl.h1_size_pt, tpl.h1_bold, WD_ALIGN_PARAGRAPH.CENTER if tpl.h1_alignment == "center" else WD_ALIGN_PARAGRAPH.LEFT),
+        ("Heading 2", tpl.h2_zh_font, tpl.h2_en_font, tpl.h2_size_pt, tpl.h2_bold, WD_ALIGN_PARAGRAPH.CENTER if tpl.h2_alignment == "center" else WD_ALIGN_PARAGRAPH.LEFT),
+        ("Heading 3", tpl.h3_zh_font, tpl.h3_en_font, tpl.h3_size_pt, tpl.h3_bold, WD_ALIGN_PARAGRAPH.CENTER if tpl.h3_alignment == "center" else WD_ALIGN_PARAGRAPH.LEFT),
     )
-    for style_name, zh_f, sz_pt, align in specs:
+    for style_name, zh_f, en_f, sz_pt, bold_f, align in specs:
         if style_name not in doc.styles:
             continue
         st = doc.styles[style_name]
-        st.font.name = "Times New Roman"
+        st.font.name = en_f
         st.font.size = Pt(sz_pt)
-        st.font.bold = True
+        st.font.bold = bold_f
         st.font.color.rgb = RGBColor(0, 0, 0)
         r_pr = st._element.get_or_add_rPr()
         r_fonts = r_pr.find(qn("w:rFonts"))
         if r_fonts is None:
             r_fonts = OxmlElement("w:rFonts")
             r_pr.insert(0, r_fonts)
-        r_fonts.set(qn("w:ascii"), "Times New Roman")
-        r_fonts.set(qn("w:hAnsi"), "Times New Roman")
+        r_fonts.set(qn("w:ascii"), en_f)
+        r_fonts.set(qn("w:hAnsi"), en_f)
         r_fonts.set(qn("w:eastAsia"), zh_f)
-        r_fonts.set(qn("w:cs"), "Times New Roman")
+        r_fonts.set(qn("w:cs"), en_f)
         st.paragraph_format.alignment = align
 
 
@@ -145,18 +169,27 @@ def _configure_section_layout_and_numbering(
     *,
     page_num_fmt: str | None,
     start_at: int | None = None,
+    tpl: ThesisTemplateProfile | None = None,
+    with_running_header: bool = False,
 ) -> None:
-    section.page_width = Cm(21.0)
-    section.page_height = Cm(29.7)
-    section.top_margin = Cm(2.5)
-    section.bottom_margin = Cm(2.5)
-    section.left_margin = Cm(3.0)
-    section.right_margin = Cm(2.5)
-    section.header_distance = Cm(1.5)
-    section.footer_distance = Cm(1.75)
+    eff = tpl or ThesisTemplateProfile()
+    section.page_width = Cm(eff.page_width_cm)
+    section.page_height = Cm(eff.page_height_cm)
+    section.top_margin = Cm(eff.top_margin_cm)
+    section.bottom_margin = Cm(eff.bottom_margin_cm)
+    section.left_margin = Cm(eff.left_margin_cm)
+    section.right_margin = Cm(eff.right_margin_cm)
+    section.header_distance = Cm(eff.header_distance_cm)
+    section.footer_distance = Cm(eff.footer_distance_cm)
 
     section.header.is_linked_to_previous = False
     section.footer.is_linked_to_previous = False
+    if with_running_header and eff.running_header_text:
+        p_hdr = section.header.paragraphs[0] if section.header.paragraphs else section.header.add_paragraph()
+        p_hdr.text = ""
+        p_hdr.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        rh = p_hdr.add_run(eff.running_header_text)
+        _set_run_fonts(rh, zh_font=eff.body_zh_font, en_font=eff.body_en_font, size_pt=9.5, bold=False)
 
     sect_pr = section._sectPr
     old_pg_num = sect_pr.find(qn("w:pgNumType"))
@@ -251,18 +284,19 @@ def _add_body_para(
     bold_prefix: str = "",
     keep_with_next: bool = False,
 ) -> Any:
+    tpl = _doc_tpl(doc)
     p = doc.add_paragraph()
     pf = p.paragraph_format
-    pf.line_spacing = 1.5
+    pf.line_spacing = tpl.body_line_spacing
     pf.space_before = Pt(0)
     pf.space_after = Pt(2.5)
-    pf.first_line_indent = Pt(24) if indent else Pt(0)
+    pf.first_line_indent = Pt(tpl.body_first_line_indent_pt) if indent else Pt(0)
     pf.keep_with_next = keep_with_next
     if bold_prefix:
         r0 = p.add_run(bold_prefix)
-        _set_run_fonts(r0, zh_font="黑体", size_pt=12.0, bold=True)
+        _set_run_fonts(r0, zh_font=tpl.h3_zh_font, en_font=tpl.body_en_font, size_pt=tpl.body_size_pt, bold=True)
     r1 = p.add_run(text)
-    _set_run_fonts(r1, zh_font="宋体", size_pt=12.0, bold=False)
+    _set_run_fonts(r1, zh_font=tpl.body_zh_font, en_font=tpl.body_en_font, size_pt=tpl.body_size_pt, bold=False)
     return p
 
 
@@ -299,25 +333,28 @@ def _add_chapter_heading(
     include_in_toc: bool = True,
     toc_entries: list[tuple[int, str, str]] | None = None,
 ) -> Any:
+    tpl = _doc_tpl(doc)
+    final_title = _format_h1_title_by_template(title, tpl) if not centered else title
     if page_break_before:
         doc.add_page_break()
     p = doc.add_paragraph(style="Heading 1" if include_in_toc and "Heading 1" in doc.styles else None)
-    p.alignment = WD_ALIGN_PARAGRAPH.CENTER if centered else WD_ALIGN_PARAGRAPH.LEFT
+    eff_center = centered or (tpl.h1_alignment == "center")
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER if eff_center else WD_ALIGN_PARAGRAPH.LEFT
     pf = p.paragraph_format
     pf.first_line_indent = Pt(0)
     pf.space_before = Pt(10)
     pf.space_after = Pt(8)
     pf.line_spacing = 1.5
     pf.keep_with_next = True
-    r = p.add_run(title)
-    _set_run_fonts(r, zh_font="黑体", size_pt=16.0, bold=True)
+    r = p.add_run(final_title)
+    _set_run_fonts(r, zh_font=tpl.h1_zh_font, en_font=tpl.h1_en_font, size_pt=tpl.h1_size_pt, bold=tpl.h1_bold)
     if include_in_toc:
         _set_paragraph_outline_level(p, 0)
         if toc_entries is not None:
             bm_idx = len(toc_entries) + 1
             bm_name = f"_TocBridge_{bm_idx}"
             _attach_word_bookmark(p, bm_name, bm_idx)
-            toc_entries.append((1, title, bm_name))
+            toc_entries.append((1, final_title, bm_name))
     return p
 
 
@@ -328,9 +365,11 @@ def _add_section_heading(
     level: int = 2,
     toc_entries: list[tuple[int, str, str]] | None = None,
 ) -> Any:
+    tpl = _doc_tpl(doc)
     style_name = "Heading 2" if level == 2 else "Heading 3"
     p = doc.add_paragraph(style=style_name if style_name in doc.styles else None)
-    p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    align_pref = tpl.h2_alignment if level == 2 else tpl.h3_alignment
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER if align_pref == "center" else WD_ALIGN_PARAGRAPH.LEFT
     pf = p.paragraph_format
     pf.first_line_indent = Pt(0)
     pf.space_before = Pt(7 if level == 2 else 5)
@@ -338,9 +377,12 @@ def _add_section_heading(
     pf.line_spacing = 1.5
     pf.keep_with_next = True
     _set_paragraph_outline_level(p, 1 if level == 2 else 2)
-    sz = 15.0 if level == 2 else 14.0
+    sz = tpl.h2_size_pt if level == 2 else tpl.h3_size_pt
+    zh_f = tpl.h2_zh_font if level == 2 else tpl.h3_zh_font
+    en_f = tpl.h2_en_font if level == 2 else tpl.h3_en_font
+    bold_f = tpl.h2_bold if level == 2 else tpl.h3_bold
     r = p.add_run(title)
-    _set_run_fonts(r, zh_font="黑体", size_pt=sz, bold=True)
+    _set_run_fonts(r, zh_font=zh_f, en_font=en_f, size_pt=sz, bold=bold_f)
     if toc_entries is not None:
         bm_idx = len(toc_entries) + 1
         bm_name = f"_TocBridge_{bm_idx}"
@@ -396,9 +438,17 @@ def _add_three_line_table(
     bookmark_id_base: int = 500,
 ) -> int:
     """Render a standard 10.5pt academic three-line table with cantSplit, tblHeader, bookmarks, and 续表 chunking."""
-    widths = list(col_widths_cm) if col_widths_cm is not None else _compute_auto_col_widths_cm(headers, rows)
+    tpl = _doc_tpl(doc)
+    content_w = max(12.0, tpl.page_width_cm - tpl.left_margin_cm - tpl.right_margin_cm)
+    if col_widths_cm is not None:
+        raw_w = list(col_widths_cm)
+        scale_w = content_w / max(1e-6, sum(raw_w))
+        widths = [round(w * scale_w, 2) if abs(scale_w - 1.0) > 0.04 else w for w in raw_w]
+    else:
+        widths = _compute_auto_col_widths_cm(headers, rows)
     row_list = list(rows)
-    chunks = [row_list[i : i + max_rows_per_chunk] for i in range(0, max(1, len(row_list)), max_rows_per_chunk)]
+    eff_chunk = max_rows_per_chunk if tpl.use_continuation_table else max(max_rows_per_chunk, len(row_list) + 1)
+    chunks = [row_list[i : i + eff_chunk] for i in range(0, max(1, len(row_list)), eff_chunk)]
     created_tables = 0
     global_row_idx = 0
 
@@ -413,7 +463,7 @@ def _add_three_line_table(
         cap_p.paragraph_format.space_after = Pt(3)
         cap_p.paragraph_format.keep_with_next = True
         rc = cap_p.add_run(cap_str)
-        _set_run_fonts(rc, zh_font="黑体", size_pt=10.5, bold=True)
+        _set_run_fonts(rc, zh_font=tpl.table_caption_zh_font, size_pt=tpl.table_caption_size_pt, bold=tpl.table_caption_bold)
 
         tbl = doc.add_table(rows=len(chunk_rows) + 1, cols=len(headers))
         tbl.alignment = WD_TABLE_ALIGNMENT.CENTER
@@ -426,7 +476,7 @@ def _add_three_line_table(
             cell = hdr_row.cells[ci]
             _set_cell_width_cm(cell, widths[ci])
             cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
-            _set_cell_borders(cell, top="single", bottom="single", top_sz=12, bottom_sz=6)
+            _set_cell_borders(cell, top="single", bottom="single", top_sz=tpl.top_border_sz, bottom_sz=tpl.mid_border_sz)
             p = cell.paragraphs[0]
             p.alignment = WD_ALIGN_PARAGRAPH.CENTER
             p.paragraph_format.first_line_indent = Pt(0)
@@ -434,7 +484,7 @@ def _add_three_line_table(
             p.paragraph_format.space_before = Pt(2)
             p.paragraph_format.space_after = Pt(2)
             r = p.add_run(str(h_text))
-            _set_run_fonts(r, zh_font="黑体", size_pt=10.5, bold=True)
+            _set_run_fonts(r, zh_font=tpl.table_header_zh_font, size_pt=tpl.table_header_size_pt, bold=tpl.table_header_bold)
 
         n_c = len(chunk_rows)
         for ri, row_vals in enumerate(chunk_rows):
@@ -454,7 +504,7 @@ def _add_three_line_table(
                     cell,
                     top="none",
                     bottom="single" if is_last else "none",
-                    bottom_sz=12 if is_last else 0,
+                    bottom_sz=tpl.bottom_border_sz if is_last else 0,
                 )
                 p = cell.paragraphs[0]
                 s_val = str(val)
@@ -464,7 +514,7 @@ def _add_three_line_table(
                 p.paragraph_format.space_before = Pt(1.5)
                 p.paragraph_format.space_after = Pt(1.5)
                 r = p.add_run(s_val)
-                _set_run_fonts(r, zh_font="宋体", size_pt=10.5, bold=False)
+                _set_run_fonts(r, zh_font=tpl.table_cell_zh_font, size_pt=tpl.table_cell_size_pt, bold=False)
                 if ci == 0 and bm_r:
                     _attach_word_bookmark(p, bm_r, bookmark_id_base + global_row_idx)
             global_row_idx += 1
@@ -495,15 +545,21 @@ def _embed_figure_if_available(
 
     cap_text = str(fig_info.get("caption_zh") or fallback_caption or fig_info.get("title_zh") or "").strip()
     if cap_text:
+        tpl = _doc_tpl(doc)
         p_cap = doc.add_paragraph()
-        p_cap.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        p_cap.alignment = WD_ALIGN_PARAGRAPH.LEFT if tpl.figure_caption_alignment == "left" else WD_ALIGN_PARAGRAPH.CENTER
         p_cap.paragraph_format.first_line_indent = Pt(0)
         p_cap.paragraph_format.space_before = Pt(1)
         p_cap.paragraph_format.space_after = Pt(4)
         p_cap.paragraph_format.keep_with_next = True
         rc = p_cap.add_run(cap_text)
-        # Strictly non-bold 10.5pt 宋体 + Times New Roman per college reference sample!
-        _set_run_fonts(rc, zh_font="宋体", en_font="Times New Roman", size_pt=10.5, bold=False)
+        _set_run_fonts(
+            rc,
+            zh_font=tpl.figure_caption_zh_font,
+            en_font=tpl.figure_caption_en_font,
+            size_pt=tpl.figure_caption_size_pt,
+            bold=tpl.figure_caption_bold,
+        )
     return True
 
 
@@ -611,6 +667,7 @@ def generate_college_graduation_thesis_docx(
     figures_summary: Mapping[str, Any] | None = None,
     change_impact: Mapping[str, Any] | None = None,
     student_metadata: Mapping[str, Any] | None = None,
+    thesis_template: ThesisTemplateProfile | Mapping[str, Any] | str | Path | None = None,
     also_write_markdown: bool = True,
 ) -> dict[str, Any]:
     """Assemble and export a formal Chinese college-template Graduation Design Specification (.docx + .md)."""
@@ -678,7 +735,11 @@ def generate_college_graduation_thesis_docx(
     is_fem_verified = ext_fem_status == "verified" and ver_scope != "builtin_simplified_frame_fem"
     is_builtin_fem = ext_fem_status == "verified" and ver_scope == "builtin_simplified_frame_fem"
 
+    loaded_tpl = load_thesis_template(thesis_template or calc_report.get("thesis_template"))
+    resolved_tpl = loaded_tpl or ThesisTemplateProfile()
+
     doc = Document()
+    setattr(doc, "_thesis_template", resolved_tpl)
     _enable_auto_update_fields(doc)
     _configure_heading_styles(doc)
 
@@ -686,7 +747,7 @@ def generate_college_graduation_thesis_docx(
     # SECTION 1: Formal College Cover Page (No Page Number)
     # ==================================================================
     sec_cover = doc.sections[0]
-    _configure_section_layout_and_numbering(sec_cover, page_num_fmt=None)
+    _configure_section_layout_and_numbering(sec_cover, page_num_fmt=None, tpl=resolved_tpl)
 
     logo_candidate = meta.get("school_logo_path") or (
         out_docx.parent / "assets" / "school_logo.png" if "升达" in school_name else None
@@ -702,26 +763,27 @@ def generate_college_graduation_thesis_docx(
         p_sch.add_run().add_picture(str(logo_path), width=Cm(12.8))
     else:
         r_sch = p_sch.add_run(school_name)
-        _set_run_fonts(r_sch, zh_font="黑体", size_pt=22.0, bold=True)
+        _set_run_fonts(r_sch, zh_font=resolved_tpl.school_title_zh_font, size_pt=resolved_tpl.school_title_size_pt, bold=True)
 
     p_deg = doc.add_paragraph()
     p_deg.alignment = WD_ALIGN_PARAGRAPH.CENTER
     p_deg.paragraph_format.first_line_indent = Pt(0)
     p_deg.paragraph_format.space_before = Pt(10)
     p_deg.paragraph_format.space_after = Pt(38)
-    r_deg = p_deg.add_run("本科毕业设计")
-    _set_run_fonts(r_deg, zh_font="宋体", size_pt=26.0, bold=True)
+    r_deg = p_deg.add_run(resolved_tpl.degree_banner_text)
+    _set_run_fonts(r_deg, zh_font=resolved_tpl.degree_banner_zh_font, size_pt=resolved_tpl.degree_banner_size_pt, bold=True)
 
+    lbl_map = {**DEFAULT_COVER_FIELD_LABELS, **(resolved_tpl.cover_field_labels or {})}
     t_line1, t_line2 = _split_thesis_title_two_lines(thesis_title)
     cover_rows = [
-        ("题    目", t_line1),
+        (lbl_map["title"], t_line1),
         ("", t_line2),
-        ("学生姓名", student_name),
-        ("专业班级", major_class),
-        ("学    号", student_id),
-        ("学    院", college_name),
-        ("指导教师(职称)", advisor_name),
-        ("完成时间", completion_date),
+        (lbl_map["student_name"], student_name),
+        (lbl_map["major_class"], major_class),
+        (lbl_map["student_id"], student_id),
+        (lbl_map["college_name"], college_name),
+        (lbl_map["advisor_name"], advisor_name),
+        (lbl_map["completion_date"], completion_date),
     ]
     if not t_line2:
         cover_rows = [row for row in cover_rows if row[0] != ""]
@@ -758,7 +820,12 @@ def generate_college_graduation_thesis_docx(
     # SECTION 2: Front Matter (Roman Numerals I, II, III... — Abstract & 3-Level TOC)
     # ==================================================================
     sec_front = doc.add_section(WD_SECTION.NEW_PAGE)
-    _configure_section_layout_and_numbering(sec_front, page_num_fmt="upperRoman", start_at=1)
+    _configure_section_layout_and_numbering(
+        sec_front,
+        page_num_fmt=resolved_tpl.front_page_num_fmt,
+        start_at=1,
+        tpl=resolved_tpl,
+    )
 
     # Page I: Thesis Title + Compressed Chinese Abstract (~300 CJK characters)
     p_zh_top_title = doc.add_paragraph()
@@ -819,7 +886,7 @@ def generate_college_graduation_thesis_docx(
         else "Analytical hand solutions are cross-checked against the beam-frame solver, while the external commercial software comparison schedule is prepared for final model import"
     )
     en_abs_p1 = (
-        f"This graduation design presents the hydrologic verification, multi-scheme comparison, structural calculation, and 18-sheet A3 construction detailing for a {ps['n_spans']}×{ps['standard_span_m']:g} m precast prestressed concrete simply supported T-girder bridge ({hydro['total_bridge_length_m']:g} m total length, {ps['deck_width_m']:g} m deck width, Highway-Class I loading, γ0 = 1.1). "
+        f"This graduation design presents the hydrologic verification, multi-scheme comparison, structural calculation, and {sh_count}-sheet A3 construction detailing for a {ps['n_spans']}×{ps['standard_span_m']:g} m precast prestressed concrete simply supported T-girder bridge ({hydro['total_bridge_length_m']:g} m total length, {ps['deck_width_m']:g} m deck width, Highway-Class I loading, γ0 = 1.1). "
         "Comparing three candidate schemes sharing the same span layout—simply supported T-girders, continuous box girders, and simply supported box girders—the precast T-girder bridge with deck-continuous joints is selected."
     )
     en_abs_p2 = (
@@ -827,7 +894,7 @@ def generate_college_graduation_thesis_docx(
         f"Transverse distribution factors from the lever rule and Courbon's eccentric compression method yield governing demands of Md = {gc['uls_flexure']['demand_md_knm']:.1f} kN·m and Vd = {gc['uls_shear']['demand_vd_kn']:.1f} kN. "
         f"Post-tensioned with {pre['recommended_tendons']} parabolic tendons of {pre['strands_per_tendon']}-Φs15.2 strands, flexural, shear, Class-A crack-resistance, and live-load deflection ({gc['sls_deflection']['live_deflection_mm']:.2f} mm ≤ L/600) checks satisfy JTG 3362-2018. "
         f"Double-column piers and pile-bent abutments on Φ{sub['bored_pile']['diameter_m']:g} m bored friction piles require independent pile lengths of {ps['pier_pile_length_m']:g} m and {ps['abutment_pile_length_m']:g} m under JTG 3363-2019. "
-        f"{fem_clause_en}, matching construction sheets QL-01 through QL-18."
+        f"{fem_clause_en}, matching construction sheets {sh_range}."
     )
     _add_body_para(doc, en_abs_p1)
     _add_body_para(doc, en_abs_p2)
@@ -847,7 +914,13 @@ def generate_college_graduation_thesis_docx(
     # SECTION 3: Main Body Chapters 1..11 + Back Matter (Arabic Page Numbers 1, 2, 3...)
     # ==================================================================
     sec_body = doc.add_section(WD_SECTION.NEW_PAGE)
-    _configure_section_layout_and_numbering(sec_body, page_num_fmt="decimal", start_at=1)
+    _configure_section_layout_and_numbering(
+        sec_body,
+        page_num_fmt=resolved_tpl.body_page_num_fmt,
+        start_at=1,
+        tpl=resolved_tpl,
+        with_running_header=True,
+    )
 
     toc_entries: list[tuple[int, str]] = []
     body_citation_paras: list[str] = []
@@ -1463,6 +1536,7 @@ def generate_college_graduation_thesis_docx(
     return {
         "docx_path": str(out_docx),
         "markdown_mirror_path": md_mirror_path,
+        "applied_thesis_template": resolved_tpl.profile_name if loaded_tpl is not None else "default_college_standard",
         "section_count": len(doc.sections),
         "toc_entry_count": toc_entry_count,
         "sheet_count": sh_count,
