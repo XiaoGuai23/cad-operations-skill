@@ -27,6 +27,20 @@ from .security import install_security_middlewares
 from .studio_ui import render_studio_html
 from .task_queue import AsyncCADJobManager
 
+CivilDrawingType = Literal[
+    "bridge_elevation",
+    "bridge_plan_section",
+    "t_girder_section",
+    "t_girder_general",
+    "tendon_layout",
+    "rebar_detail",
+    "bearing_layout",
+    "deck_ancillary",
+    "pier_and_abutment",
+    "notes_and_boq",
+    "mechanics_diagrams",
+]
+
 _MEDIA_TYPES = {
     ".dxf": "application/dxf",
     ".dwg": "application/acad",
@@ -68,13 +82,7 @@ class WebGenerateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     domain: Literal["mechanical_2d", "electrical_sld", "pavement", "civil_bridge", "model_3d"] = "mechanical_2d"
-    drawing_type: Literal[
-        "bridge_elevation",
-        "t_girder_section",
-        "tendon_layout",
-        "pier_and_abutment",
-        "mechanics_diagrams",
-    ] = "bridge_elevation"
+    drawing_type: CivilDrawingType = "bridge_elevation"
     spec: dict[str, Any] | None = None
     markdown_brief: str | None = None
     standard_profile: str | None = None
@@ -225,6 +233,15 @@ class WebCivilCalcRequest(BaseModel):
 
     mode: Literal[
         "full",
+        "wenchang",
+        "calc_book",
+        "thesis_docx",
+        "calc_figures",
+        "fem_compare",
+        "change_impact",
+        "cross_check",
+        "lookup_bar",
+        "survey_ingest",
         "hydrology",
         "polygon_section",
         "t_girder_section",
@@ -236,6 +253,7 @@ class WebCivilCalcRequest(BaseModel):
         "table_audit",
     ] = "full"
     params: dict[str, Any] = Field(default_factory=dict)
+    bar_id: str | None = None
     table_text: str | None = None
     table_path: str | None = None
 
@@ -243,13 +261,7 @@ class WebCivilCalcRequest(BaseModel):
 class WebCivilGenerateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    drawing_type: Literal[
-        "bridge_elevation",
-        "t_girder_section",
-        "tendon_layout",
-        "pier_and_abutment",
-        "mechanics_diagrams",
-    ] = "bridge_elevation"
+    drawing_type: CivilDrawingType = "bridge_elevation"
     spec: dict[str, Any] = Field(default_factory=dict)
     stem: str | None = None
 

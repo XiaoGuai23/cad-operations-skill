@@ -60,6 +60,7 @@ from .bridge_checks import (
 )
 from .bridge_drawings import (
     CIVIL_DRAWING_TYPES,
+    CivilDrawingType,
     TASK_BOOK_9_CATEGORIES,
     audit_task_book_coverage,
     generate_civil_bridge_bundle,

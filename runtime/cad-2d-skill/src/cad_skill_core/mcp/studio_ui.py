@@ -396,7 +396,8 @@ def render_studio_html() -> str:
         <button class="tab-btn" data-tab="model3d">2. 三维+工程图</button>
         <button class="tab-btn" data-tab="sld">3. 电气主接线</button>
         <button class="tab-btn" data-tab="pavement">4. 路面结构图</button>
-        <button class="tab-btn" data-tab="revise" style="grid-column: span 2;">5. ✏️ 上传 DXF 局部改图与对比</button>
+        <button class="tab-btn" data-tab="bridge">5. 🌉 土木桥梁</button>
+        <button class="tab-btn" data-tab="revise">6. ✏️ 局部精改</button>
       </div>
 
       <div class="sidebar-body" id="sidebarBody">
@@ -676,6 +677,43 @@ def render_studio_html() -> str:
           </table>
         `;
         renderPavTable();
+      } else if (activeTab === "bridge") {
+        body.innerHTML = `
+          <div class="sec-title">公路桥梁结构验算 & 22 张毕业设计施工图册 (JTG 3362/3363)</div>
+          <div class="form-grid">
+            <div class="field full">
+              <label>施工图图种（与 22 张毕业设计图册 & Word 说明书同源联动）</label>
+              <select id="brgSheetRole">
+                <option value="05_cross">图 05 · 主梁标准横断面及 2% 双向横坡铺装构造图</option>
+                <option value="03_elev">图 03 · 桥型总体布置图（一：4×25m 立面图 1:400）</option>
+                <option value="06_girder">图 06 · 25m 预制 T 梁一般构造图（含 480+40+480 支承链）</option>
+                <option value="08_tendon">图 08 · 预制 T 梁预应力钢束构造及张拉布置图</option>
+                <option value="09_coords">图 09 · 预应力钢束三维束心坐标及定位钢筋图 (DW1)</option>
+                <option value="10_webrebar">图 10 · 主梁梁肋普通钢筋构造图 (@100/@150 实画箍筋)</option>
+                <option value="13_bearing">图 13 · 板式橡胶支座及 C40 垫石构造图 (1.87m³)</option>
+                <option value="15_pier">图 15 · 双柱式桥墩一般构造图 (480+40+480=1000mm)</option>
+                <option value="18_capsec">图 18 · 桥墩盖梁弯起筋及抗震挡块构造图 (DK1/DK2)</option>
+                <option value="19_1_tie">图 19-1 · 桩顶横系梁钢筋构造及节点详图 (XL1/XL2)</option>
+                <option value="21_earwall">图 21 · 桥台耳墙及背墙钢筋展开图 (EB1~EB3)</option>
+                <option value="mech_env">力学计算图 · 横向分布影响线与弯矩/剪力组合包络图</option>
+              </select>
+            </div>
+            <div class="field full"><label>工程项目名称</label><input id="brgProj" value="4×25m 装配式预应力混凝土简支T梁桥" /></div>
+            <div class="field"><label>跨数 × 标准跨径 (m)</label><input id="brgSpanExpr" value="4×25" /></div>
+            <div class="field"><label>主梁片数 / 单幅桥宽(m)</label><input id="brgDeckExpr" value="5片 / 9.0" /></div>
+            <div class="field"><label>桥墩桩长 (m, 独立推导)</label><input type="number" id="brgPierPile" value="21" step="1" /></div>
+            <div class="field"><label>桥台桩长 (m, 独立推导)</label><input type="number" id="brgAbutPile" value="15" step="1" /></div>
+            <div class="field"><label>预应力钢束数 (束)</label><input type="number" id="brgTendons" value="5" min="2" max="8" /></div>
+            <div class="field"><label>钢筋/钢束溯源查询</label><input id="brgBarLookup" value="EB1" placeholder="如 N4 / GJ1 / GL3 / EB1" /></div>
+          </div>
+          <div class="row" style="gap:6px;">
+            <button class="secondary" style="flex:1;" onclick="runBridgeLiveCalc()">🧮 实时运行全桥 ULS/SLS 验算</button>
+            <button class="secondary" onclick="runBridgeBarLookup()">🔎 查选筋依据</button>
+          </div>
+          <div id="brgCalcSummary" style="font-size:11.5px;line-height:1.5;color:#cbd5e1;background:#080d18;border:1px solid var(--border);border-radius:6px;padding:8px 10px;">
+            💡 支持一键验算代表性 T 梁抗弯/抗剪/抗裂、三维钢束边界净距 (N4 2980mm 越界拦截)、支承尺寸链 (480+40+480=1000mm) 及墩台桩长，并直接渲染审计级 A3 矢量蓝图。
+          </div>
+        `;
       } else if (activeTab === "revise") {
         renderReviseSidebar();
       }
@@ -1048,6 +1086,42 @@ def render_studio_html() -> str:
         };
       }
 
+      if (activeTab === "bridge") {
+        const role = document.getElementById("brgSheetRole")?.value || "05_cross";
+        const proj = document.getElementById("brgProj")?.value.trim() || "4×25m 装配式预应力混凝土简支T梁桥";
+        const spanRaw = (document.getElementById("brgSpanExpr")?.value || "4×25").split(/[×xX*]/);
+        const nSpans = Math.max(1, parseInt(spanRaw[0] || "4", 10) || 4);
+        const stdSpan = Math.max(10, parseFloat(spanRaw[1] || "25") || 25);
+        const pierPile = +(document.getElementById("brgPierPile")?.value || 21);
+        const abutPile = +(document.getElementById("brgAbutPile")?.value || 15);
+        const nTendons = +(document.getElementById("brgTendons")?.value || 5);
+        const baseSpec = {
+          preset: "wenchang",
+          project: proj,
+          n_spans: nSpans,
+          standard_span_m: stdSpan,
+          pile_length_m: pierPile,
+          abutment_pile_length_m: abutPile,
+          n_tendons: nTendons
+        };
+        const mapRole = {
+          "05_cross": ["t_girder_section", { ...baseSpec, drawing_no: "05", title: "主梁标准横断面及桥面铺装构造图" }],
+          "03_elev": ["bridge_elevation", { ...baseSpec, drawing_no: "03", n_spans: nSpans, span_cm: stdSpan * 100, pile_length_cm: pierPile * 100, abutment_pile_length_cm: abutPile * 100 }],
+          "06_girder": ["t_girder_general", { ...baseSpec, variant: "longitudinal", drawing_no: "06" }],
+          "08_tendon": ["tendon_layout", { ...baseSpec, variant: "layout", drawing_no: "08" }],
+          "09_coords": ["tendon_layout", { ...baseSpec, variant: "coordinates", drawing_no: "09" }],
+          "10_webrebar": ["rebar_detail", { ...baseSpec, component: "t_girder_web", drawing_no: "10" }],
+          "13_bearing": ["bearing_layout", { ...baseSpec, drawing_no: "13" }],
+          "15_pier": ["pier_and_abutment", { ...baseSpec, variant: "pier", drawing_no: "15" }],
+          "18_capsec": ["rebar_detail", { ...baseSpec, component: "pier_cap_secondary", drawing_no: "18" }],
+          "19_1_tie": ["rebar_detail", { ...baseSpec, component: "tie_beam_joint", drawing_no: "19-1" }],
+          "21_earwall": ["rebar_detail", { ...baseSpec, component: "abutment_ear_backwall", drawing_no: "21" }],
+          "mech_env": ["mechanics_diagrams", { ...baseSpec, drawing_no: "MECH-01" }]
+        };
+        const [dtype, spec] = mapRole[role] || mapRole["05_cross"];
+        return { domain: "civil_bridge", drawing_type: dtype, spec };
+      }
+
       return {
         domain: "pavement",
         spec: {
@@ -1059,6 +1133,53 @@ def render_studio_html() -> str:
           annotations: ["未注明单位均为 mm", "结构层厚度以施工图为准"]
         }
       };
+    }
+
+    async function runBridgeLiveCalc() {
+      const box = document.getElementById("brgCalcSummary");
+      if (!box) return;
+      box.textContent = "⏳ 正在执行全桥水文、横向分布、预应力、三维钢束净距及双柱墩/桥台桩基验算...";
+      const p = buildGeneratePayload();
+      const r = await fetch("/api/v1/civil/calc", {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({ mode: "wenchang", params: p.spec || {} })
+      });
+      const d = await r.json();
+      const rep = d.result || {};
+      const gc = rep.girder_checks || {};
+      const tca = rep.tendon_clearance_audit || {};
+      const sup = rep.support_layout || {};
+      const ok = rep.calculation_status === "passed";
+      box.innerHTML = [
+        `<b style="color:${ok ? '#34d399' : '#f87171'};">${ok ? '✅ 全桥结构验算通过 (PASSED)' : '❌ 存在超限项 (' + (rep.failed_checks || []).length + '项)'}</b>`,
+        `• 1#边梁抗弯：Md=${gc.uls_flexure?.demand_md_knm} ≤ Mu=${gc.uls_flexure?.capacity_mu_knm} kN·m | 抗剪：Vd=${gc.uls_shear?.demand_vd_kn} ≤ Vu=${gc.uls_shear?.capacity_vu_kn} kN`,
+        `• 三维钢束轮廓核查：${tca.status === 'passed' ? 'PASS (全里程束心及波纹管保护层合规)' : 'FAIL'} | 支承链：${sup.pier_chain_expression || '480+40+480=1000'} mm`,
+        `• 独立桩长核定：中墩桩 ${rep.project_summary?.pier_pile_length_m} m / 桥台桩 ${rep.project_summary?.abutment_pile_length_m} m | 图册：共 ${rep.project_summary?.sheet_count || 22} 张 A3`
+      ].join("<br/>");
+    }
+
+    async function runBridgeBarLookup() {
+      const box = document.getElementById("brgCalcSummary");
+      const bid = (document.getElementById("brgBarLookup")?.value || "EB1").trim();
+      if (!box || !bid) return;
+      const r = await fetch("/api/v1/civil/calc", {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({ mode: "lookup_bar", bar_id: bid, params: { preset: "wenchang" } })
+      });
+      const d = await r.json();
+      const rec = d.result || {};
+      if (!rec.selection_basis) {
+        box.textContent = `未找到编号 ${bid}`;
+        return;
+      }
+      box.innerHTML = [
+        `<b style="color:#38bdf8;">🔎 钢筋/钢束溯源 [${rec.bar_id || rec.tendon_id}]（所在图号：${rec.sheet_drawing_no}）</b>`,
+        `• 统计口径：${rec.quantity_scope?.counting_scope} = ${rec.quantity_scope?.count_per_member}（全桥共 ${rec.quantity_scope?.bridge_total_weight_kg} kg）`,
+        `• 选筋依据：${rec.selection_basis?.code_clause} · ${rec.selection_basis?.material_spec}`,
+        `• 控制内力：${rec.governing_forces?.control_section} ${rec.governing_forces?.demand_symbol}=${rec.governing_forces?.demand_value} vs ${rec.governing_forces?.capacity_symbol}=${rec.governing_forces?.capacity_value} ${rec.governing_forces?.unit}`
+      ].join("<br/>");
     }
 
     async function checkCompile2D() {
