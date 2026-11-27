@@ -1,49 +1,45 @@
-# 土木与桥梁工程结构计算、Word 说明书组装、独立电算复核、计算图及全套施工图指南（`civil` 套件 `v2.7`）
+# 土木与桥梁工程结构计算、Word 说明书组装、独立电算逐项复核、三维钢束/支座联动校核及全套 22 张施工图指南（`civil` 套件 `v2.8`）
 
-本模块（`cad_skill_core.civil`）实现了**零商业软件依赖**的公路桥梁结构计算、独立桥台与桩基验算、Word/PPT 高清计算图生成、学院模板正式毕业设计说明书（`.docx`）组装、手算与独立有限元电算答辩复核表、一次设计变更全成果影响追踪、重开 DXF 实测核验及全套 **9 大类 18 张 A3 施工图（`QL-01 ~ QL-18`）**输出，严格遵循 `JTG B01-2014`、`JTG D60-2015`、`JTG 3362-2018`、`JTG 3363-2019`、`JTG/T 2231-01-2020` 与 `JT/T 4-2019`。
+本模块（`cad_skill_core.civil`）实现了**零商业软件依赖**的公路桥梁结构计算、独立桥台与桩基验算、Word/PPT 高清计算图生成、学院模板正式毕业设计说明书（`.docx`）组装、手算与独立有限元电算答辩逐项复核表、三维预应力钢束越界与支承尺寸链联动校核、DXF 语义内容哈希变更追踪、重开 DXF 实测核验及全套 **22 张 A3 施工图（`01 ~ 21`，含 `09` 束心坐标、`18` 盖梁弯起筋及挡块、`19-1` 系梁节点、`21` 耳背墙展开，并兼容 `QL-01 ~ QL-18` 18 张方案）**输出，严格遵循 `JTG B01-2014`、`JTG D60-2015`、`JTG 3362-2018`、`JTG 3363-2019`、`JTG/T 2231-01-2020`、`JT/T 4-2019` 及 `GB 1499.1/2-2024`。
 
 ---
 
-## 1. 核心能力与毕业设计全链路闭环（`v2.7.0`）
+## 1. 核心能力与毕业设计全链路闭环（`v2.8.0`）
 
 ### 1.1 开题报告三桥型方案与双口径参考文献严格统一（`bridge_calc.py` + `bridge_calc_book.py`）
 - **统一三套比选方案（`bridge_schemes`）**：默认读取与开题报告完全一致的三个同桥位方案——**方案一（推荐）：`4×25 m` 装配式预应力混凝土简支 T 梁桥（桥面连续）**、**方案二：`4×25 m` 预应力混凝土连续箱梁桥**、**方案三：`4×25 m` 装配式预应力混凝土简支箱梁桥**；支持在参数中直接挂载开题报告已有的六幅立面/横断面图（`elevation_image_path` / `section_image_path`），或由系统自动按项目跨径与桥宽绘制 6 幅方案对比图（`fig0_scheme_comparison.png/.svg`）。
 - **任务书与开题报告双口径参考文献（`references` + `audit_references_compliance`）**：内置并自动核验 **12 篇 GB/T 7714 核心文献（中文 ≥ 10 篇 + 外文 ≥ 2 篇）**，同时满足任务书“总数不少于 10 篇、外文不少于 1 篇”与开题报告“中文不少于 10 篇、外文不少于 1 篇”，且全部 `[1] ~ [12]` 在计算书与正式说明书正文对应段落逐一实引（自动拦截悬空未引用文献）。
 
-### 1.2 独立有限元软件结果导入与答辩现场解释对照表（`ingest_independent_fem_results` + `build_defense_verification_table`）
-- 支持直接导入 **桥梁博士 Dr.Bridge / Midas Civil** 导出的 JSON、CSV、TSV 或 Markdown 表格（`--fem-results`），自动生成**建模边界记录卡**（跨度、单元离散、支座约束、截面特性、荷载工况与组合）与**答辩现场并排复核表**；
-- 优先对比四大核心控制指标：**代表性 T 梁跨中弯矩 $M_d$、支点剪力 $V_d$、消除自重活载挠度 $f_{\text{live}}$、中间双柱墩墩顶双跨总反力 $\sum R_{u,\text{pier}}$**，自动列出手算值、本程序杆系值、外部软件值、相对差异与物理/力学原因解释（未导入外部软件结果时严禁伪造数值，清晰标注 `待导入`）。
+### 1.2 独立有限元软件逐项验收与下部平面刚架复核（`ingest_independent_fem_results` + `solve_independent_frame_fem`）
+- 支持导入 **桥梁博士 Dr.Bridge（含上部分册与下部分册）/ Midas Civil** 导出的 JSON、CSV、TSV 或 Markdown 表格（`--fem-results`、`--substructure-fem`）；
+- **按必核项逐项核查构件、控制截面、荷载组合（严防“运营标准值”混入“基本组合”）、单位与来源**：缺项自动标注 **`partially_verified`（部分核对）**，生成的导入模板默认采用 `null` 空值与 `is_template: true`（原样导回绝不误判通过）；
+- 内置复核求解器升级为**真实二维平面刚架刚度矩阵 `[K]{u}={F}`**（盖梁 + 双柱 + 桩顶系梁 + 桩顶等效弹簧），诚实标注复核范围（`builtin_simplified_frame_fem`），并在导入桥梁博士下部分册真实结果后优先采用实算值。
 
-### 1.3 直接生成能进 Word 与答辩 PPT 的 300 DPI 计算图（`bridge_figures.py`）
-每次从实时计算数据自动生成带单位、工况与控制极值标注的 `300 DPI PNG + 矢量 SVG`（位于 `<output_dir>/figures/`）：
-1. `fig0_scheme_comparison`：**开题三桥型方案立面与标准横断面比选图（6 幅子图）**；
-2. `fig1_structural_model`：**结构计算简图**（1# 简支 T 梁 10 单元计算跨径/支座约束/车道荷载简图 + 2# 中间双柱墩盖梁受荷简图）；
-3. `fig2_moment_shear_envelope`：**主梁弯矩与剪力组合包络及抗力对比图**；
-4. `fig3_tendon_and_prestress`：**预应力钢束抛物线线形及有效预应力 $\sigma_{pe}(x)$ 沿梁长变化图**；
-5. `fig4_pile_soil_profile`：**中间双柱墩与桩柱式桥台钻孔灌注桩分层土层及桩端持力层位置对比图**。
+### 1.3 三维钢束轮廓越界审计与共用支承尺寸链（`bridge_tendon_and_support.py`）
+- 支持直接读取桥梁博士导出的 `new.txt` 或钢束/截面 JSON（`--drbridge-tendon-model`，兼容 `N1-1 ~ N5-1` 命名），按里程逐断面同时核查**束心、波纹管外缘、最小保护层与变截面腹板轮廓**（自动拦截如 `N4` 在距梁端 `2980 mm` 处越出 `200 mm` 腹板 `10 mm` 的工程隐患并阻断出图）；图 `08`、`09` 与图 `02` 波纹管工程量共用同一套三维几何对象；
+- 图 `06`、`13`、`15` 共用同一份 `support_layout` 支承坐标生成并校验 **`480 + 40 + 480 = 1000 mm`** 纵向排距链与 **`20 + 74 + 150 = 244 mm`** 竖向支承高差链。
 
-### 1.4 按学院模板组装正式 Word 毕业设计说明书（`bridge_thesis_docx.py`）
-- 自动将现有 `QL-01 ~ QL-18` 18 张施工图、开题三方案比选、5 幅高清计算图、代表性 T 梁/双柱墩/独立桩柱式桥台完整代入过程、独立电算复核对照表与 12 篇中英文参考文献组装成标准中文高校排版的 **`graduation_thesis.docx`**（含封面、中英文摘要、双状态核查声明、11 章正文、学术三线表、内嵌高清图、参考文献、致谢与工程量附录）。
+### 1.4 统一 22 张图册清单与去敏感化 Word 毕业设计说明书（`bridge_thesis_docx.py`）
+- **单一图册清单（`sheet_manifest`）共读**：DXF 图表目录（`01`）、22 页合并 A3 打印图册（含 PDF 书签大纲）、计算书第 6 章及正式说明书 **`graduation_thesis.docx`**（三级书签超链接目录、正文图号引用、附录表 1 图册清单与书签锚点）共用同一份图册清单和项目资料——改图名或增删图纸时四处同步更新；
+- Word 封面默认留白下划线栏位（不残留任何参考样本学生/导师个人信息），仅在显式传入 `--student-info` / `student_metadata` 时填入。
 
-### 1.5 一次设计变更查出所有受影响成果（`bridge_change_impact.py`）
-- 每次重跑出图自动与上一版基线（或 `--baseline`）比对，生成 `change_impact_report.json` 并直接打印**“本次改了什么、涉及哪些计算书/说明书章节、涉及哪些施工图图号（含磁盘 DXF SHA-256 实测变更核验）”**：
-  - **桥台桩长改动后**：计算书第 4/5/6 章、正式说明书第 9/10 章与附录、`fig4_pile_soil_profile`、`QL-02`（水下 C30 方量与钢筋总重）、`QL-03`、`QL-15`（立面桩长标注）、`QL-18`（`QT3` 单根长与 `QT4` 螺旋箍圈数）同步更新；
-  - **钢束数量改动后**：主梁抗弯/抗剪/抗裂/挠度验算、`fig2`/`fig3`、`QL-08`（断面管道、抛物线束与张拉表）、`QL-09`（选筋依据）、`QL-02`（钢绞线总重）同步一致。
+### 1.5 按 DXF 几何/尺寸/文字/材料表做语义变更比对（`bridge_change_impact.py`）
+- 采用 `compute_dxf_semantic_digest` 对归一化几何图元、原生 `DIMENSION`、文字与材料表 XDATA 计算确定性内容指纹（忽略 `$TDUPDATE` 等文件头时间戳）：**参数不变原样重跑严格报告 0 张图纸变化**；修改桥台桩长或钢束数时，精准列出真正发生内容变化的图号与计算书/说明书章节。
 
 ---
 
 ## 2. Windows / 跨平台免配置一键复现入口
 
 ```powershell
-# 1. 一键生成 18 张 A3 施工图 + 5 幅 Word/PPT 计算图 + 导师复核计算书(MD) + 学院模板正式说明书(DOCX)
+# 1. 一键生成 22 张 A3 施工图 + 合并 PDF 图册 + 6 幅 300DPI 计算图 + 计算书(MD) + 正式说明书(DOCX)
 python scripts/run_bridge_suite.py --out output/wenchang_suite
 
-# 2. 导入桥梁博士 / Midas Civil 独立电算结果并生成答辩现场复核对照表 + 自定义学院封面信息
-python scripts/run_bridge_suite.py --out output/wenchang_suite --fem-results fem_drbridge.json --student-info student.json
+# 2. 导入桥梁博士上下部实算结果 + 钢束三维坐标 new.txt + 自定义封面信息
+python scripts/run_bridge_suite.py --out output/wenchang_suite --fem-results fem_super.json --substructure-fem fem_sub.json --drbridge-tendon-model new.txt --student-info student.json
 
-# 3. 修改设计参数（如改桥台桩长或钢束数）重跑，自动列出本次改了什么、涉及哪些章节与图号
-python scripts/run_bridge_suite.py --out output/wenchang_suite --params rev_params.json
+# 3. 兼容旧版 18 张 QL-01~QL-18 图册编号方案
+python scripts/run_bridge_suite.py --out output/wenchang_ql18 --sheet-scheme ql_18
 
-# 4. 任点图面一个钢筋/钢束编号（如 N1、GJ1、DZ1、QT3），一键查询 6 维选筋溯源信息
-python scripts/run_bridge_suite.py --lookup-bar QT3
+# 4. 任点图面一个钢筋/钢束编号（如 N4、DW1、GL3、EB1、QT3），一键查询 6 维选筋溯源信息
+python scripts/run_bridge_suite.py --lookup-bar EB1
 ```

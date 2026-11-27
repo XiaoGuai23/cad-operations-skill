@@ -972,9 +972,9 @@ def verify_civil_dxf(
                         )
 
     # ------------------------------------------------------------------
-    # 6. QL-13 Deck Ancillary 5-Subdetail Completeness Verification
+    # 6. QL-13 / 14 Deck Ancillary Subdetail Completeness Verification
     # ------------------------------------------------------------------
-    if drawing_no == "QL-13" or "crash_barrier_detail" in views_by_id:
+    if drawing_no in {"QL-13", "14"} or "crash_barrier_detail" in views_by_id:
         for req_vid, zh_name in _REQUIRED_QL13_VIEWS:
             checks_run += 1
             v_info = views_by_id.get(req_vid)
@@ -1030,7 +1030,7 @@ def verify_civil_dxf(
 
         # 7a. Propagate failed structural checks from calc_report directly to affected sheets!
         for fc in calc_report.get("failed_checks", []):
-            rel_dnos = set(fc.get("related_drawings") or [])
+            rel_dnos = set(fc.get("related_drawings") or []) | set(fc.get("legacy_related_drawings") or [])
             if drawing_no in rel_dnos:
                 dem = fc.get("demand")
                 allow = fc.get("allowable")
@@ -1117,7 +1117,7 @@ def verify_civil_dxf(
             ref_ids = [
                 bid
                 for bid, item in ledger_idx.items()
-                if item.get("sheet_drawing_no") == drawing_no and "bar_id" in item
+                if (item.get("sheet_drawing_no") == drawing_no or item.get("legacy_ql_no") == drawing_no) and "bar_id" in item
             ]
         if ref_ids:
             for req_bid in ref_ids:
@@ -1168,8 +1168,8 @@ def verify_civil_dxf(
                         message=f"钢筋编号 {bid} 图面可见单长 ({meas_len_cm}cm) 与计算账本 ({exp_len_cm}cm) 不一致",
                     )
 
-        # 7e. Substructure rebar sheet (QL-17) component dimensions vs substructure_checks
-        if ("pier_pile_elev" in views_by_id or drawing_no == "QL-17") and "substructure_checks" in calc_report:
+        # 7e. Substructure rebar sheet (QL-17 / 19) component dimensions vs substructure_checks
+        if ("pier_pile_elev" in views_by_id or drawing_no in {"QL-17", "19"}) and "substructure_checks" in calc_report:
             sub_c = calc_report["substructure_checks"]
             req_sub_dims = [
                 ("墩柱直径", float(sub_c["pier_column"]["diameter_m"]) * 1000.0),
@@ -1188,8 +1188,8 @@ def verify_civil_dxf(
                         message=f"桥墩桩基配筋图缺少或偏离计算书 {d_name} 尺寸 ({req_mm:g} mm)",
                     )
 
-        # 7f. BOQ sheet (QL-02) visible quantities vs bill_of_quantities
-        if drawing_no == "QL-02" and "bill_of_quantities" in calc_report:
+        # 7f. BOQ sheet (QL-02 / 02) visible quantities vs bill_of_quantities
+        if drawing_no in {"QL-02", "02"} and "bill_of_quantities" in calc_report:
             txt_tokens = {s.strip() for s, _, _ in texts if s.strip()}
             for r_boq in calc_report["bill_of_quantities"].get("rows", []):
                 q_str = f"{r_boq['quantity']}"
@@ -1203,11 +1203,14 @@ def verify_civil_dxf(
                         message=f"工程量汇总表未找到 '{r_boq['category']}' 的计算书数量 {q_str} {r_boq['unit']}",
                     )
 
-        # 7g. Sheet Index completeness on QL-01 (must list all QL-01 ~ QL-18!)
-        if drawing_no == "QL-01" and "施工图目录" in joined_text:
+        # 7g. Sheet Index completeness on QL-01 / 01 (co-reads calc_report['sheet_manifest']!)
+        if drawing_no in {"QL-01", "01"} and "施工图目录" in joined_text:
             txt_tokens_01 = {s.strip() for s, _, _ in texts if s.strip()}
-            for idx_sh in range(1, 19):
-                req_dno = f"QL-{idx_sh:02d}"
+            manifest_entries = ((calc_report.get("sheet_manifest") or {}).get("entries")) or [
+                {"drawing_no": f"QL-{i:02d}"} for i in range(1, 19)
+            ]
+            for e_man in manifest_entries:
+                req_dno = str(e_man["drawing_no"])
                 checks_run += 1
                 if req_dno not in txt_tokens_01:
                     _fail(
@@ -1215,11 +1218,13 @@ def verify_civil_dxf(
                         expected=req_dno,
                         measured="missing",
                         delta=None,
-                        message=f"QL-01 全套施工图目录表缺少图号 {req_dno}",
+                        message=f"全套施工图目录表缺少清单要求的图号 {req_dno}",
                     )
 
-        # 7h. Cross-sheet general construction dimensions on QL-14 / QL-15 vs calc_report & QL-16~QL-18!
-        if drawing_no == "QL-14" and "substructure_checks" in calc_report:
+        # 7h. Cross-sheet general construction dimensions on QL-14/15 (pier) & QL-15/16 (abutment)
+        is_pier_gen = ("substructure_elev" in views_by_id and "pier_top_support_chain" in views_by_id) or drawing_no == "QL-14"
+        is_abut_gen = ("substructure_elev" in views_by_id and not is_pier_gen) or (drawing_no in {"QL-15", "16"} and not is_pier_gen)
+        if is_pier_gen and "substructure_checks" in calc_report:
             sub_14 = calc_report["substructure_checks"]
             cap_pos = calc_report.get("pier_cap_beam_1d", {}).get("column_positions_m") or [-2.6, 2.6]
             req_14_dims = [
@@ -1239,10 +1244,10 @@ def verify_civil_dxf(
                         expected=req_mm,
                         measured="missing_or_different",
                         delta=None,
-                        message=f"桥墩一般构造图 (QL-14) 缺少或与配筋图/计算书不一致的尺寸：{d_name} ({req_mm:g} mm)",
+                        message=f"桥墩一般构造图缺少或与配筋图/计算书不一致的尺寸：{d_name} ({req_mm:g} mm)",
                     )
 
-        if drawing_no == "QL-15" and "project_summary" in calc_report:
+        if is_abut_gen and "project_summary" in calc_report and "substructure_elev" in views_by_id:
             deck_mm = float(calc_report["project_summary"]["deck_width_m"]) * 1000.0
             pile_d_15 = float(calc_report["substructure_checks"]["bored_pile"]["diameter_m"]) * 1000.0
             req_15_dims = [
@@ -1261,7 +1266,33 @@ def verify_civil_dxf(
                         expected=req_mm,
                         measured="missing_or_different",
                         delta=None,
-                        message=f"桥台一般构造图 (QL-15) 缺少或与桥台配筋图 (QL-18) 不一致的尺寸：{d_name} ({req_mm:g} mm)",
+                        message=f"桥台一般构造图缺少或与桥台配筋图不一致的尺寸：{d_name} ({req_mm:g} mm)",
+                    )
+
+        # 7i. Shared Support Coordinate Chain (480 + 40 + 480 = 1000 mm) across Sheets 06/QL-06, 13/QL-12, 15/QL-14!
+        sup_lay_v = calc_report.get("support_layout")
+        if isinstance(sup_lay_v, Mapping) and (
+            {"girder_pier_support_chain", "pier_bearing_chain", "pier_top_support_chain"} & set(views_by_id.keys())
+        ):
+            exp_d_end = float(sup_lay_v["beam_end_to_bearing_mm"])
+            exp_gap = float(sup_lay_v["expansion_gap_mm"])
+            exp_pitch = float(sup_lay_v["pier_bearing_row_pitch_mm"])
+            for chain_lbl, exp_val in (
+                ("梁端距支座中心距", exp_d_end),
+                ("梁端伸缩缝宽", exp_gap),
+                ("中墩双排支座纵向中心距", exp_pitch),
+            ):
+                checks_run += 1
+                if not any(abs(dv - exp_val) <= 1.5 for dv in dim_numeric_values):
+                    _fail(
+                        "SUPPORT_CHAIN_DESYNC",
+                        expected=exp_val,
+                        measured="missing_or_different",
+                        delta=None,
+                        message=(
+                            f"图面支承尺寸链缺少或偏离共用支承坐标 '{chain_lbl}={exp_val:g} mm' "
+                            f"（要求图06/13/15共用 {sup_lay_v.get('pier_chain_expression')} mm）"
+                        ),
                     )
 
     return {

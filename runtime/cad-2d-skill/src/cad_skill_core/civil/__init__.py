@@ -26,8 +26,18 @@ from .bridge_calc_book import (
 )
 from .bridge_change_impact import (
     compute_design_change_impact,
+    compute_dxf_semantic_digest,
     save_change_impact_report,
     verify_internal_suite_consistency,
+)
+from .bridge_tendon_and_support import (
+    WENCHANG_22_SHEET_INDEX,
+    audit_tendon_3d_section_clearance,
+    build_bridge_sheet_manifest,
+    build_bridge_tendon_3d_geometry,
+    compute_shared_support_layout,
+    parse_drbridge_tendon_and_section_model,
+    resolve_project_and_student_profile,
 )
 from .bridge_checks import (
     build_rebar_and_tendon_ledger,
@@ -75,10 +85,14 @@ from .symbols import (
 __all__ = [
     "CIVIL_DRAWING_TYPES",
     "TASK_BOOK_9_CATEGORIES",
+    "WENCHANG_22_SHEET_INDEX",
     "ViewBox",
     "audit_bridge_design_consistency",
     "audit_references_compliance",
     "audit_task_book_coverage",
+    "audit_tendon_3d_section_clearance",
+    "build_bridge_sheet_manifest",
+    "build_bridge_tendon_3d_geometry",
     "build_defense_verification_table",
     "build_rebar_and_tendon_ledger",
     "check_deck_slab_and_diaphragm",
@@ -89,11 +103,13 @@ __all__ = [
     "collect_failed_structural_checks",
     "compute_bridge_bill_of_quantities",
     "compute_design_change_impact",
+    "compute_dxf_semantic_digest",
     "compute_hydrology_and_span",
     "compute_independent_hand_cross_check",
     "compute_lateral_distribution",
     "compute_polygon_section_properties",
     "compute_prestress_estimation_and_loss",
+    "compute_shared_support_layout",
     "compute_superstructure_envelopes",
     "compute_t_girder_section",
     "default_graduation_references",
@@ -122,6 +138,8 @@ __all__ = [
     "ingest_bridge_survey_data",
     "ingest_independent_fem_results",
     "lookup_bar_or_tendon",
+    "parse_drbridge_tendon_and_section_model",
+    "resolve_project_and_student_profile",
     "run_full_bridge_calculation",
     "save_change_impact_report",
     "setup_civil_dxf_document",

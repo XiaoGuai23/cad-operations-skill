@@ -60,11 +60,12 @@ def test_independent_abutment_calculation_and_survey_data_ingestion(tmp_path):
     assert calc_soft_abut["substructure_checks"]["bored_pile"]["design_length_m"] == 21.0
     assert calc_soft_abut["abutment_checks"]["bored_pile"]["design_length_m"] >= 23.0
 
-    # 3. Counterexample: abutment_pile_length_m = 1.5 -> fails abutment_checks.bored_pile & flags QL-15 / QL-18!
+    # 3. Counterexample: abutment_pile_length_m = 1.5 -> fails abutment_checks.bored_pile & flags 03 / 16 / 20 (legacy QL-03 / QL-15 / QL-18)!
     calc_short_abut = run_full_bridge_calculation({"preset": "wenchang", "abutment_pile_length_m": 1.5})
     assert calc_short_abut["calculation_status"] == "failed"
     ab_fc = next(fc for fc in calc_short_abut["failed_checks"] if fc["check_key"] == "abutment_checks.bored_pile")
-    assert {"QL-03", "QL-15", "QL-18"} <= set(ab_fc["related_drawings"])
+    assert {"03", "16", "20"} <= set(ab_fc["related_drawings"])
+    assert {"QL-03", "QL-15", "QL-18"} <= set(ab_fc["legacy_related_drawings"])
 
     # 4. Ingest real measured river cross-section + route profile + borehole survey data
     # Trapezoidal channel: z=84 at x=0 & x=100, flat bed z=78 on [10..90]; at flood_z=81.0:
@@ -164,7 +165,7 @@ def test_advisor_auditable_calc_book_hand_cross_check_and_full_rebar_provenance(
         "第三章 代表性中间双柱式桥墩",
         "第四章 桩柱式桥台",
         "第五章 手算解析公式与电算程序对算交叉校核表",
-        "第六章 全套18张施工图预应力钢束与钢筋编号",
+        "第六章 全套22张施工图预应力钢束与钢筋编号",
     ):
         assert required_heading in md_text
     assert "正文约一万字" in md_text
@@ -385,7 +386,7 @@ def test_ql09_true_stirrup_pitch_ql17_unit_scope_ql18_pedestal_cut_and_windows_c
     suite_json = json.loads(proc.stdout)
     assert suite_json["calculation_status"] == "passed"
     assert suite_json["graduation_readiness_status"] == "pending_confirmation"
-    assert len(suite_json["sheets"]) == 18
+    assert len(suite_json["sheets"]) == 22
     assert Path(suite_json["calculation_book_path"]).is_file()
     assert Path(suite_json["calculation_report_path"]).is_file()
 

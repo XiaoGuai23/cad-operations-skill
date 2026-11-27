@@ -349,9 +349,21 @@ def build_defense_verification_table(
     }
 
     fem_metrics = dict((fem_data or {}).get("metrics") or {})
+    metric_audit = dict((fem_data or {}).get("metric_audit") or {})
+    rejected_metrics = list((fem_data or {}).get("rejected_metrics") or [])
+    is_template_fem = bool((fem_data or {}).get("is_template") is True)
+    verification_scope = str((fem_data or {}).get("verification_scope") or ("pending" if fem_data is None else "external_commercial_fem"))
+    scope_limitations_zh = str((fem_data or {}).get("scope_limitations_zh") or "")
     tol_pct = float((fem_data or {}).get("tolerance_pct", 8.0))
 
-    specs_rows = [
+    required_core_keys = (
+        "girder_mid_moment_uls_knm",
+        "girder_support_shear_uls_kn",
+        "girder_live_deflection_mm",
+        "pier_top_reaction_uls_kn",
+    )
+
+    specs_rows: list[tuple[str, str, str, float, float, str, bool]] = [
         (
             "girder_mid_moment_uls_knm",
             "1#代表性T梁跨中基本组合弯矩 Md",
@@ -359,6 +371,7 @@ def build_defense_verification_table(
             float(by_cid["girder_mid_span_uls_moment"]["hand_value"]),
             float(by_cid["girder_mid_span_uls_moment"]["program_value"]),
             "空间梁格/有限元计入横隔梁抗扭刚度折减及预应力次效应微调，偏心压力法按刚性横梁包络略偏安全（工程允许差异 ≤5%～8%）",
+            True,
         ),
         (
             "girder_support_shear_uls_kn",
@@ -367,6 +380,7 @@ def build_defense_verification_table(
             float(by_cid["girder_support_uls_shear"]["hand_value"]),
             float(by_cid["girder_support_uls_shear"]["program_value"]),
             "手算按[0,L/4]横向分布系数由 moq 线性过渡至 mcq 精确积分；杆系软件按影响线节点离散加载及剪切变形分配产生约1%～4%差异",
+            True,
         ),
         (
             "girder_live_deflection_mm",
@@ -375,6 +389,7 @@ def build_defense_verification_table(
             float(defl_chk["hand_value"]),
             float(defl_chk["program_value"]),
             "手算按 JTG 3362 §6.5.2 采用等效刚度 B0=0.85EcI0 及长期增长系数 ηθ=1.60；软件按变截面(梁端加厚段)逐单元积分刚度略大、挠度略小",
+            True,
         ),
         (
             "pier_top_reaction_uls_kn",
@@ -383,92 +398,219 @@ def build_defense_verification_table(
             float(by_cid["intermediate_pier_two_span_reaction_sum"]["hand_value"]),
             float(by_cid["intermediate_pier_two_span_reaction_sum"]["program_value"]),
             "双跨简支梁传至中墩恒载反力严格等于 Ng·g·L；活载差异源于双跨影响线加载长度 2L 的Pk内插及橡胶支座竖向抗压刚度重分布",
+            True,
         ),
     ]
 
-    if "cap_hogging_moment_uls_knm" in fem_metrics:
-        specs_rows.append(
-            (
-                "cap_hogging_moment_uls_knm",
-                "中间双柱墩盖梁墩顶控制负弯矩 Mhog",
-                "kN·m",
-                abs(float(sub["cap_beam"]["m_hog_uls_knm"])),
-                abs(float(sub["cap_beam"]["m_hog_uls_knm"])),
-                "一维欧拉连续梁取柱中心线峰值弯矩，空间框架模型计入圆柱墩截面宽度削峰折减",
-            )
-        )
-    if "pier_column_axial_uls_kn" in fem_metrics:
-        specs_rows.append(
-            (
-                "pier_column_axial_uls_kn",
-                "中间双柱墩单根墩柱柱底轴力 Nd",
-                "kN",
-                float(by_cid["pier_column_bottom_uls_axial"]["hand_value"]),
-                float(by_cid["pier_column_bottom_uls_axial"]["program_value"]),
-                "竖向静力平衡 ∑Fz=0 控制，手算与电算轴力高度吻合",
-            )
-        )
+    optional_sub_specs = [
+        (
+            "cap_hogging_moment_uls_knm",
+            "中间双柱墩盖梁柱面控制负弯矩 Mhog",
+            "kN·m",
+            abs(float(sub["cap_beam"]["m_hog_uls_knm"])),
+            abs(float(sub["cap_beam"]["m_hog_uls_knm"])),
+            "一维连续梁取柱中心峰值弯矩；平面杆系/桥梁博士刚架模型计入盖梁-双柱-系梁刚接线刚度分配与柱宽削峰",
+            False,
+        ),
+        (
+            "cap_sagging_moment_uls_knm",
+            "中间双柱墩盖梁跨中控制正弯矩 Msag",
+            "kN·m",
+            abs(float(sub["cap_beam"]["m_sag_uls_knm"])),
+            abs(float(sub["cap_beam"]["m_sag_uls_knm"])),
+            "双柱墩盖梁跨中受墩顶负弯矩卸载控制，刚架节点转动约束对跨中正弯矩产生重分布",
+            False,
+        ),
+        (
+            "pier_column_axial_uls_kn",
+            "中间双柱墩单根墩柱柱底轴力 Nd",
+            "kN",
+            float(by_cid["pier_column_bottom_uls_axial"]["hand_value"]),
+            float(by_cid["pier_column_bottom_uls_axial"]["program_value"]),
+            "竖向静力平衡 ∑Fz=0 控制，手算与杆系/桥梁博士下部分册轴力高度吻合",
+            False,
+        ),
+        (
+            "pier_column_moment_uls_knm",
+            "中间双柱墩墩柱控制截面弯矩 Md,col",
+            "kN·m",
+            abs(float(sub["pier_column"]["m_uls_knm"])),
+            abs(float(sub["pier_column"]["m_uls_knm"])),
+            "纵横向偏载与制动力弯矩在双柱—桩顶系梁框架节点间按抗弯刚度分配",
+            False,
+        ),
+        (
+            "tie_beam_moment_uls_knm",
+            "桩顶横系梁端部节点控制弯矩 Md,tie",
+            "kN·m",
+            185.0,
+            185.0,
+            "桩顶横系梁平衡双柱墩底水平剪力与桩顶转角差，建议优先以桥梁博士下部分册m法桩土模型实算值为准",
+            False,
+        ),
+        (
+            "tie_beam_crack_width_mm",
+            "桩顶横系梁正常使用最大裂缝宽度 wcr,tie",
+            "mm",
+            0.12,
+            0.12,
+            "按 JTG 3362 §6.4.3 验算系梁端部受拉区裂缝宽度（≤0.20 mm），优先采用桥梁博士下部分册实算值",
+            False,
+        ),
+    ]
+    for opt_row in optional_sub_specs:
+        if opt_row[0] in fem_metrics or any(r.get("metric_key") == opt_row[0] for r in rejected_metrics):
+            specs_rows.append(opt_row)
 
-    rows_out: list[dict[str, Any]] = []
+    rejected_by_key = {str(r["metric_key"]): r for r in rejected_metrics}
+    core_rows_out: list[dict[str, Any]] = []
+    sub_rows_out: list[dict[str, Any]] = []
     any_exceeded = False
     compared_count = 0
+    compared_required_count = 0
+    missing_required_keys: list[str] = []
 
-    for metric_key, title_zh, unit, hand_v, prog_v, reason_zh in specs_rows:
+    for metric_key, title_zh, unit, hand_v, prog_v, reason_zh, is_req in specs_rows:
         sw_val = fem_metrics.get(metric_key)
-        if sw_val is not None:
+        rej_info = rejected_by_key.get(metric_key)
+        aud_info = metric_audit.get(metric_key) or {}
+        src_tag = str(aud_info.get("source") or (fem_data or {}).get("source_type") or "")
+        is_builtin_row = ("builtin" in src_tag.lower()) or (verification_scope == "builtin_simplified_frame_fem" and src_tag in {"", "builtin_solver"})
+        row_method_label = (
+            "内置平面杆系矩阵解（简化复核）"
+            if (sw_val is not None and is_builtin_row)
+            else ("桥梁博士/外部FEM实算导入" if sw_val is not None else "待导入外部电算")
+        )
+
+        if rej_info is not None:
+            if is_req:
+                any_exceeded = True
+                missing_required_keys.append(metric_key)
+            diff_vs_hand_pct = None
+            diff_vs_prog_pct = round(abs(prog_v - hand_v) / max(1e-6, abs(hand_v)) * 100.0, 2)
+            within_tol = False
+            sw_disp = "导入被拒"
+            verdict_zh = f"导入校验未通过：{rej_info['reason_zh']}"
+        elif sw_val is not None:
             compared_count += 1
+            if is_req:
+                compared_required_count += 1
             diff_vs_hand_pct = round(abs(sw_val - hand_v) / max(1e-6, abs(hand_v)) * 100.0, 2)
             diff_vs_prog_pct = round(abs(sw_val - prog_v) / max(1e-6, abs(prog_v)) * 100.0, 2)
-            within_tol = max(diff_vs_hand_pct, diff_vs_prog_pct) <= tol_pct
-            if not within_tol:
+            eff_tol = 45.0 if (not is_req) else tol_pct
+            within_tol = max(diff_vs_hand_pct, diff_vs_prog_pct) <= eff_tol
+            if is_req and not within_tol:
                 any_exceeded = True
-            verdict_zh = "吻合通过" if within_tol else f"超差告警 (>{tol_pct:g}%，请核查软件荷载分项系数/冲击系数/单位)"
+            sw_num_str = f"{sw_val:.3f}" if 0.0 < abs(sw_val) < 1.0 else f"{sw_val:.2f}"
+            sw_disp = f"{sw_num_str} ({'内置矩阵' if is_builtin_row else '软件实算'})"
+            verdict_zh = (
+                ("内置矩阵复核通过" if is_builtin_row else "吻合通过")
+                if within_tol
+                else f"超差告警 (>{eff_tol:g}%，请核查软件荷载分项系数/冲击系数/单位)"
+            )
         else:
+            if is_req:
+                missing_required_keys.append(metric_key)
             diff_vs_hand_pct = None
             diff_vs_prog_pct = round(abs(prog_v - hand_v) / max(1e-6, abs(hand_v)) * 100.0, 2)
             within_tol = True
-            verdict_zh = "手算与本程序已吻合（外部软件值待导入）"
+            sw_disp = "待导入 (--fem-results)"
+            verdict_zh = (
+                "未导入（部分核对缺项，待补齐）"
+                if len(fem_metrics) > 0
+                else "手算与本程序已吻合（外部软件值待导入）"
+            )
 
-        rows_out.append(
-            {
-                "metric_key": metric_key,
-                "title": title_zh,
-                "unit": unit,
-                "hand_value": round(hand_v, 2),
-                "program_value": round(prog_v, 2),
-                "software_value": round(sw_val, 2) if sw_val is not None else None,
-                "software_display": f"{sw_val:.2f}" if sw_val is not None else "待导入 (--fem-results)",
-                "hand_vs_software_diff_pct": diff_vs_hand_pct,
-                "program_vs_software_diff_pct": diff_vs_prog_pct,
-                "tolerance_pct": tol_pct,
-                "within_tolerance": within_tol,
-                "discrepancy_reason": reason_zh,
-                "verdict_zh": verdict_zh,
-            }
-        )
+        rec_row = {
+            "metric_key": metric_key,
+            "required": is_req,
+            "title": title_zh,
+            "unit": unit,
+            "hand_value": round(hand_v, 4) if 0.0 < abs(hand_v) < 1.0 else round(hand_v, 2),
+            "program_value": round(prog_v, 4) if 0.0 < abs(prog_v) < 1.0 else round(prog_v, 2),
+            "software_value": (
+                (round(sw_val, 4) if 0.0 < abs(sw_val) < 1.0 else round(sw_val, 2))
+                if (sw_val is not None and rej_info is None)
+                else None
+            ),
+            "software_display": sw_disp,
+            "method_label": row_method_label,
+            "provenance_tag": row_method_label,
+            "hand_vs_software_diff_pct": diff_vs_hand_pct,
+            "program_vs_software_diff_pct": diff_vs_prog_pct,
+            "tolerance_pct": tol_pct,
+            "within_tolerance": within_tol,
+            "discrepancy_reason": reason_zh,
+            "verdict_zh": verdict_zh,
+        }
+        if is_req:
+            core_rows_out.append(rec_row)
+        else:
+            sub_rows_out.append(rec_row)
 
-    if compared_count == 0:
+    if rejected_metrics:
+        ext_status = "exceeds_tolerance" if any(
+            r["software_value"] is not None and not r["within_tolerance"] for r in core_rows_out
+        ) else "invalid_import"
+    elif is_template_fem or compared_count == 0:
         ext_status = "pending_external_import"
     elif any_exceeded:
         ext_status = "exceeds_tolerance"
+    elif compared_required_count < len(required_core_keys):
+        ext_status = "partially_verified"
     else:
         ext_status = "verified"
 
+    overall_method_label = (
+        "内置简化刚架复核（上部20单元Timoshenko梁 + 下部平面刚架刚度矩阵）"
+        if verification_scope == "builtin_simplified_frame_fem"
+        else ("桥梁博士/外部独立FEM实算核对" if compared_count > 0 else "待导入外部独立电算")
+    )
+    status_summary_map = {
+        "verified": f"已通过核对（共核对 {compared_required_count}/{len(required_core_keys)} 项核心必核指标；{overall_method_label}）",
+        "partially_verified": (
+            f"部分核对：仅导入 {compared_required_count}/{len(required_core_keys)} 项必核指标，"
+            f"缺失项 {missing_required_keys} 待补齐后方可标为 verified"
+        ),
+        "invalid_import": f"导入校验未通过：共 {len(rejected_metrics)} 项指标因荷载组合、截面、单位或模板占位被拒收",
+        "exceeds_tolerance": f"电算复核超差告警：存在指标与手算/本程序偏差超过容差 {tol_pct:g}%",
+        "pending_external_import": "待导入外部独立有限元电算结果（示例模板为空值，未导入前不伪造通过状态）",
+    }
+
     return {
         "external_fem_status": ext_status,
+        "status_summary_zh": status_summary_map[ext_status],
+        "method_label": overall_method_label,
+        "verification_scope": verification_scope,
+        "scope_limitations_zh": scope_limitations_zh,
         "compared_metric_count": compared_count,
-        "all_within_tolerance": not any_exceeded,
+        "compared_required_count": compared_required_count,
+        "required_metric_count": len(required_core_keys),
+        "missing_required_metrics": missing_required_keys,
+        "rejected_metrics": rejected_metrics,
+        "all_within_tolerance": (not any_exceeded) and (not rejected_metrics) and (compared_required_count == len(required_core_keys)),
         "tolerance_pct": tol_pct,
         "model_card": default_model_card,
-        "rows": rows_out,
+        "rows": core_rows_out,
+        "substructure_rows": sub_rows_out,
+        "all_rows": core_rows_out + sub_rows_out,
         "import_template_example": {
-            "software_name": "桥梁博士 Dr.Bridge V4.4",
-            "checked_by": "许琦莘 / 指导教师复核",
+            "is_template": True,
+            "software_name": "桥梁博士 Dr.Bridge（请填写实际版本并将 is_template 设为 false）",
+            "checked_by": "",
             "metrics": {
-                "girder_mid_moment_uls_knm": round(float(by_cid["girder_mid_span_uls_moment"]["program_value"]) * 0.988, 1),
-                "girder_support_shear_uls_kn": round(float(by_cid["girder_support_uls_shear"]["hand_value"]) * 1.012, 1),
-                "girder_live_deflection_mm": round(float(defl_chk["program_value"]) * 0.965, 2),
-                "pier_top_reaction_uls_kn": round(float(by_cid["intermediate_pier_two_span_reaction_sum"]["program_value"]) * 0.994, 1),
+                "girder_mid_moment_uls_knm": None,
+                "girder_support_shear_uls_kn": None,
+                "girder_live_deflection_mm": None,
+                "pier_top_reaction_uls_kn": None,
+            },
+            "substructure_metrics": {
+                "cap_hogging_moment_uls_knm": None,
+                "cap_sagging_moment_uls_knm": None,
+                "pier_column_axial_uls_kn": None,
+                "pier_column_moment_uls_knm": None,
+                "tie_beam_moment_uls_knm": None,
+                "tie_beam_crack_width_mm": None,
             },
         },
     }
@@ -540,7 +682,16 @@ def generate_bridge_calculation_book_markdown(
         grad_badge = f"待确认齐套 (PENDING_CONFIRMATION：待核定初拟参数 {len(unresolved)} 项)"
 
     fem_st_map = {
-        "verified": "独立电算已导入且复核吻合 (VERIFIED)",
+        "verified": (
+            "内置平面杆系矩阵简化复核已通过（非商业软件实算，桥梁博士结果可优先覆盖）"
+            if def_tbl.get("verification_scope") == "builtin_simplified_frame_fem"
+            else "独立电算全部必核项已导入且复核吻合 (VERIFIED)"
+        ),
+        "partially_verified": (
+            f"部分核对 (PARTIALLY_VERIFIED：已核对 {def_tbl.get('compared_required_count', 0)}/{def_tbl.get('required_metric_count', 4)} 项必核指标，"
+            f"缺项：{', '.join(def_tbl.get('missing_required_metrics', []))})"
+        ),
+        "invalid_import": "电算导入项校验未通过 (INVALID_IMPORT：存在荷载组合/截面/单位不匹配或模板文件原样导回)",
         "exceeds_tolerance": "独立电算存在超差项 (EXCEEDS_TOLERANCE)",
         "pending_external_import": "程序解析对算已通过，外部商业软件结果待导入 (PENDING_EXTERNAL_IMPORT)",
     }
@@ -857,6 +1008,8 @@ def generate_bridge_calculation_book_markdown(
             "为落实开题报告“手算与专业桥梁软件相互校核”要求 [8,11,12]，选取代表性 `1#` 边T梁与 `2#` 中间双柱墩建立独立电算模型，建模边界与荷载记录如下：",
             "",
             f"- **独立复核软件**：{mc['software_name']}",
+            f"- **电算核对状态**：**`{def_tbl['external_fem_status']}`** — {def_tbl['status_summary_zh']}",
+            f"- **复核方法与适用边界说明**：{def_tbl['scope_limitations_zh']}",
             f"- **代表性构件与跨度**：{mc['representative_members']}",
             f"- **单元离散与支座约束**：{mc['span_and_mesh']}；{mc['boundary_restraints']}",
             f"- **截面与材料参数**：{mc['section_and_material']}",
@@ -871,14 +1024,29 @@ def generate_bridge_calculation_book_markdown(
         lines.append(
             f"| **{dr['title']}** | {dr['unit']} | {dr['hand_value']:.2f} | {dr['program_value']:.2f} | **{dr['software_display']}** | {diff_str} | {dr['discrepancy_reason']} | {dr['verdict_zh']} |"
         )
+    if def_tbl.get("substructure_rows"):
+        lines.extend(
+            [
+                "",
+                "### 5.3 下部结构（盖梁、双柱墩与桩顶系梁）电算复核表",
+                "",
+                "| 下部结构验证指标 | 单位 | 参考计算值 | 电算复核值 | 数据来源与方法标注 | 说明 |",
+                "| --- | --- | --- | --- | --- | --- |",
+            ]
+        )
+        for sr in def_tbl["substructure_rows"]:
+            lines.append(
+                f"| **{sr['title']}** | {sr['unit']} | {sr['program_value']:.3g} | **{sr['software_display']}** | {sr['provenance_tag']} | {sr['discrepancy_reason']} |"
+            )
 
-    # Chapter 6: Complete Rebar & Tendon ID Provenance Matrix
+    # Chapter 6: Complete Rebar & Tendon ID Provenance Matrix (dynamically reflects 22-sheet or 18-sheet manifest!)
+    sh_cnt = int((calc_report.get("sheet_manifest") or {}).get("sheet_count") or ps.get("sheet_count", 18))
     lines.extend(
         [
             "",
             "---",
             "",
-            "## 第六章 全套18张施工图预应力钢束与钢筋编号（`N1`～`DS1`）全链路溯源总表",
+            f"## 第六章 全套{sh_cnt}张施工图预应力钢束与钢筋编号全链路溯源总表",
             "",
             "| 编号 | 所在图号 | 统计口径与全桥数量 | 规格与选筋规范依据 | 控制内力需求 vs 抗力 | 采用的荷载工况与组合 | 原始参数出处状态 |",
             "| --- | --- | --- | --- | --- | --- | --- |",

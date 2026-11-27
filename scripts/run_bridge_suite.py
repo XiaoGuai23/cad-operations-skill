@@ -41,30 +41,52 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     parser = argparse.ArgumentParser(
         description=(
-            "One-command reproduction of 18-sheet A3 bridge drawings, Word/PPT figures, "
-            "formal college Word thesis (.docx), FEM defense verification table, and change impact tracker."
+            "One-command reproduction of 22-sheet (or 18-sheet) A3 bridge drawings, Word/PPT figures, "
+            "formal college Word thesis (.docx), FEM defense verification table, and semantic change tracker."
         ),
     )
     parser.add_argument(
         "--out",
         type=Path,
-        default=Path("output/wenchang_18_sheets"),
+        default=Path("output/wenchang_22_sheets"),
         dest="output_dir",
-        help="Output directory for QL-01..QL-18 DXFs, figures, calculation book MD, and formal Word thesis DOCX.",
+        help="Output directory for 22-sheet A3 DXFs/PDFs, figures, calculation book MD, and formal Word thesis DOCX.",
     )
     parser.add_argument(
         "--preset",
         default="wenchang",
         help="Bridge preset name (default: 'wenchang'; pass '' for raw custom params).",
     )
+    parser.add_argument(
+        "--sheet-scheme",
+        choices=("wenchang_22", "ql_18"),
+        default=None,
+        dest="sheet_scheme",
+        help="Sheet manifest scheme ('wenchang_22' 22-sheet set [default for wenchang] or 'ql_18' legacy 18-sheet set).",
+    )
     parser.add_argument("--params", type=Path, default=None, dest="params_path", help="Optional JSON parameter overrides.")
     parser.add_argument("--survey", type=Path, default=None, dest="survey_path", help="Optional site hydrology/borehole survey JSON.")
+    parser.add_argument(
+        "--drbridge-new-txt",
+        "--drbridge-tendon-model",
+        type=Path,
+        default=None,
+        dest="drbridge_new_txt_path",
+        help="Optional Dr.Bridge new.txt or tendon/section model JSON for 3D tendon centroid/duct clearance audit.",
+    )
     parser.add_argument(
         "--fem-results",
         type=Path,
         default=None,
         dest="fem_results_path",
-        help="Optional independent FEM software results (Midas Civil / Dr.Bridge JSON, CSV, TSV, or Markdown table).",
+        help="Optional independent FEM software results (桥梁博士上部分册 / Midas Civil JSON, CSV, TSV, or Markdown table).",
+    )
+    parser.add_argument(
+        "--substructure-fem",
+        type=Path,
+        default=None,
+        dest="sub_fem_results_path",
+        help="Optional Dr.Bridge substructure (桥梁博士下部分册：盖梁、墩柱、系梁) FEM results file.",
     )
     parser.add_argument(
         "--fem-solver",
@@ -97,12 +119,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     cfg: dict = {}
     if args.preset:
         cfg["preset"] = args.preset
+    if args.sheet_scheme:
+        cfg["sheet_scheme"] = args.sheet_scheme
     if args.params_path is not None:
         cfg.update(json.loads(args.params_path.read_text(encoding="utf-8-sig")))
     if args.survey_path is not None:
         cfg["survey_data"] = json.loads(args.survey_path.read_text(encoding="utf-8-sig"))
+    if args.drbridge_new_txt_path is not None:
+        cfg["drbridge_new_txt"] = str(args.drbridge_new_txt_path.expanduser().resolve())
     if args.fem_results_path is not None:
         cfg["independent_fem_results"] = str(args.fem_results_path.expanduser().resolve())
+    if args.sub_fem_results_path is not None:
+        cfg["substructure_fem_results"] = str(args.sub_fem_results_path.expanduser().resolve())
     if args.fem_solver != "none":
         cfg["fem_solver"] = args.fem_solver
     student_meta = (
@@ -168,7 +196,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"   - 导师复核计算书(MD): {suite['calculation_book_path']}")
         print(f"   - 学院模板正式说明书(DOCX): {thesis.get('docx_path')}")
         if suite.get("print_album_pdf_path"):
-            print(f"   - 18张A3施工图合订打印图册(PDF): {suite['print_album_pdf_path']}")
+            print(f"   - {len(suite['sheets'])}张A3施工图合订打印图册(PDF): {suite['print_album_pdf_path']}")
         if suite.get("drbridge_modeling_guide_path"):
             print(f"   - 桥梁博士/Midas独立电算建模卡(MD): {suite['drbridge_modeling_guide_path']}")
         print(f"   - 计算图目录(300DPI PNG/SVG): {figs.get('output_dir')}")

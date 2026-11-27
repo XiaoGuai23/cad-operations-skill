@@ -1555,18 +1555,288 @@ _FEM_METRIC_ALIASES: dict[str, tuple[str, ...]] = {
         "盖梁墩顶负弯矩",
         "盖梁负弯矩",
     ),
+    "cap_sagging_moment_uls_knm": (
+        "cap_sagging_moment_uls_knm",
+        "盖梁跨中正弯矩",
+        "盖梁正弯矩",
+    ),
     "pier_column_axial_uls_kn": (
         "pier_column_axial_uls_kn",
         "墩柱柱底轴力",
         "墩柱轴力",
     ),
+    "pier_column_moment_uls_knm": (
+        "pier_column_moment_uls_knm",
+        "墩柱柱底弯矩",
+        "墩柱弯矩",
+    ),
+    "tie_beam_moment_uls_knm": (
+        "tie_beam_moment_uls_knm",
+        "桩顶系梁端部弯矩",
+        "系梁弯矩",
+    ),
+    "tie_beam_crack_width_mm": (
+        "tie_beam_crack_width_mm",
+        "桩顶系梁最大裂缝宽度",
+        "系梁裂缝宽度",
+        "系梁裂缝",
+    ),
 }
+
+_FEM_METRIC_RULES: dict[str, dict[str, Any]] = {
+    "girder_mid_moment_uls_knm": {
+        "expected_limit_state": "ULS",
+        "expected_unit_kind": "moment",
+        "forbidden_member_or_section": ("支点", "梁端", "四分点", "l/4", "盖梁", "桥台", "墩柱", "系梁"),
+    },
+    "girder_support_shear_uls_kn": {
+        "expected_limit_state": "ULS",
+        "expected_unit_kind": "force",
+        "forbidden_member_or_section": ("跨中", "l/2", "四分点", "盖梁", "桥台", "墩柱", "系梁"),
+    },
+    "girder_live_deflection_mm": {
+        "expected_limit_state": "SLS_LIVE",
+        "expected_unit_kind": "length",
+        "forbidden_member_or_section": ("支点", "盖梁", "桥墩", "桥台", "墩柱"),
+    },
+    "pier_top_reaction_uls_kn": {
+        "expected_limit_state": "ULS",
+        "expected_unit_kind": "force",
+        "forbidden_member_or_section": ("单片梁", "单支座", "桥台", "0#台", "4#台", "桩底"),
+    },
+    "cap_hogging_moment_uls_knm": {
+        "expected_limit_state": "ULS",
+        "expected_unit_kind": "moment",
+        "forbidden_member_or_section": ("主梁", "t梁", "桥台"),
+    },
+    "cap_sagging_moment_uls_knm": {
+        "expected_limit_state": "ULS",
+        "expected_unit_kind": "moment",
+        "forbidden_member_or_section": ("主梁", "t梁", "桥台", "负弯矩"),
+    },
+    "pier_column_axial_uls_kn": {
+        "expected_limit_state": "ULS",
+        "expected_unit_kind": "force",
+        "forbidden_member_or_section": ("主梁", "盖梁", "系梁"),
+    },
+    "pier_column_moment_uls_knm": {
+        "expected_limit_state": "ULS",
+        "expected_unit_kind": "moment",
+        "forbidden_member_or_section": ("主梁", "盖梁", "系梁"),
+    },
+    "tie_beam_moment_uls_knm": {
+        "expected_limit_state": "ULS",
+        "expected_unit_kind": "moment",
+        "forbidden_member_or_section": ("主梁", "盖梁", "桥台"),
+    },
+    "tie_beam_crack_width_mm": {
+        "expected_limit_state": "SLS",
+        "expected_unit_kind": "length",
+        "forbidden_member_or_section": ("主梁", "桥台"),
+    },
+}
+
+_SLS_MARKERS: tuple[str, ...] = (
+    "运营标准",
+    "标准值",
+    "标准组合",
+    "频遇",
+    "准永久",
+    "短期效应",
+    "长期效应",
+    "正常使用",
+    "未乘系数",
+    "unfactored",
+    "service",
+    "sls",
+)
+_ULS_MARKERS: tuple[str, ...] = (
+    "基本组合",
+    "承载能力",
+    "极限组合",
+    "uls",
+    "factored",
+)
+_TEMPLATE_SOURCE_MARKERS: tuple[str, ...] = (
+    "template",
+    "example",
+    "placeholder",
+    "示例",
+    "模板",
+    "空白回填",
+    "填写机房实际版本",
+    "请填写",
+)
+
+
+def _normalize_and_validate_fem_unit(raw_unit: str, expected_kind: str) -> tuple[bool, float, str]:
+    """Validate metric unit against expected physical dimension ('moment'->kN·m, 'force'->kN, 'length'->mm)."""
+    u = raw_unit.strip().replace(" ", "")
+    if not u:
+        return True, 1.0, {"moment": "kN·m", "force": "kN", "length": "mm"}[expected_kind]
+    u_low = u.lower().replace("·", "*").replace(".", "*")
+    if expected_kind == "moment":
+        if u_low in {"kn*m", "knm", "kn-m", "千牛米", "千牛*米"}:
+            return True, 1.0, "kN·m"
+        if u_low in {"mn*m", "mnm"}:
+            return True, 1000.0, "kN·m"
+        if u_low in {"n*mm", "nmm"}:
+            return True, 1e-6, "kN·m"
+        if u_low in {"n*m", "nm"}:
+            return True, 1e-3, "kN·m"
+        return False, 1.0, f"单位 '{raw_unit}' 与弯矩单位(kN·m)不兼容"
+    if expected_kind == "force":
+        if u_low in {"kn", "千牛"}:
+            return True, 1.0, "kN"
+        if u_low in {"mn", "兆牛"}:
+            return True, 1000.0, "kN"
+        if u_low in {"n", "牛"}:
+            return True, 1e-3, "kN"
+        return False, 1.0, f"单位 '{raw_unit}' 与力/反力单位(kN)不兼容"
+    if expected_kind == "length":
+        if u_low in {"mm", "毫米"}:
+            return True, 1.0, "mm"
+        if u_low in {"cm", "厘米"}:
+            return True, 10.0, "mm"
+        if u_low in {"m", "米"}:
+            return True, 1000.0, "mm"
+        return False, 1.0, f"单位 '{raw_unit}' 与位移/裂缝单位(mm)不兼容"
+    return True, 1.0, raw_unit
+
+
+def _validate_single_fem_metric(
+    canon_key: str,
+    raw_value: Any,
+    *,
+    label_or_member: str = "",
+    section: str = "",
+    combination: str = "",
+    unit: str = "",
+    source: str = "",
+    is_template_doc: bool = False,
+) -> tuple[float | None, dict[str, Any] | None, dict[str, Any] | None]:
+    """Validate member, section, load combination, unit, and non-template provenance for one FEM metric."""
+    if is_template_doc:
+        if raw_value is not None:
+            return None, None, {
+                "metric_key": canon_key,
+                "reason_code": "template_payload_rejected",
+                "reason_zh": "导入文件仍标记为示例/空白模板 (is_template=true 或含模板占位说明)，不予计入有效电算核对",
+            }
+        return None, None, None
+
+    if raw_value is None or (isinstance(raw_value, str) and not raw_value.strip()):
+        return None, None, None
+
+    if isinstance(raw_value, bool):
+        return None, None, {
+            "metric_key": canon_key,
+            "reason_code": "non_numeric_value",
+            "reason_zh": f"指标 {canon_key} 数值类型非法 (bool)",
+        }
+
+    num_val: float
+    inferred_unit = unit.strip()
+    if isinstance(raw_value, (int, float)):
+        num_val = float(raw_value)
+    else:
+        s_val = str(raw_value).strip().replace(",", "")
+        m_num = re.match(r"^([-+]?\d+(?:\.\d+)?)\s*(.*)$", s_val)
+        if not m_num:
+            if s_val.lower() in {"null", "none", "-", "—", "待填", "待导入", "tbd"}:
+                return None, None, None
+            return None, None, {
+                "metric_key": canon_key,
+                "reason_code": "unparseable_value",
+                "reason_zh": f"指标 {canon_key} 无法解析数值: {raw_value!r}",
+            }
+        num_val = float(m_num.group(1))
+        if not inferred_unit and m_num.group(2).strip():
+            inferred_unit = m_num.group(2).strip()
+
+    if not math.isfinite(num_val):
+        return None, None, {
+            "metric_key": canon_key,
+            "reason_code": "non_finite_value",
+            "reason_zh": f"指标 {canon_key} 为非有限数值",
+        }
+
+    rule = _FEM_METRIC_RULES[canon_key]
+    combined_ctx = f"{label_or_member} {section} {combination}".lower()
+    src_low = source.lower()
+
+    if any(tok in src_low for tok in _TEMPLATE_SOURCE_MARKERS):
+        return None, None, {
+            "metric_key": canon_key,
+            "reason_code": "template_source_rejected",
+            "reason_zh": f"指标 {canon_key} 来源标记为模板/示例 ({source})，拒绝作为实算结果",
+        }
+
+    # 1. Member / Section check
+    for bad_tok in rule["forbidden_member_or_section"]:
+        if bad_tok in f"{label_or_member} {section}".lower():
+            return None, None, {
+                "metric_key": canon_key,
+                "reason_code": "member_or_section_mismatch",
+                "reason_zh": f"构件或截面不匹配：'{label_or_member} {section}' 含有非目标位置关键字 '{bad_tok}'",
+            }
+
+    # 2. Load combination check (strictly block SLS '运营标准值' entering ULS '基本组合' slots!)
+    exp_ls = rule["expected_limit_state"]
+    if exp_ls == "ULS":
+        if any(tok in combined_ctx for tok in _SLS_MARKERS):
+            return None, None, {
+                "metric_key": canon_key,
+                "reason_code": "load_combination_mismatch",
+                "reason_zh": (
+                    f"荷载组合不匹配：'{canon_key}' 要求承载能力极限状态基本组合(ULS)，"
+                    f"但导入项标为正常使用/标准值（{label_or_member} | {combination}）"
+                ),
+            }
+    elif exp_ls == "SLS_LIVE":
+        if any(tok in combined_ctx for tok in _ULS_MARKERS) or ("恒载挠度" in combined_ctx) or ("含自重" in combined_ctx and "消除自重" not in combined_ctx):
+            return None, None, {
+                "metric_key": canon_key,
+                "reason_code": "load_combination_mismatch",
+                "reason_zh": (
+                    f"荷载组合不匹配：'{canon_key}' 要求正常使用消除自重活载效应，"
+                    f"但导入项标为基本组合或含恒载总挠度（{label_or_member} | {combination}）"
+                ),
+            }
+    elif exp_ls == "SLS":
+        if any(tok in combined_ctx for tok in _ULS_MARKERS):
+            return None, None, {
+                "metric_key": canon_key,
+                "reason_code": "load_combination_mismatch",
+                "reason_zh": f"荷载组合不匹配：'{canon_key}' 要求正常使用组合，但导入项标为基本组合(ULS)",
+            }
+
+    # 3. Unit check & normalization
+    ok_u, u_scale, u_msg = _normalize_and_validate_fem_unit(inferred_unit, rule["expected_unit_kind"])
+    if not ok_u:
+        return None, None, {
+            "metric_key": canon_key,
+            "reason_code": "unit_mismatch",
+            "reason_zh": u_msg,
+        }
+
+    norm_val = abs(num_val * u_scale)
+    audit_meta = {
+        "member": label_or_member or "已核对构件",
+        "section": section or "控制截面",
+        "combination": combination or ("基本组合(ULS)" if exp_ls == "ULS" else "正常使用组合(SLS)"),
+        "unit": u_msg,
+        "source": source or "external_fem_software",
+        "raw_value": raw_value,
+        "normalized_value": round(norm_val, 4),
+    }
+    return norm_val, audit_meta, None
 
 
 def ingest_independent_fem_results(
     fem_input: Mapping[str, Any] | str | Path | None,
 ) -> dict[str, Any] | None:
-    """Ingest independent commercial/external FEM results (Midas Civil / 桥梁博士 Dr.Bridge) from dict, JSON, CSV, TSV, or Markdown."""
+    """Ingest & item-by-item validate independent FEM results (桥梁博士 Dr.Bridge上/下部分册 / Midas Civil)."""
     if fem_input is None:
         return None
 
@@ -1581,7 +1851,7 @@ def ingest_independent_fem_results(
         p = Path(fem_input).expanduser().resolve()
         txt = p.read_text(encoding="utf-8-sig")
         if p.suffix.lower() == ".json":
-            raw_dict = json.loads(txt) if "json" in globals() else __import__("json").loads(txt)
+            raw_dict = __import__("json").loads(txt)
         else:
             raw_table_text = txt
     elif isinstance(fem_input, str):
@@ -1593,7 +1863,21 @@ def ingest_independent_fem_results(
     else:
         raise TypeError(f"unsupported independent_fem_results type: {type(fem_input).__name__}")
 
+    model_card_in = dict(raw_dict.get("model_card") or {})
+    software_name = str(
+        raw_dict.get("software_name")
+        or model_card_in.get("software_name")
+        or "桥梁博士 Dr.Bridge V4.4 / Midas Civil 独立杆系模型"
+    ).strip()
+    source_type = str(raw_dict.get("source_type") or "external_software").strip()
+    is_template_doc = bool(raw_dict.get("is_template") is True) or any(
+        tok in software_name.lower() for tok in _TEMPLATE_SOURCE_MARKERS
+    )
+
     metrics: dict[str, float] = {}
+    metric_audit: dict[str, dict[str, Any]] = {}
+    rejected_metrics: list[dict[str, Any]] = []
+
     if raw_table_text is not None:
         lines_t = [ln.strip() for ln in raw_table_text.splitlines() if ln.strip()]
         rows_t: list[list[str]] = []
@@ -1609,56 +1893,133 @@ def ingest_independent_fem_results(
             delim = "\t" if "\t" in raw_table_text else ","
             rows_t = [[c.strip() for c in r] for r in csv.reader(io.StringIO(raw_table_text), delimiter=delim) if any(c.strip() for c in r)]
 
-        for row in rows_t:
+        header_cols: list[str] = []
+        data_start = 0
+        if rows_t and any(h_tok in "".join(rows_t[0]) for h_tok in ("项目", "指标", "构件", "截面", "组合", "单位", "计算值", "metric")):
+            header_cols = [c.lower() for c in rows_t[0]]
+            data_start = 1
+
+        for row in rows_t[data_start:]:
             if len(row) < 2:
                 continue
-            label_cell = row[0]
-            # Find first numeric value in remaining columns
-            num_val: float | None = None
-            for cell in row[1:]:
-                cleaned = cell.replace(",", "").replace("kN·m", "").replace("kNm", "").replace("kN", "").replace("mm", "").strip()
-                try:
-                    num_val = float(cleaned)
+            # Identify columns by header if present, otherwise [label, value, unit?, combination?, source?]
+            col_map: dict[str, str] = {}
+            for ci, h_name in enumerate(header_cols):
+                if ci >= len(row):
                     break
-                except ValueError:
-                    continue
-            if num_val is None:
-                continue
-            for canon_key, aliases in _FEM_METRIC_ALIASES.items():
-                if any(alias.lower() in label_cell.lower() for alias in aliases):
-                    metrics[canon_key] = abs(num_val) if canon_key != "girder_live_deflection_mm" else abs(num_val)
-                    break
+                if any(k in h_name for k in ("值", "结果", "value")):
+                    col_map["value"] = row[ci]
+                elif any(k in h_name for k in ("组合", "工况", "comb")):
+                    col_map["combination"] = row[ci]
+                elif any(k in h_name for k in ("截面", "节点", "section")):
+                    col_map["section"] = row[ci]
+                elif any(k in h_name for k in ("单位", "unit")):
+                    col_map["unit"] = row[ci]
+                elif any(k in h_name for k in ("项目", "指标", "名称", "metric")):
+                    col_map["label"] = row[ci]
+                elif any(k in h_name for k in ("构件", "member")):
+                    col_map["member"] = row[ci]
+                elif any(k in h_name for k in ("来源", "软件", "source")):
+                    col_map["source"] = row[ci]
 
-    # Extract from dict (metrics nested under 'metrics'/'results' or top-level)
-    src_metrics = dict(raw_dict.get("metrics") or raw_dict.get("results") or raw_dict)
-    for canon_key, aliases in _FEM_METRIC_ALIASES.items():
-        for alias in aliases:
-            if alias in src_metrics and isinstance(src_metrics[alias], (int, float)) and not isinstance(src_metrics[alias], bool):
-                metrics[canon_key] = abs(float(src_metrics[alias]))
+            label_full = " ".join(x for x in (col_map.get("member", ""), col_map.get("label", row[0]), col_map.get("section", "")) if x).strip()
+            matched_key: str | None = None
+            for canon_key, aliases in _FEM_METRIC_ALIASES.items():
+                if any(alias.lower() in label_full.lower() for alias in aliases):
+                    matched_key = canon_key
+                    break
+            if matched_key is None:
+                continue
+
+            raw_val_cell = col_map.get("value")
+            if raw_val_cell is None:
+                for cell in row[1:]:
+                    if re.search(r"\d", cell):
+                        raw_val_cell = cell
+                        break
+            unit_cell = col_map.get("unit", "")
+            if not unit_cell and len(row) >= 3 and not re.search(r"\d", row[-1]):
+                unit_cell = row[-1]
+
+            norm_v, aud_m, rej_m = _validate_single_fem_metric(
+                matched_key,
+                raw_val_cell,
+                label_or_member=label_full,
+                section=col_map.get("section", ""),
+                combination=col_map.get("combination", row[0]),
+                unit=unit_cell,
+                source=col_map.get("source", software_name),
+                is_template_doc=is_template_doc,
+            )
+            if rej_m is not None:
+                rejected_metrics.append(rej_m)
+            elif norm_v is not None and aud_m is not None:
+                metrics[matched_key] = norm_v
+                metric_audit[matched_key] = aud_m
+
+    # Extract from dict ('metrics', 'results', 'substructure_metrics', or top-level)
+    merged_src_dicts: list[Mapping[str, Any]] = []
+    for k_dict in ("metrics", "results", "substructure_metrics", "drbridge_substructure"):
+        if isinstance(raw_dict.get(k_dict), Mapping):
+            merged_src_dicts.append(raw_dict[k_dict])
+    if not merged_src_dicts:
+        merged_src_dicts.append(raw_dict)
+
+    for src_d in merged_src_dicts:
+        for canon_key, aliases in _FEM_METRIC_ALIASES.items():
+            for alias in aliases:
+                if alias not in src_d:
+                    continue
+                entry = src_d[alias]
+                if isinstance(entry, Mapping):
+                    norm_v, aud_m, rej_m = _validate_single_fem_metric(
+                        canon_key,
+                        entry.get("value"),
+                        label_or_member=str(entry.get("member") or alias),
+                        section=str(entry.get("section") or ""),
+                        combination=str(entry.get("combination") or entry.get("load_combination") or ""),
+                        unit=str(entry.get("unit") or ""),
+                        source=str(entry.get("source") or software_name),
+                        is_template_doc=is_template_doc or bool(entry.get("is_template") is True),
+                    )
+                else:
+                    norm_v, aud_m, rej_m = _validate_single_fem_metric(
+                        canon_key,
+                        entry,
+                        label_or_member=str(raw_dict.get("member") or alias),
+                        section=str(raw_dict.get("section") or ""),
+                        combination=str(raw_dict.get("combination") or ""),
+                        unit=str(raw_dict.get("unit") or ""),
+                        source=software_name,
+                        is_template_doc=is_template_doc,
+                    )
+                if rej_m is not None:
+                    rejected_metrics.append(rej_m)
+                elif norm_v is not None and aud_m is not None:
+                    metrics[canon_key] = norm_v
+                    metric_audit[canon_key] = aud_m
                 break
 
-    model_card_in = dict(raw_dict.get("model_card") or {})
-    software_name = str(
-        raw_dict.get("software_name")
-        or model_card_in.get("software_name")
-        or "桥梁博士 Dr.Bridge V4.4 / Midas Civil 独立杆系模型"
-    ).strip()
     tolerance_pct = float(raw_dict.get("tolerance_pct", model_card_in.get("tolerance_pct", 8.0)))
     fig_paths_raw = raw_dict.get("model_figure_paths") or model_card_in.get("model_figure_paths") or []
     fig_paths = [str(p) for p in fig_paths_raw] if isinstance(fig_paths_raw, (list, tuple)) else []
 
     return {
         "software_name": software_name,
+        "verification_scope": str(raw_dict.get("verification_scope") or ("template_unfilled" if is_template_doc else "external_commercial_fem")),
+        "source_type": source_type,
+        "is_template": is_template_doc,
+        "scope_limitations_zh": str(raw_dict.get("scope_limitations_zh") or ""),
         "tolerance_pct": tolerance_pct,
         "checked_by": str(raw_dict.get("checked_by") or model_card_in.get("checked_by") or "").strip(),
         "model_card": {
             "software_name": software_name,
             "girder_model": str(model_card_in.get("girder_model", "1#代表性边T梁空间梁格/10单元简支梁有限元模型")),
-            "pier_model": str(model_card_in.get("pier_model", "2#中间双柱式桥墩盖梁—双柱空间杆系模型")),
+            "pier_model": str(model_card_in.get("pier_model", "2#中间双柱式桥墩盖梁—双柱—桩顶系梁空间杆系模型")),
             "boundary_conditions": str(
                 model_card_in.get(
                     "boundary_conditions",
-                    "主梁左支点固定铰支座(约束Dx,Dy,Dz)、右支点纵向滑动铰支座(约束Dy,Dz)；双柱墩盖梁与墩柱刚接、桩土效应等效嵌固",
+                    "主梁左支点固定铰支座(约束Dx,Dy,Dz)、右支点纵向滑动铰支座(约束Dy,Dz)；双柱墩盖梁与墩柱刚接、桩土效应支承",
                 )
             ),
             "load_and_combinations": str(
@@ -1670,13 +2031,20 @@ def ingest_independent_fem_results(
             "model_figure_paths": fig_paths,
         },
         "metrics": metrics,
+        "metric_audit": metric_audit,
+        "rejected_metrics": rejected_metrics,
     }
 
 
 def wenchang_bridge_preset() -> dict[str, Any]:
-    """Opening-report parameters for 信阳市文昌中桥 (4×25m 装配式预应力混凝土简支T梁, 单幅9.00m双向两车道)."""
+    """Opening-report parameters for 信阳市文昌中桥 (4×25m 装配式预应力混凝土简支T梁, 单幅9.00m双向两车道).
+
+    Note: Never hardcode another student's reference sample PII on the cover; student/advisor fields
+    come from explicit `--student-info` / `student_metadata` or remain neutral blank cover lines.
+    """
     return {
         "project_name": "信阳市文昌中桥设计（4×25m装配式预应力简支T梁）",
+        "sheet_scheme": "wenchang_22",
         "n_spans": 4,
         "standard_span_m": 25.0,
         "beam_length_m": 24.96,
@@ -1739,14 +2107,10 @@ def wenchang_bridge_preset() -> dict[str, Any]:
             "pile_diameter_m": 1.40,
             "concrete_grade": "C30",
         },
-        "student_metadata": {
+        "project_profile": {
             "school_name": "郑州升达经贸管理学院",
             "college_name": "建筑工程学院",
-            "major_class": "2021 级土木工程本科 1 班",
-            "student_name": "许琦莘",
-            "student_id": "202109020152",
-            "advisor_name": "李小霞（副教授）",
-            "completion_date": "2025 年 4 月",
+            "completion_date": "2027 年 4 月",
         },
     }
 
@@ -2048,10 +2412,45 @@ def collect_failed_structural_checks(
     substructure_checks: dict[str, Any],
     abutment_checks: dict[str, Any] | None = None,
     seismic_verification: dict[str, Any] | None = None,
+    tendon_clearance_audit: dict[str, Any] | None = None,
+    sheet_manifest: Mapping[str, Any] | None = None,
     consistency: dict[str, Any],
 ) -> list[dict[str, Any]]:
     """Aggregate every failed structural or consistency check with governing demand, allowable limit, and sheet IDs."""
+    from .bridge_tendon_and_support import resolve_sheet_no
+
     failed: list[dict[str, Any]] = []
+    _ql_to_role = {
+        "QL-01": "general_notes",
+        "QL-02": "boq_summary",
+        "QL-03": "bridge_elevation",
+        "QL-04": "bridge_plan",
+        "QL-05": "deck_cross_section",
+        "QL-06": "girder_longitudinal",
+        "QL-07": "girder_cross_details",
+        "QL-08": "tendon_layout",
+        "QL-09": "girder_web_rebar",
+        "QL-10": "girder_flange_rebar",
+        "QL-11": "diaphragm_rebar",
+        "QL-12": "bearing_layout",
+        "QL-13": "deck_ancillary",
+        "QL-14": "pier_general",
+        "QL-15": "abutment_general",
+        "QL-16": "pier_cap_rebar",
+        "QL-17": "pier_column_pile_rebar",
+        "QL-18": "abutment_rebar",
+    }
+
+    def _map_dnos(legacy_dnos: list[str]) -> list[str]:
+        if not sheet_manifest:
+            return legacy_dnos
+        out_d: list[str] = []
+        for ld in legacy_dnos:
+            rk = _ql_to_role.get(ld)
+            mapped = resolve_sheet_no(sheet_manifest, rk, ld) if rk else ld
+            if mapped not in out_d:
+                out_d.append(mapped)
+        return out_d
 
     def _add(
         component: str,
@@ -2069,7 +2468,8 @@ def collect_failed_structural_checks(
                 "demand": demand,
                 "allowable": allowable,
                 "unit": unit,
-                "related_drawings": related_drawings,
+                "related_drawings": _map_dnos(related_drawings),
+                "legacy_related_drawings": list(related_drawings),
                 "message": message,
             }
         )
@@ -2314,6 +2714,29 @@ def collect_failed_structural_checks(
             ["QL-01", "QL-14", "QL-17"],
             str(seismic_verification.get("reason", "E1/E2 抗震验算未通过")),
         )
+
+    if tendon_clearance_audit is not None and not tendon_clearance_audit.get("passed", True):
+        td_sheets = ["QL-08"]
+        if sheet_manifest and (sheet_manifest.get("by_role") or {}).get("tendon_coordinates"):
+            td_sheets_mapped = [
+                sheet_manifest["by_role"]["tendon_layout"]["drawing_no"],
+                sheet_manifest["by_role"]["tendon_coordinates"]["drawing_no"],
+            ]
+        else:
+            td_sheets_mapped = _map_dnos(td_sheets)
+        for viol in tendon_clearance_audit.get("violations", []):
+            failed.append(
+                {
+                    "component": f"预应力钢束三维边界与孔道净距 ({viol['tendon_id']})",
+                    "check_key": f"tendon_clearance_audit.{viol['code']}.{viol['tendon_id']}",
+                    "demand": viol.get("centroid_overrun_mm") or viol.get("shortfall_mm", 0.0),
+                    "allowable": 0.0,
+                    "unit": "mm",
+                    "related_drawings": td_sheets_mapped,
+                    "legacy_related_drawings": ["QL-08"],
+                    "message": str(viol["message"]),
+                }
+            )
 
     for iss in consistency.get("issues", []):
         if iss.get("severity") == "error":
@@ -2725,12 +3148,74 @@ def run_full_bridge_calculation(params: dict[str, Any] | None = None) -> dict[st
         bearing_length_mm=brg_l_mm,
     )
 
+    from .bridge_tendon_and_support import (
+        audit_tendon_3d_section_clearance,
+        build_bridge_sheet_manifest,
+        build_bridge_tendon_3d_geometry,
+        compute_shared_support_layout,
+        parse_drbridge_tendon_and_section_model,
+    )
+
     unresolved_field_set = {str(u["field"]) for u in unresolved_assumptions}
     pier_pile_len_m = float(substructure_checks["bored_pile"]["design_length_m"])
     abut_pile_len_m = float(abutment_checks["bored_pile"]["design_length_m"])
     for u_item in unresolved_assumptions:
         if u_item["field"] == "pile_length_m":
             u_item["assumed_value"] = f"桥墩桩长 {pier_pile_len_m:g}m / 桥台桩长 {abut_pile_len_m:g}m"
+
+    # Unified Sheet Manifest (`wenchang_22` default for Wenchang, `ql_18` for generic legacy)
+    default_scheme = "wenchang_22" if preset_name == "wenchang" else "ql_18"
+    sheet_manifest = build_bridge_sheet_manifest(
+        sheet_scheme=str(cfg.get("sheet_scheme", default_scheme)),
+        custom_manifest=cfg.get("sheet_manifest"),
+        sheet_title_overrides=cfg.get("sheet_title_overrides"),
+        extra_sheets=cfg.get("extra_sheets"),
+    )
+
+    # Shared Support Coordinate & Dimension Chain (480 + 40 + 480 = 1000 mm & 20 + 74 + 150 = 244 mm)
+    support_layout = compute_shared_support_layout(
+        standard_span_m=std_span_m,
+        beam_length_m=beam_len_m,
+        calc_span_m=envelopes["calc_span_m"],
+        bearing_center_offset_m=cfg.get("bearing_center_offset_m"),
+        bearing_model=bearing_checks["bearing_model"],
+        n_spans=n_spans,
+        n_girders=lateral["n_girders"],
+    )
+
+    # Dr.Bridge `new.txt` / JSON tendon model ingestion + 3D curve & station-by-station boundary clearance check
+    raw_tendon_model = (
+        raw_cfg.get("drbridge_new_txt")
+        or raw_cfg.get("drbridge_tendon_model")
+        or raw_cfg.get("tendon_model")
+        or cfg.get("drbridge_new_txt")
+        or cfg.get("drbridge_tendon_model")
+        or cfg.get("tendon_model")
+    )
+    parsed_tendon_model = parse_drbridge_tendon_and_section_model(raw_tendon_model)
+    bulb_w_calc = float(t_cfg.get("bulb_width_mm", 560.0 if section["effective_flange_width_mm"] <= 2000.0 else 600.0))
+    tendon_3d_geometry = build_bridge_tendon_3d_geometry(
+        n_tendons=int(prestress["recommended_tendons"]),
+        strands_per_tendon=int(prestress["strands_per_tendon"]),
+        beam_length_mm=beam_len_m * 1000.0,
+        calc_span_mm=float(envelopes["calc_span_m"]) * 1000.0,
+        girder_height_mm=float(section["mid_span_mm"]["height"]),
+        bulb_width_mm=bulb_w_calc,
+        duct_diameter_mm=float((parsed_tendon_model or {}).get("section_overrides", {}).get("duct_diameter_mm", 70.0)),
+        parsed_model=parsed_tendon_model,
+    )
+    precast_flange_mm = float(lateral["girder_spacing_m"]) * 1000.0 - 400.0
+    tendon_clearance_audit = audit_tendon_3d_section_clearance(
+        tendon_3d_geometry,
+        girder_height_mm=float(section["mid_span_mm"]["height"]),
+        flange_width_mm=max(1000.0, precast_flange_mm),
+        web_thick_mm=float(t_cfg.get("web_thick_mm", 200.0)),
+        end_web_thick_mm=float(t_cfg.get("end_web_thick_mm", bulb_w_calc)),
+        bulb_width_mm=bulb_w_calc,
+        bulb_height_mm=float(t_cfg.get("bulb_height_mm", 200.0)),
+        min_cover_mm=float(cfg.get("tendon_min_cover_mm", 30.0)),
+        section_overrides=(parsed_tendon_model or {}).get("section_overrides"),
+    )
 
     ledger = build_rebar_and_tendon_ledger(
         n_spans=n_spans,
@@ -2751,6 +3236,8 @@ def run_full_bridge_calculation(params: dict[str, Any] | None = None) -> dict[st
         lateral=lateral,
         unresolved_fields=unresolved_field_set,
         standard_span_m=std_span_m,
+        sheet_manifest=sheet_manifest,
+        tendon_3d_geometry=tendon_3d_geometry,
     )
     boq = compute_bridge_bill_of_quantities(
         n_spans=n_spans,
@@ -2772,6 +3259,9 @@ def run_full_bridge_calculation(params: dict[str, Any] | None = None) -> dict[st
         ledger=ledger,
         standard_span_m=std_span_m,
         clear_width_m=lateral["clear_width_m"],
+        sheet_manifest=sheet_manifest,
+        support_layout=support_layout,
+        tendon_3d_geometry=tendon_3d_geometry,
     )
 
     actual_pedestals = len(cap_beam["girder_positions_m"])
@@ -2824,6 +3314,8 @@ def run_full_bridge_calculation(params: dict[str, Any] | None = None) -> dict[st
         substructure_checks=substructure_checks,
         abutment_checks=abutment_checks,
         seismic_verification=seismic_verification,
+        tendon_clearance_audit=tendon_clearance_audit,
+        sheet_manifest=sheet_manifest,
         consistency=consistency,
     )
 
@@ -2931,6 +3423,19 @@ def run_full_bridge_calculation(params: dict[str, Any] | None = None) -> dict[st
     references_list = list(cfg.get("references") or default_graduation_references())
     references_audit = audit_references_compliance(references_list)
     fem_ingested = ingest_independent_fem_results(raw_cfg.get("independent_fem_results"))
+    sub_fem_ingested = ingest_independent_fem_results(raw_cfg.get("substructure_fem_results"))
+    if sub_fem_ingested is not None:
+        if fem_ingested is None:
+            fem_ingested = sub_fem_ingested
+        else:
+            # Real imported Dr.Bridge substructure results merge & override substructure slots
+            fem_ingested["metrics"].update(sub_fem_ingested["metrics"])
+            fem_ingested.setdefault("metric_audit", {}).update(sub_fem_ingested.get("metric_audit") or {})
+            fem_ingested.setdefault("rejected_metrics", []).extend(sub_fem_ingested.get("rejected_metrics") or [])
+
+    project_profile = dict(cfg.get("project_profile") or {})
+    if isinstance(raw_cfg.get("student_metadata"), Mapping):
+        project_profile.update(raw_cfg["student_metadata"])
 
     report_out: dict[str, Any] = {
         "status": calculation_status,
@@ -2938,8 +3443,15 @@ def run_full_bridge_calculation(params: dict[str, Any] | None = None) -> dict[st
         "graduation_readiness_status": graduation_readiness_status,
         "status_summary_zh": status_summary_zh,
         "failed_checks": failed_checks,
+        "project_profile": project_profile,
+        "sheet_manifest": sheet_manifest,
+        "support_layout": support_layout,
+        "tendon_3d_geometry": tendon_3d_geometry,
+        "tendon_clearance_audit": tendon_clearance_audit,
         "project_summary": {
             "project_name": str(cfg.get("project_name", f"{n_spans}×{std_span_m:g}m 预应力混凝土简支T梁桥")),
+            "sheet_scheme": sheet_manifest["sheet_scheme"],
+            "sheet_count": sheet_manifest["sheet_count"],
             "n_spans": n_spans,
             "standard_span_m": std_span_m,
             "beam_length_m": beam_len_m,
@@ -2984,10 +3496,32 @@ def run_full_bridge_calculation(params: dict[str, Any] | None = None) -> dict[st
     }
     report_out["independent_cross_check"] = compute_independent_hand_cross_check(report_out)
     fem_solver_mode = str(raw_cfg.get("fem_solver", "none")).strip().lower()
-    if fem_ingested is None and fem_solver_mode in {"builtin_frame_fem", "builtin", "frame_fem"}:
+    if fem_solver_mode in {"builtin_frame_fem", "builtin", "frame_fem"}:
         from .bridge_fem_solver import solve_independent_frame_fem
 
-        fem_ingested = solve_independent_frame_fem(report_out)
-        report_out["independent_fem_results"] = fem_ingested
+        builtin_res = solve_independent_frame_fem(report_out)
+        if fem_ingested is None:
+            fem_ingested = builtin_res
+            report_out["independent_fem_results"] = fem_ingested
+        else:
+            # Real imported Dr.Bridge results take strict priority; builtin fills only missing metrics with honest method tag!
+            merged_metrics = dict(builtin_res["metrics"])
+            merged_metrics.update(fem_ingested["metrics"])
+            merged_audit = {
+                k: {
+                    "member": "内置杆系矩阵复核",
+                    "section": "控制截面",
+                    "combination": "基本组合/活载标准",
+                    "unit": "-",
+                    "source": "builtin_solver",
+                    "normalized_value": v,
+                }
+                for k, v in builtin_res["metrics"].items()
+            }
+            merged_audit.update(fem_ingested.get("metric_audit") or {})
+            fem_ingested["metrics"] = merged_metrics
+            fem_ingested["metric_audit"] = merged_audit
+            fem_ingested["builtin_fallback_used"] = True
+            fem_ingested["scope_limitations_zh"] = builtin_res["scope_limitations_zh"]
     report_out["defense_verification_table"] = build_defense_verification_table(report_out, fem_ingested)
     return report_out

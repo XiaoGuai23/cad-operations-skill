@@ -42,7 +42,12 @@ from .bridge_calc_book import (
     build_defense_verification_table,
     compute_independent_hand_cross_check,
 )
-from .bridge_drawings import DEFAULT_18_SHEET_INDEX
+from .bridge_tendon_and_support import (
+    build_bridge_sheet_manifest,
+    format_sheet_cite,
+    resolve_project_and_student_profile,
+    resolve_sheet_no,
+)
 
 _PAGE_CONTENT_WIDTH_CM = 15.5  # 21.0 cm A4 - 3.0 cm left margin - 2.5 cm right margin
 
@@ -273,6 +278,18 @@ def _add_formula_para(doc: Document, expr: str, eq_no: str = "") -> Any:
     return p
 
 
+def _attach_word_bookmark(paragraph: Any, bookmark_name: str, bm_id: int) -> None:
+    """Attach a real Word `<w:bookmarkStart>` / `<w:bookmarkEnd>` anchor to a heading or appendix row."""
+    p_el = paragraph._p
+    bm_start = OxmlElement("w:bookmarkStart")
+    bm_start.set(qn("w:id"), str(bm_id))
+    bm_start.set(qn("w:name"), bookmark_name)
+    bm_end = OxmlElement("w:bookmarkEnd")
+    bm_end.set(qn("w:id"), str(bm_id))
+    p_el.insert(0, bm_start)
+    p_el.append(bm_end)
+
+
 def _add_chapter_heading(
     doc: Document,
     title: str,
@@ -280,7 +297,7 @@ def _add_chapter_heading(
     centered: bool = False,
     page_break_before: bool = True,
     include_in_toc: bool = True,
-    toc_entries: list[tuple[int, str]] | None = None,
+    toc_entries: list[tuple[int, str, str]] | None = None,
 ) -> Any:
     if page_break_before:
         doc.add_page_break()
@@ -292,12 +309,15 @@ def _add_chapter_heading(
     pf.space_after = Pt(8)
     pf.line_spacing = 1.5
     pf.keep_with_next = True
+    r = p.add_run(title)
+    _set_run_fonts(r, zh_font="黑体", size_pt=16.0, bold=True)
     if include_in_toc:
         _set_paragraph_outline_level(p, 0)
         if toc_entries is not None:
-            toc_entries.append((1, title))
-    r = p.add_run(title)
-    _set_run_fonts(r, zh_font="黑体", size_pt=16.0, bold=True)
+            bm_idx = len(toc_entries) + 1
+            bm_name = f"_TocBridge_{bm_idx}"
+            _attach_word_bookmark(p, bm_name, bm_idx)
+            toc_entries.append((1, title, bm_name))
     return p
 
 
@@ -306,7 +326,7 @@ def _add_section_heading(
     title: str,
     *,
     level: int = 2,
-    toc_entries: list[tuple[int, str]] | None = None,
+    toc_entries: list[tuple[int, str, str]] | None = None,
 ) -> Any:
     style_name = "Heading 2" if level == 2 else "Heading 3"
     p = doc.add_paragraph(style=style_name if style_name in doc.styles else None)
@@ -318,11 +338,14 @@ def _add_section_heading(
     pf.line_spacing = 1.5
     pf.keep_with_next = True
     _set_paragraph_outline_level(p, 1 if level == 2 else 2)
-    if toc_entries is not None:
-        toc_entries.append((level, title))
     sz = 15.0 if level == 2 else 14.0
     r = p.add_run(title)
     _set_run_fonts(r, zh_font="黑体", size_pt=sz, bold=True)
+    if toc_entries is not None:
+        bm_idx = len(toc_entries) + 1
+        bm_name = f"_TocBridge_{bm_idx}"
+        _attach_word_bookmark(p, bm_name, bm_idx)
+        toc_entries.append((level, title, bm_name))
     return p
 
 
@@ -369,12 +392,15 @@ def _add_three_line_table(
     *,
     col_widths_cm: Sequence[float] | None = None,
     max_rows_per_chunk: int = 13,
+    row_bookmarks: Sequence[str | None] | None = None,
+    bookmark_id_base: int = 500,
 ) -> int:
-    """Render a standard 10.5pt academic three-line table with cantSplit, tblHeader, and automatic 续表 chunking."""
+    """Render a standard 10.5pt academic three-line table with cantSplit, tblHeader, bookmarks, and 续表 chunking."""
     widths = list(col_widths_cm) if col_widths_cm is not None else _compute_auto_col_widths_cm(headers, rows)
     row_list = list(rows)
     chunks = [row_list[i : i + max_rows_per_chunk] for i in range(0, max(1, len(row_list)), max_rows_per_chunk)]
     created_tables = 0
+    global_row_idx = 0
 
     for chunk_idx, chunk_rows in enumerate(chunks):
         if chunk_idx > 0:
@@ -415,6 +441,11 @@ def _add_three_line_table(
             is_last = ri == n_c - 1
             tr_obj = tbl.rows[ri + 1]
             _set_row_cant_split_and_header(tr_obj, is_header=False, min_height_cm=0.66)
+            bm_r = (
+                row_bookmarks[global_row_idx]
+                if (row_bookmarks is not None and global_row_idx < len(row_bookmarks))
+                else None
+            )
             for ci, val in enumerate(row_vals):
                 cell = tr_obj.cells[ci]
                 _set_cell_width_cm(cell, widths[ci])
@@ -434,6 +465,9 @@ def _add_three_line_table(
                 p.paragraph_format.space_after = Pt(1.5)
                 r = p.add_run(s_val)
                 _set_run_fonts(r, zh_font="宋体", size_pt=10.5, bold=False)
+                if ci == 0 and bm_r:
+                    _attach_word_bookmark(p, bm_r, bookmark_id_base + global_row_idx)
+            global_row_idx += 1
 
     return created_tables
 
@@ -490,9 +524,9 @@ def _split_thesis_title_two_lines(title: str) -> tuple[str, str]:
 def _populate_toc_field_paragraphs(
     doc: Document,
     toc_anchor_para: Any,
-    toc_entries: Sequence[tuple[int, str]],
+    toc_entries: Sequence[tuple[int, str, str]],
 ) -> int:
-    """Populate a Word `TOC \\o "1-3" \\h \\z \\u` complex field with pre-rendered 3-level entries."""
+    """Populate a Word `TOC \\o "1-3" \\h \\z \\u` field with bookmark-linked (`w:hyperlink w:anchor`) 3-level entries."""
     if not toc_entries:
         return 0
 
@@ -501,7 +535,7 @@ def _populate_toc_field_paragraphs(
     insert_idx = parent_el.index(anchor_el)
 
     est_page = 1
-    for idx, (lvl, title_str) in enumerate(toc_entries):
+    for idx, (lvl, title_str, bm_anchor) in enumerate(toc_entries):
         if idx > 0 and lvl == 1:
             est_page += 2
         elif lvl == 2 and idx % 3 == 0:
@@ -551,6 +585,13 @@ def _populate_toc_field_paragraphs(
             size_pt=12.0 if is_l1 else 10.5,
             bold=is_l1,
         )
+        # Wrap TOC entry run in internal Word bookmark hyperlink `<w:hyperlink w:anchor="...">`
+        hl_el = OxmlElement("w:hyperlink")
+        hl_el.set(qn("w:anchor"), bm_anchor)
+        hl_el.set(qn("w:history"), "1")
+        p._p.remove(r_txt._r)
+        hl_el.append(r_txt._r)
+        p._p.append(hl_el)
 
         if idx == len(toc_entries) - 1:
             r_e = p.add_run()
@@ -602,23 +643,40 @@ def generate_college_graduation_thesis_docx(
     refs = list(calc_report.get("references") or default_graduation_references())
     figs_by_id = dict((figures_summary or {}).get("by_id") or {})
 
-    is_wenchang = "文昌" in str(ps.get("project_name", ""))
+    # Co-read unified project/student profile (zero hardcoded reference sample PII!) & unified sheet_manifest!
+    prof = resolve_project_and_student_profile(calc_report, student_metadata)
+    school_name = prof["school_name"]
+    college_name = prof["college_name"]
+    major_class = prof["major_class"]
+    student_name = prof["student_name"]
+    student_id = prof["student_id"]
+    advisor_name = prof["advisor_name"]
+    completion_date = prof["completion_date"]
+    thesis_title = prof["thesis_title"]
+    thesis_title_en = prof["thesis_title_en"]
     meta = dict(student_metadata or {})
-    school_name = str(meta.get("school_name") or ("郑州升达经贸管理学院" if is_wenchang else "土木工程专业本科毕业设计"))
-    college_name = str(meta.get("college_name") or ("建筑工程学院" if is_wenchang else "土木与交通工程学院"))
-    major_class = str(meta.get("major_class") or ("2021 级土木工程本科 1 班" if is_wenchang else "土木工程本科 1 班"))
-    student_name = str(meta.get("student_name") or ("许琦莘" if is_wenchang else "设计人"))
-    student_id = str(meta.get("student_id") or ("202109020152" if is_wenchang else "20210001"))
-    advisor_name = str(meta.get("advisor_name") or ("李小霞（副教授）" if is_wenchang else "指导教师（副教授）"))
-    completion_date = str(meta.get("completion_date") or "2025 年 4 月")
-    thesis_title = str(meta.get("thesis_title") or ps["project_name"])
-    thesis_title_en = str(
-        meta.get("thesis_title_en")
-        or f"Design of {ps['project_name'].split('（')[0]} ({ps['n_spans']}×{ps['standard_span_m']:g} m Precast PC Simply Supported T-Girder Bridge)"
+    if prof.get("school_logo_path") and "school_logo_path" not in meta:
+        meta["school_logo_path"] = prof["school_logo_path"]
+
+    sheet_manifest = calc_report.get("sheet_manifest") or build_bridge_sheet_manifest(
+        sheet_scheme="wenchang_22" if "文昌" in str(ps.get("project_name", "")) else "ql_18"
     )
+    sh_count = int(sheet_manifest["sheet_count"])
+    sh_range = str(sheet_manifest["range_label"])
+
+    def _scite(role_k: str, fb: str = "") -> str:
+        return format_sheet_cite(resolve_sheet_no(sheet_manifest, role_k, fb))
+
+    def _stitle(role_k: str, fb: str = "") -> str:
+        by_r = sheet_manifest.get("by_role") or {}
+        if role_k in by_r:
+            return str(by_r[role_k]["title"])
+        return fb
 
     ext_fem_status = str(def_tbl.get("external_fem_status", "pending_external_import"))
-    is_fem_verified = ext_fem_status == "verified"
+    ver_scope = str(def_tbl.get("verification_scope", "pending"))
+    is_fem_verified = ext_fem_status == "verified" and ver_scope != "builtin_simplified_frame_fem"
+    is_builtin_fem = ext_fem_status == "verified" and ver_scope == "builtin_simplified_frame_fem"
 
     doc = Document()
     _enable_auto_update_fields(doc)
@@ -713,11 +771,14 @@ def generate_college_graduation_thesis_docx(
 
     _add_chapter_heading(doc, "摘  要", centered=True, page_break_before=False, include_in_toc=False)
 
-    fem_clause_zh = (
-        "手算解析与独立有限元杆系模型复核吻合良好"
-        if is_fem_verified
-        else "已完成手算解析与杆系程序交叉复核并整理独立电算校核表（外部软件结果待导入）"
-    )
+    if is_fem_verified:
+        fem_clause_zh = "手算解析与外部独立有限元模型复核吻合良好"
+    elif is_builtin_fem:
+        fem_clause_zh = "已完成手算解析与内置平面杆系矩阵简化复核（商业有限元结果可进一步覆盖）"
+    elif ext_fem_status == "partially_verified":
+        fem_clause_zh = f"已完成部分独立电算指标核对（{def_tbl.get('compared_required_count', 0)}/{def_tbl.get('required_metric_count', 4)}项，余项待补齐）"
+    else:
+        fem_clause_zh = "已完成手算解析与杆系程序交叉复核并整理独立电算校核表（外部软件结果待导入）"
     zh_abs_p1 = (
         f"本设计针对“{ps['project_name']}”开展方案比选、结构受力计算与全套施工图设计。"
         f"全桥标准跨径为 {ps['n_spans']}×{ps['standard_span_m']:g} m（总长 {hydro['total_bridge_length_m']:g} m，计算跨径 {ps['calc_span_m']:g} m），"
@@ -728,7 +789,7 @@ def generate_college_graduation_thesis_docx(
         f"上部布置 {lat['n_girders']} 片高 {sec['mid_span_mm']['height']/1000:.2f} m 的 C50 预制T梁，按杠杆法与偏心压力法求得边梁跨中弯矩 Md={gc['uls_flexure']['demand_md_knm']:.1f} kN·m、支点剪力 Vd={gc['uls_shear']['demand_vd_kn']:.1f} kN；"
         f"配置 {pre['recommended_tendons']} 束 Φs15.2-{pre['strands_per_tendon']} 钢绞线，正斜截面承载力、抗裂与活载挠度均满足 JTG 3362—2018 限值。"
         f"下部采用双柱式桥墩与桩柱式桥台，按 JTG 3363—2019 独立核定墩桩长 {ps['pier_pile_length_m']:g} m、台桩长 {ps['abutment_pile_length_m']:g} m。"
-        f"{fem_clause_zh}，配套绘出 QL-01～QL-18 共 18 张 A3 施工图。"
+        f"{fem_clause_zh}，配套绘出 {sh_range} 共 {sh_count} 张 A3 施工图。"
     )
     _add_body_para(doc, zh_abs_p1)
     _add_body_para(doc, zh_abs_p2)
@@ -924,9 +985,14 @@ def generate_college_graduation_thesis_docx(
     bulb_w_mm = 560 if sec["effective_flange_width_mm"] <= 2000 else 600
 
     _add_section_heading(doc, "3.1 主梁横断面布置与细部构造尺寸", level=2, toc_entries=toc_entries)
-    _add_section_heading(doc, "3.1.1 外边梁与中梁跨中及梁端截面尺寸（提取自 QL-05、QL-07）", level=3, toc_entries=toc_entries)
+    _add_section_heading(
+        doc,
+        f"3.1.1 外边梁与中梁跨中及梁端截面尺寸（提取自 {_scite('deck_cross_section', 'QL-05')}、{_scite('girder_cross_details', 'QL-07')}）",
+        level=3,
+        toc_entries=toc_entries,
+    )
     _body(
-        f"全幅横桥向布置 {lat['n_girders']} 片预制 C50 混凝土T梁，主梁中心间距 S={lat['girder_spacing_m']*1000:g} mm，相邻预制翼缘间设 400 mm 现浇 C50 湿接缝连接成整体桥面（对应图号 QL-05～QL-07）[6,9]。"
+        f"全幅横桥向布置 {lat['n_girders']} 片预制 C50 混凝土T梁，主梁中心间距 S={lat['girder_spacing_m']*1000:g} mm，相邻预制翼缘间设 400 mm 现浇 C50 湿接缝连接成整体桥面（对应 {_scite('deck_cross_section', 'QL-05')}～{_scite('girder_cross_details', 'QL-07')}：{_stitle('girder_longitudinal', '预制T梁一般构造图')}）[6,9]。"
         f"主梁高 h={mid_mm['height']:g} mm（高跨比 1/{ps['standard_span_m']/(mid_mm['height']/1000):.1f}），跨中标准腹板厚 200 mm，马蹄宽×高={bulb_w_mm}×200 mm；距支点 1.20 m 范围内腹板加厚至 {bulb_w_mm} mm 并设 1.00 m 渐变段。全跨共设 5 道横隔梁（间距 4×{ps['calc_span_m']/4:g} m），外边梁与中梁实画细部尺寸见图 3-1。"
     )
     if _embed_figure_if_available(doc, figs_by_id.get("fig_girder_detail"), width_cm=14.3):
@@ -1041,9 +1107,14 @@ def generate_college_graduation_thesis_docx(
     _add_chapter_heading(doc, "5  预应力钢束估算、布置及预应力损失计算", centered=False, page_break_before=True, toc_entries=toc_entries)
     _add_section_heading(doc, "5.1 预应力钢束估算与曲线几何布置", level=2, toc_entries=toc_entries)
     _add_section_heading(doc, "5.1.1 按抗裂与承载力双控估算钢绞线股数", level=3, toc_entries=toc_entries)
+    td_cites = (
+        f"{_scite('tendon_layout', '08')}、{_scite('tendon_coordinates', '09')}（{_stitle('tendon_coordinates', '束心坐标及定位图')}）"
+        if (sheet_manifest.get("by_role") or {}).get("tendon_coordinates")
+        else _scite("tendon_layout", "QL-08")
+    )
     _body(
         f"选用 1×7 股低松弛钢绞线 Φs15.2（单股面积 140 mm²，fpk=1860 MPa，fpd=1260 MPa）[3,9]：正常使用抗裂需 {pre['required_strands_sls']} 股，正截面抗弯承载力需 {pre['required_strands_uls']} 股。"
-        f"综合马蹄管道净距与锚具模数，单片T梁采用 {pre['recommended_tendons']} 束 Φs15.2-{pre['strands_per_tendon']}（编号 N1～N{pre['recommended_tendons']}，共 {pre['provided_strands']} 股，Ap={pre['provided_strands']*140:g} mm²，对应图号 QL-08），两端对称张拉，控制应力 σcon=0.75fpk={pre['sigma_con_mpa']:g} MPa [3]。"
+        f"综合马蹄管道净距与锚具模数，单片T梁采用 {pre['recommended_tendons']} 束 Φs15.2-{pre['strands_per_tendon']}（编号 N1～N{pre['recommended_tendons']}，共 {pre['provided_strands']} 股，Ap={pre['provided_strands']*140:g} mm²，对应 {td_cites}），两端对称张拉，控制应力 σcon=0.75fpk={pre['sigma_con_mpa']:g} MPa [3]。"
     )
 
     _add_section_heading(doc, "5.2 分阶段预应力损失与有效预应力分布", level=2, toc_entries=toc_entries)
@@ -1096,7 +1167,7 @@ def generate_college_graduation_thesis_docx(
 
     _add_section_heading(doc, "6.1.2 支点斜截面抗剪承载力验算", level=3, toc_entries=toc_entries)
     _body(
-        f"腹板配置双肢 Φ12 HRB400 箍筋 GJ1（距梁端 2080 mm 加密区 @100 mm、跨中区 @150 mm，对应图号 QL-09），计入弯起束抗剪分量 Vpb={us['vpb_kn']:.2f} kN 后，斜截面抗剪承载力 Vu={us['capacity_vu_kn']:.2f} kN ≥ Vd={us['demand_vd_kn']:.2f} kN，且小于抗剪截面尺寸上限 {us['size_upper_limit_kn']:.2f} kN [3]。"
+        f"腹板配置双肢 Φ12 HRB400 箍筋 GJ1（距梁端 2080 mm 加密区 @100 mm、跨中区 @150 mm，对应 {_scite('girder_web_rebar', 'QL-09')}），计入弯起束抗剪分量 Vpb={us['vpb_kn']:.2f} kN 后，斜截面抗剪承载力 Vu={us['capacity_vu_kn']:.2f} kN ≥ Vd={us['demand_vd_kn']:.2f} kN，且小于抗剪截面尺寸上限 {us['size_upper_limit_kn']:.2f} kN [3]。"
     )
 
     _add_section_heading(doc, "6.2 持久状况抗裂、应力及正常使用挠度验算", level=2, toc_entries=toc_entries)
@@ -1132,16 +1203,16 @@ def generate_college_graduation_thesis_docx(
     ds = sc_chk["deck_slab"]
     dp = sc_chk["diaphragm"]
     _add_section_heading(doc, "7.1 行车道板与刚性中横隔梁计算", level=2, toc_entries=toc_entries)
-    _add_section_heading(doc, "7.1.1 悬臂行车道板内力与配筋验算（QL-10）", level=3, toc_entries=toc_entries)
+    _add_section_heading(doc, f"7.1.1 悬臂行车道板内力与配筋验算（{_scite('girder_flange_rebar', 'QL-10')}）", level=3, toc_entries=toc_entries)
     _body(
         f"按公路-I级车辆单轮重 P=140 kN 最不利局部分布计算 [2,3]：悬臂板根部每延米基本组合弯矩 Md={ds['m_uls_knm_per_m']:.2f} kN·m/m、剪力 Vd={ds['q_uls_kn_per_m']:.2f} kN/m；翼缘顶层配置 W1 Φ12@125（As=904.8 mm²/m），抗弯承载力 Mu={ds['mu_capacity_knm_per_m']:.2f} kN·m/m ≥ Md，满足要求。"
     )
-    _add_section_heading(doc, "7.1.2 跨中刚性横隔梁内力与配筋验算（QL-11）", level=3, toc_entries=toc_entries)
+    _add_section_heading(doc, f"7.1.2 跨中刚性横隔梁内力与配筋验算（{_scite('diaphragm_rebar', 'QL-11')}）", level=3, toc_entries=toc_entries)
     _body(
         f"中横隔梁按偏心受压刚性横梁计算横向弯矩 [6,8]：基本组合正弯矩 Md={dp['m_uls_knm']:.2f} kN·m，底部配 HG1 4Φ25 HRB400 主筋，抗弯承载力 Mu={dp['mu_capacity_knm']:.2f} kN·m ≥ Md，合格。"
     )
 
-    _add_section_heading(doc, "7.2 板式橡胶支座选型与力学验算（QL-12）", level=2, toc_entries=toc_entries)
+    _add_section_heading(doc, f"7.2 板式橡胶支座选型与力学验算（{_scite('bearing_layout', 'QL-12')}）", level=2, toc_entries=toc_entries)
     _body(
         f"单支座最大标准组合反力 Rmax={bc['max_reaction_kn']:.2f} kN，最小恒载反力 Rmin={bc['min_reaction_kn']:.2f} kN。按 JT/T 4—2019 选用 {bc['bearing_model']} 板式橡胶支座（全桥 {boq['bearing_count']} 块）[10]：平均压应力 σc={bc['compressive_stress_mpa']:.2f} MPa ≤ {bc['allowable_stress_mpa']:.1f} MPa，最小接触应力 {bc['min_contact_stress_mpa']:.2f} MPa ≥ 1.5 MPa（无脱空），水平剪切角正切 tanγ={bc['shear_strain_tan_gamma']:.3f} ≤ {bc['allowable_tan_gamma']:.2f}，全部合格。"
     )
@@ -1150,17 +1221,32 @@ def generate_college_graduation_thesis_docx(
     # Chapter 8: 8  中间双柱式桥墩及钻孔灌注桩设计计算
     # ------------------------------------------------------------------
     _add_chapter_heading(doc, "8  中间双柱式桥墩及钻孔灌注桩设计计算", centered=False, page_break_before=True, toc_entries=toc_entries)
-    _add_section_heading(doc, "8.1 双跨连续支反力与双柱墩盖梁验算（QL-14、QL-16）", level=2, toc_entries=toc_entries)
+    cap_cites_8 = (
+        f"{_scite('pier_general', '15')}、{_scite('pier_cap_rebar', '17')}、{_scite('pier_cap_secondary', '18')}"
+        if (sheet_manifest.get("by_role") or {}).get("pier_cap_secondary")
+        else f"{_scite('pier_general', 'QL-14')}、{_scite('pier_cap_rebar', 'QL-16')}"
+    )
+    _add_section_heading(doc, f"8.1 双跨连续支反力与双柱墩盖梁验算（{cap_cites_8}）", level=2, toc_entries=toc_entries)
     _add_section_heading(doc, "8.1.1 双跨支座反力与双悬臂盖梁配筋验算", level=3, toc_entries=toc_entries)
     _body(
         f"中间桥墩承受相邻两跨恒载与双跨影响线活载反力 [2,9]，5 个支点基本组合集中反力合计 {sum(pr_sum['two_span_pier_uls_per_girder_kn']):.2f} kN。"
         f"盖梁长 {cap_1d['cap_length_m']:g} m、截面 {sub['cap_beam']['width_m']*1000:g}×{sub['cap_beam']['height_m']*1000:g} mm：墩顶控制负弯矩 Md,hog={sub['cap_beam']['m_hog_uls_knm']:.2f} kN·m（顶层配 GL1 {sub['cap_beam']['top_rebar']}，Mu={sub['cap_beam']['mu_hog_capacity_knm']:.2f} kN·m），跨中正弯矩 Md,sag={sub['cap_beam']['m_sag_uls_knm']:.2f} kN·m（底层配 GL2 {sub['cap_beam']['bottom_rebar']}，Mu={sub['cap_beam']['mu_sag_capacity_knm']:.2f} kN·m），剪力 Vd={sub['cap_beam']['v_uls_kn']:.2f} kN ≤ Vu={sub['cap_beam']['vu_capacity_kn']:.2f} kN，最大裂缝宽度 wcr={sub['cap_beam']['crack_width_mm']:.3f} mm ≤ 0.200 mm [3]。"
     )
 
-    _add_section_heading(doc, "8.2 双柱式圆柱墩与钻孔灌注桩基础计算（QL-17）", level=2, toc_entries=toc_entries)
+    pier_cites_8 = (
+        f"{_scite('pier_column_pile_rebar', '19')}、{_scite('tie_beam_joint_rebar', '19-1')}"
+        if (sheet_manifest.get("by_role") or {}).get("tie_beam_joint_rebar")
+        else _scite("pier_column_pile_rebar", "QL-17")
+    )
+    _add_section_heading(doc, f"8.2 双柱式圆柱墩与钻孔灌注桩基础计算（{pier_cites_8}）", level=2, toc_entries=toc_entries)
     _add_section_heading(doc, "8.2.1 圆柱墩偏压承载力与横系梁锚固验算", level=3, toc_entries=toc_entries)
+    tie_note_8 = (
+        f"（节点详图见 {_scite('tie_beam_joint_rebar', '19-1')}：{_stitle('tie_beam_joint_rebar', '桩顶系梁钢筋构造及节点详图')}）"
+        if (sheet_manifest.get("by_role") or {}).get("tie_beam_joint_rebar")
+        else ""
+    )
     _body(
-        f"墩柱直径 Dc={sub['pier_column']['diameter_m']:g} m、墩高 Hc={sub['pier_column']['height_m']:g} m，配主筋 DZ1 {sub['pier_column']['main_rebar']}：柱底轴力 Nd={sub['pier_column']['n_uls_kn']:.2f} kN、弯矩 Md={sub['pier_column']['m_uls_knm']:.2f} kN·m，偏压承载力 Nu={sub['pier_column']['nu_capacity_kn']:.2f} kN ≥ Nd；桩顶系梁主筋 XL1 12Φ22 锚入墩柱核心区 780 mm ≥ 35d=770 mm [3,5]。"
+        f"墩柱直径 Dc={sub['pier_column']['diameter_m']:g} m、墩高 Hc={sub['pier_column']['height_m']:g} m，配主筋 DZ1 {sub['pier_column']['main_rebar']}：柱底轴力 Nd={sub['pier_column']['n_uls_kn']:.2f} kN、弯矩 Md={sub['pier_column']['m_uls_knm']:.2f} kN·m，偏压承载力 Nu={sub['pier_column']['nu_capacity_kn']:.2f} kN ≥ Nd；桩顶系梁主筋 XL1 12Φ22 锚入墩柱核心区 780 mm ≥ 35d=770 mm{tie_note_8} [3,5]。"
     )
 
     _add_section_heading(doc, "8.2.2 墩台钻孔灌注桩分层摩阻力与桩长对比分析", level=3, toc_entries=toc_entries)
@@ -1184,7 +1270,12 @@ def generate_college_graduation_thesis_docx(
     # Chapter 9: 9  桩柱式桥台及钻孔灌注桩独立设计计算
     # ------------------------------------------------------------------
     _add_chapter_heading(doc, "9  桩柱式桥台及钻孔灌注桩独立设计计算", centered=False, page_break_before=True, toc_entries=toc_entries)
-    _add_section_heading(doc, "9.1 桥台竖向荷载、台背主动土压力与构件验算（QL-15、QL-18）", level=2, toc_entries=toc_entries)
+    abut_cites_9 = (
+        f"{_scite('abutment_general', '16')}、{_scite('abutment_rebar', '20')}、{_scite('abutment_ear_backwall_rebar', '21')}"
+        if (sheet_manifest.get("by_role") or {}).get("abutment_ear_backwall_rebar")
+        else f"{_scite('abutment_general', 'QL-15')}、{_scite('abutment_rebar', 'QL-18')}"
+    )
+    _add_section_heading(doc, f"9.1 桥台竖向荷载、台背主动土压力与构件验算（{abut_cites_9}）", level=2, toc_entries=toc_entries)
     _add_section_heading(doc, "9.1.1 边跨支反力与朗肯主动土压力计算", level=3, toc_entries=toc_entries)
     _body(
         f"0#、{ps['n_spans']}# 桩柱式桥台承受边跨单跨恒载反力 {abut['load_breakdown']['single_span_girder_dead_total_kn']:.2f} kN、活载反力 {abut['load_breakdown']['single_span_girder_live_total_kn']:.2f} kN、6.0 m 搭板恒活载半重 {abut['load_breakdown']['approach_slab_dead_half_kn']+abut['load_breakdown']['approach_slab_live_half_kn']:.2f} kN 及台帽耳背墙自重，台帽底标准值总竖向力为 {abut['load_breakdown']['total_vertical_sls_at_cap_bottom_kn']:.2f} kN。"
@@ -1197,7 +1288,7 @@ def generate_college_graduation_thesis_docx(
 
     _add_section_heading(doc, "9.2 桥台钻孔灌注桩桩长推导与桩身弯压验算", level=2, toc_entries=toc_entries)
     _body(
-        f"按台位单桩标准值竖向荷载 Rabut,sls={abut['bored_pile']['pile_top_sls_demand_kn']:.2f} kN 独立核定桥台桩长 Labut={abut['bored_pile']['design_length_m']:g} m（[Ra]={abut['bored_pile']['allowable_ra_kn']:.2f} kN）[4]。桩身配主筋 QT3 {abut['bored_pile']['main_rebar']} 与螺旋箍 QT4 φ12@150，弯压承载力 Nu={abut['bored_pile']['nu_section_capacity_kn']:.1f} kN ≥ Nd={abut['bored_pile']['n_uls_kn']:.1f} kN，全桥 4 根桥台桩 C30 水下混凝土 {boq['volume_breakdown']['abut_pile_m3']} m³ 与 QL-02、QL-15、QL-18 完全一致。"
+        f"按台位单桩标准值竖向荷载 Rabut,sls={abut['bored_pile']['pile_top_sls_demand_kn']:.2f} kN 独立核定桥台桩长 Labut={abut['bored_pile']['design_length_m']:g} m（[Ra]={abut['bored_pile']['allowable_ra_kn']:.2f} kN）[4]。桩身配主筋 QT3 {abut['bored_pile']['main_rebar']} 与螺旋箍 QT4 φ12@150，弯压承载力 Nu={abut['bored_pile']['nu_section_capacity_kn']:.1f} kN ≥ Nd={abut['bored_pile']['n_uls_kn']:.1f} kN，全桥 4 根桥台桩 C30 水下混凝土 {boq['volume_breakdown']['abut_pile_m3']} m³ 与 {_scite('boq_summary', 'QL-02')}、{_scite('abutment_general', 'QL-15')}、{_scite('abutment_rebar', 'QL-18')} 完全一致。"
     )
 
     # ------------------------------------------------------------------
@@ -1246,7 +1337,17 @@ def generate_college_graduation_thesis_docx(
         col_widths_cm=(3.5, 1.4, 2.0, 2.0, 2.7, 1.7, 2.2),
     )
 
-    _add_section_heading(doc, "10.2 全套施工图钢束与钢筋选筋溯源总表（QL-08～QL-18）", level=2, toc_entries=toc_entries)
+    last_rebar_cite = (
+        _scite("abutment_ear_backwall_rebar", "21")
+        if (sheet_manifest.get("by_role") or {}).get("abutment_ear_backwall_rebar")
+        else _scite("abutment_rebar", "QL-18")
+    )
+    _add_section_heading(
+        doc,
+        f"10.2 全套施工图钢束与钢筋选筋溯源总表（{_scite('tendon_layout', 'QL-08')}～{last_rebar_cite}）",
+        level=2,
+        toc_entries=toc_entries,
+    )
     _body(
         "表 10-2 建立施工图钢束/钢筋编号（N1～DS1）至构件统计口径、控制内力需求及抗力的逐项溯源映射（跨页自动续表并重复列名），确保任一图面编号均可直接回查至对应计算章节。"
     )
@@ -1279,13 +1380,16 @@ def generate_college_graduation_thesis_docx(
     # Chapter 11: 11  结论与展望
     # ------------------------------------------------------------------
     _add_chapter_heading(doc, "11  结论与展望", centered=False, page_break_before=True, toc_entries=toc_entries)
-    fem_conc_zh = (
-        "已完成手算解析公式与独立有限元模型的三方复核验证"
-        if is_fem_verified
-        else "已完成手算解析公式与杆系计算程序的交叉复核，并整理完备外部有限元软件建模卡待机房实算导入终核"
-    )
+    if is_fem_verified:
+        fem_conc_zh = "已完成手算解析公式与外部独立有限元模型的三方复核验证"
+    elif is_builtin_fem:
+        fem_conc_zh = "已完成手算解析公式与内置平面杆系刚度矩阵模型的交叉复核（桥梁博士商业软件实算结果可进一步覆盖）"
+    elif ext_fem_status == "partially_verified":
+        fem_conc_zh = "已完成部分外部电算指标核对（其余必核项待机房实算补齐）"
+    else:
+        fem_conc_zh = "已完成手算解析公式与杆系计算程序的交叉复核，并整理完备外部有限元软件建模卡待机房实算导入终核"
     _body(
-        f"本次毕业设计围绕“{ps['project_name']}”完成了水文桥孔复核、同桥位三桥型方案比选、上部预制 C50 预应力混凝土简支T梁及桥面系计算、中间双柱式桥墩及钻孔桩计算、桩柱式桥台及独立桩长推导（墩桩 {ps['pier_pile_length_m']:g} m、台桩 {ps['abutment_pile_length_m']:g} m），{fem_conc_zh}，并配套绘出 QL-01～QL-18 全套 18 张 A3 施工图与打印图册。"
+        f"本次毕业设计围绕“{ps['project_name']}”完成了水文桥孔复核、同桥位三桥型方案比选、上部预制 C50 预应力混凝土简支T梁及桥面系计算、中间双柱式桥墩及钻孔桩计算、桩柱式桥台及独立桩长推导（墩桩 {ps['pier_pile_length_m']:g} m、台桩 {ps['abutment_pile_length_m']:g} m），{fem_conc_zh}，并配套绘出 {sh_range} 全套 {sh_count} 张 A3 施工图与打印图册。"
         "主梁、横隔梁、支座及墩台桩基在承载能力极限状态与正常使用极限状态下的各项指标均满足现行 JTG 规范要求，计算说明书与施工图尺寸、配筋及工程量表严格一致。后续待外业实测河床断面与钻孔柱状图核定后，即可通过参数化联动一键定稿。"
     )
 
@@ -1299,13 +1403,14 @@ def generate_college_graduation_thesis_docx(
 
     _add_chapter_heading(doc, "致  谢", centered=True, page_break_before=True, toc_entries=toc_entries)
     fem_ack_zh = (
-        "结构手算、独立有限元模型校核以及十八张施工图纸反复打磨"
+        f"结构手算、独立有限元模型校核以及 {sh_count} 张施工图纸反复打磨"
         if is_fem_verified
-        else "结构手算、计算程序交叉对算以及十八张施工图纸反复打磨"
+        else f"结构手算、计算程序交叉对算以及 {sh_count} 张施工图纸反复打磨"
     )
+    advisor_ack = f"指导我的 {advisor_name} 老师" if advisor_name else "悉心指导我的指导教师"
     _add_body_para(
         doc,
-        f"四年本科求学时光行至收官。在本次桥梁毕业设计的方案论证、{fem_ack_zh}过程中，谨向倾注大量心血悉心指导我的 {advisor_name} 老师致以最诚挚的敬意与感谢！老师严谨治学的工程态度与细致入微的审图意见，使我对桥梁上下部传力机理和规范条文有了系统而深刻的理解。",
+        f"四年本科求学时光行至收官。在本次桥梁毕业设计的方案论证、{fem_ack_zh}过程中，谨向倾注大量心血{advisor_ack}致以最诚挚的敬意与感谢！老师严谨治学的工程态度与细致入微的审图意见，使我对桥梁上下部传力机理和规范条文有了系统而深刻的理解。",
     )
     _add_body_para(
         doc,
@@ -1313,20 +1418,26 @@ def generate_college_graduation_thesis_docx(
     )
 
     _add_chapter_heading(doc, "附  录  全套施工图目录与主要工程材料数量汇总表", centered=True, page_break_before=True, toc_entries=toc_entries)
-    idx_rows_w = [(str(i + 1), dno, dtitle, dscale, "A3") for i, (dno, dtitle, dscale) in enumerate(DEFAULT_18_SHEET_INDEX)]
+    manifest_entries = list(sheet_manifest["entries"])
+    idx_rows_w = [
+        (str(i + 1), str(e["drawing_no"]), str(e["title"]), str(e["scale_label"]), str(e.get("sheet_size", "A3")))
+        for i, e in enumerate(manifest_entries)
+    ]
+    sheet_bookmarks = [str(e.get("bookmark_name") or f"bm_sheet_{i+1}") for i, e in enumerate(manifest_entries)]
     _add_three_line_table(
         doc,
-        "附表 1 全套施工图设计图册目录（QL-01～QL-18）",
+        f"附表 1 全套施工图设计图册目录（{sh_range}，共 {sh_count} 张）",
         ("序号", "图号", "图纸名称", "比例", "图幅"),
         idx_rows_w,
         col_widths_cm=(1.5, 2.2, 7.6, 2.6, 1.6),
-        max_rows_per_chunk=18,
+        max_rows_per_chunk=35,
+        row_bookmarks=sheet_bookmarks,
     )
 
     boq_rows_w = [(r["category"], r["material"], r["unit"], str(r["quantity"]), r["sheet_ref"]) for r in boq["rows"]]
     _add_three_line_table(
         doc,
-        "附表 2 全桥主要工程材料数量汇总表（对应图号 QL-02）",
+        f"附表 2 全桥主要工程材料数量汇总表（对应 {_scite('boq_summary', 'QL-02')}）",
         ("工程部位", "材料名称及规格", "单位", "全桥数量", "对应图号"),
         boq_rows_w,
         col_widths_cm=(3.0, 5.8, 1.6, 2.5, 2.6),
@@ -1354,6 +1465,8 @@ def generate_college_graduation_thesis_docx(
         "markdown_mirror_path": md_mirror_path,
         "section_count": len(doc.sections),
         "toc_entry_count": toc_entry_count,
+        "sheet_count": sh_count,
+        "sheet_bookmarks": sheet_bookmarks,
         "zh_abstract_cjk_count": zh_abstract_cjk_count,
         "en_abstract_word_count": en_abstract_word_count,
         "external_fem_status": ext_fem_status,

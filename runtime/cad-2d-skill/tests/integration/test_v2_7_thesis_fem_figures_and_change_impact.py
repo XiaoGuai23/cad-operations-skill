@@ -106,18 +106,22 @@ def test_independent_fem_import_builtin_solver_and_defense_table(tmp_path):
     assert Path(guide["template_json_path"]).is_file()
     assert "桥梁博士" in guide["guide_markdown"]
 
-    # 3. Import realistic Dr.Bridge CSV/Markdown table & verify side-by-side defense table
-    ex = def_tbl_0["import_template_example"]["metrics"]
+    # 3. Example template MUST use null values; realistic Dr.Bridge Markdown table imports cleanly when all 4 items are valid
+    ex_tpl = def_tbl_0["import_template_example"]
+    assert ex_tpl["is_template"] is True
+    assert all(v is None for v in ex_tpl["metrics"].values())
+
+    prog_vals = {r["metric_key"]: round(float(r["program_value"]) * 0.99, 2) for r in def_tbl_0["rows"]}
     fem_md_file = tmp_path / "drbridge_export.md"
     fem_md_file.write_text(
         "\n".join(
             [
-                "| 项目 | 软件计算值 | 单位 |",
-                "| --- | --- | --- |",
-                f"| 主梁跨中弯矩 | {ex['girder_mid_moment_uls_knm']} | kN·m |",
-                f"| 主梁支点剪力 | {ex['girder_support_shear_uls_kn']} | kN |",
-                f"| 主梁活载挠度 | {ex['girder_live_deflection_mm']} | mm |",
-                f"| 中墩墩顶反力 | {ex['pier_top_reaction_uls_kn']} | kN |",
+                "| 构件 | 控制截面 | 荷载组合 | 软件计算值 | 单位 | 来源 |",
+                "| --- | --- | --- | --- | --- | --- |",
+                f"| 主梁跨中弯矩 | 跨中 1/2L | 承载能力基本组合 | {prog_vals['girder_mid_moment_uls_knm']} | kN·m | 桥梁博士V4.4实算 |",
+                f"| 主梁支点剪力 | 支点截面 | 承载能力基本组合 | {prog_vals['girder_support_shear_uls_kn']} | kN | 桥梁博士V4.4实算 |",
+                f"| 主梁活载挠度 | 跨中 1/2L | 正常使用短期频遇组合 | {prog_vals['girder_live_deflection_mm']} | mm | 桥梁博士V4.4实算 |",
+                f"| 中墩墩顶反力 | 双跨支承墩顶 | 承载能力基本组合 | {prog_vals['pier_top_reaction_uls_kn']} | kN | 桥梁博士V4.4实算 |",
             ]
         ),
         encoding="utf-8",
@@ -136,16 +140,19 @@ def test_independent_fem_import_builtin_solver_and_defense_table(tmp_path):
         assert row["hand_vs_software_diff_pct"] <= 5.0
         assert len(row["discrepancy_reason"]) >= 12
 
-    # 4. Counterexample: wrong unit / missing factor in external FEM triggers exceeds_tolerance!
+    # 4. Counterexample: wrong magnitude / missing factor in external FEM triggers exceeds_tolerance!
     calc_bad_fem = run_full_bridge_calculation(
         {
             "preset": "wenchang",
             "independent_fem_results": {
                 "software_name": "Midas Civil 2024",
+                "checked_by": "张工复核",
                 "tolerance_pct": 8.0,
                 "metrics": {
                     "girder_mid_moment_uls_knm": 2100.0,
-                    "girder_support_shear_uls_kn": ex["girder_support_shear_uls_kn"],
+                    "girder_support_shear_uls_kn": prog_vals["girder_support_shear_uls_kn"],
+                    "girder_live_deflection_mm": prog_vals["girder_live_deflection_mm"],
+                    "pier_top_reaction_uls_kn": prog_vals["pier_top_reaction_uls_kn"],
                 },
             },
         }
@@ -224,10 +231,25 @@ def test_college_template_formal_graduation_thesis_docx_typography_and_layout(tm
     pg_body = reopened.sections[2]._sectPr.find(qn("w:pgNumType"))
     assert pg_body is not None and pg_body.get(qn("w:fmt")) == "decimal" and pg_body.get(qn("w:start")) == "1"
 
-    # Cover table filled with real student metadata (never placeholder '待填' or '2026年5月')
+    # Cover table leaves student/advisor blank by default (never leaking reference sample PII or '待填' placeholders)
     cov_text = " | ".join(cell.text.strip() for row in reopened.tables[0].rows for cell in row.cells)
-    assert "许琦莘" in cov_text and "202109020152" in cov_text and "李小霞" in cov_text
+    assert "许琦莘" not in cov_text and "202109020152" not in cov_text and "李小霞" not in cov_text
     assert "待填" not in cov_text and "可配置学院名称" not in cov_text
+
+    # Explicit student_metadata populates cover cleanly when provided
+    docx_student = tmp_path / "wenchang_with_student.docx"
+    generate_college_graduation_thesis_docx(
+        calc,
+        docx_student,
+        figures_summary=figs,
+        student_metadata={
+            "student_name": "张明远",
+            "student_id": "202209020101",
+            "advisor_name": "王建国（教授）",
+        },
+    )
+    cov_student = " | ".join(cell.text.strip() for row in Document(str(docx_student)).tables[0].rows for cell in row.cells)
+    assert "张明远" in cov_student and "202209020101" in cov_student and "王建国" in cov_student
 
     # Check numbered chapter Heading 1 is LEFT-aligned 16pt, Heading 2 is 15pt, Heading 3 is 14pt, figure captions non-bold 10.5pt
     h1_ch1 = next(p for p in reopened.paragraphs if "\t" not in p.text and p.text.strip() == "1  绪论")
@@ -293,7 +315,7 @@ def test_design_change_impact_two_advisor_acceptance_questions(tmp_path):
     base_abut_m3 = base_calc["bill_of_quantities"]["volume_breakdown"]["abut_pile_m3"]
     base_strand_kg = base_calc["bill_of_quantities"]["prestress_strand_kg"]
 
-    # Question 1: 桥台桩长改动后 (15m -> 18m)，计算书、QL-15、QL-18、QL-02 的桩长和工程量是否一起更新？
+    # Question 1: 桥台桩长改动后 (15m -> 18m)，计算书、图16、图20、图02 的桩长和工程量是否一起更新？
     mod_abut_suite = generate_full_bridge_drawing_set(
         {"preset": "wenchang", "abutment_pile_length_m": 18.0},
         suite_dir,
@@ -303,8 +325,8 @@ def test_design_change_impact_two_advisor_acceptance_questions(tmp_path):
     assert chg_abut["mode"] == "diff_against_baseline"
     assert chg_abut["has_changes"] is True
     assert chg_abut["internal_consistency"]["status"] == "passed"
-    assert {"QL-02", "QL-03", "QL-15", "QL-18"} <= set(chg_abut["affected_drawings"])
-    assert {"QL-02", "QL-03", "QL-15", "QL-18"} <= set(chg_abut["dxf_sha256_changed_drawings"])
+    assert {"02", "03", "16", "20"} <= set(chg_abut["affected_drawings"])
+    assert {"02", "03", "16", "20"} <= set(chg_abut["dxf_sha256_changed_drawings"])
     assert any("第四章" in c for c in chg_abut["affected_calc_book_chapters"])
 
     mod_abut_calc = mod_abut_suite["calculation_report"]
@@ -313,17 +335,17 @@ def test_design_change_impact_two_advisor_acceptance_questions(tmp_path):
     qt3_18 = lookup_bar_or_tendon(mod_abut_calc, "QT3")
     assert math.isclose(qt3_18["single_length_cm"], 1900.0, abs_tol=0.5)
 
-    txt_ql15 = _all_dxf_text(suite_dir / "QL-15" / "QL-15_pier_and_abutment.dxf")
-    txt_ql18 = _all_dxf_text(suite_dir / "QL-18" / "QL-18_rebar_detail.dxf")
-    txt_ql02 = _all_dxf_text(suite_dir / "QL-02" / "QL-02_notes_and_boq.dxf")
+    txt_sh16 = _all_dxf_text(suite_dir / "16" / "16_pier_and_abutment.dxf")
+    txt_sh20 = _all_dxf_text(suite_dir / "20" / "20_rebar_detail.dxf")
+    txt_sh02 = _all_dxf_text(suite_dir / "02" / "02_notes_and_boq.dxf")
     book_18 = Path(mod_abut_suite["calculation_book_path"]).read_text(encoding="utf-8")
 
-    assert "设计桩长 18m" in txt_ql15
-    assert "桥台桩长 18m" in txt_ql18 and "1900" in txt_ql18
-    assert f"{new_abut_m3} m3 (桩长 18m)" in txt_ql02
+    assert "设计桩长 18m" in txt_sh16
+    assert "桥台桩长 18m" in txt_sh20 and "1900" in txt_sh20
+    assert f"{new_abut_m3} m3 (桩长 18m)" in txt_sh02
     assert "L_{\\text{abut}} = 18\\text{ m}" in book_18 and f"{new_abut_m3}\\text{{ m}}^3" in book_18
 
-    # Question 2: 钢束数量改动后 (n_tendons -> n_tendons_base + 1)，主梁验算、QL-08 和材料汇总是否一致？
+    # Question 2: 钢束数量改动后 (n_tendons -> n_tendons_base + 1)，主梁验算、图08/09 和材料汇总是否一致？
     new_n_tendons = n_tendons_base + 1
     mod_tendon_suite = generate_full_bridge_drawing_set(
         {"preset": "wenchang", "abutment_pile_length_m": 18.0, "n_tendons": new_n_tendons},
@@ -333,8 +355,8 @@ def test_design_change_impact_two_advisor_acceptance_questions(tmp_path):
     chg_ten = mod_tendon_suite["change_impact"]
     assert chg_ten["has_changes"] is True
     assert chg_ten["internal_consistency"]["status"] == "passed"
-    assert {"QL-02", "QL-08", "QL-09"} <= set(chg_ten["affected_drawings"])
-    assert {"QL-02", "QL-08", "QL-09"} <= set(chg_ten["dxf_sha256_changed_drawings"])
+    assert {"02", "08", "09", "10"} <= set(chg_ten["affected_drawings"])
+    assert {"02", "08", "09", "10"} <= set(chg_ten["dxf_sha256_changed_drawings"])
 
     mod_ten_calc = mod_tendon_suite["calculation_report"]
     assert mod_ten_calc["prestress"]["recommended_tendons"] == new_n_tendons
@@ -342,17 +364,19 @@ def test_design_change_impact_two_advisor_acceptance_questions(tmp_path):
     new_strand_kg = mod_ten_calc["bill_of_quantities"]["prestress_strand_kg"]
     assert new_strand_kg > base_strand_kg + 500.0
 
-    ql08_path = suite_dir / "QL-08" / "QL-08_tendon_layout.dxf"
-    assert verify_civil_dxf(ql08_path, calc_report=mod_ten_calc)["status"] == "passed"
-    txt_ql08 = _all_dxf_text(ql08_path)
-    txt_ql02_ten = _all_dxf_text(suite_dir / "QL-02" / "QL-02_notes_and_boq.dxf")
-    assert f"N{new_n_tendons}" in txt_ql08
-    assert f"{new_strand_kg}" in txt_ql02_ten
+    sh08_path = suite_dir / "08" / "08_tendon_layout.dxf"
+    sh09_path = suite_dir / "09" / "09_tendon_layout.dxf"
+    assert verify_civil_dxf(sh08_path, calc_report=mod_ten_calc)["status"] == "passed"
+    assert verify_civil_dxf(sh09_path, calc_report=mod_ten_calc)["status"] == "passed"
+    txt_sh08 = _all_dxf_text(sh08_path)
+    txt_sh02_ten = _all_dxf_text(suite_dir / "02" / "02_notes_and_boq.dxf")
+    assert f"N{new_n_tendons}" in txt_sh08
+    assert f"{new_strand_kg}" in txt_sh02_ten
     assert verify_internal_suite_consistency(mod_ten_calc)["status"] == "passed"
 
     calc_under_tendon = run_full_bridge_calculation({"preset": "wenchang", "n_tendons": 2})
     assert calc_under_tendon["calculation_status"] == "failed"
-    assert any("QL-08" in fc["related_drawings"] for fc in calc_under_tendon["failed_checks"])
+    assert any("08" in fc["related_drawings"] for fc in calc_under_tendon["failed_checks"])
 
     app = create_mcp_http_app(tmp_path)
     client = TestClient(app)
@@ -379,4 +403,4 @@ def test_design_change_impact_two_advisor_acceptance_questions(tmp_path):
     )
     assert r_chg.status_code == 200
     chg_mcp = r_chg.json()["result"]["structuredContent"]["result"]
-    assert {"QL-02", "QL-03", "QL-15", "QL-18"} <= set(chg_mcp["affected_drawings"])
+    assert {"02", "03", "16", "20"} <= set(chg_mcp["affected_drawings"])

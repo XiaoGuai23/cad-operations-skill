@@ -20,7 +20,7 @@ edit the current authoritative drawing; for new drawings use a validated spec.
 | General AutoCAD/FreeCAD editing, plotting, conversion | [AutoCAD / FreeCAD](references/autocad-freecad.md) |
 | Electrical main wiring / SLD | [Electrical workflow](references/electrical-main-sld.md) |
 | Pavement / road layer sections | [Pavement workflow](references/pavement-structure-cad.md) |
-| Civil & highway bridge calculations, Word graduation thesis (`.docx`), 300-DPI Word/PPT figures, FEM cross-check, change-impact tracker & 18-sheet A3 suite (`run_bridge_suite.py`, `bridge-calc`, `generate-civil`) | [Civil & bridge workflow](references/civil-bridge-engineering.md) |
+| Civil & highway bridge calculations, Word graduation thesis (`.docx`), 300-DPI Word/PPT figures, strict FEM cross-check, 3D tendon/support linkage, semantic DXF change-impact tracker & 22-sheet A3 suite (`run_bridge_suite.py`, `bridge-calc`, `generate-civil`) | [Civil & bridge workflow](references/civil-bridge-engineering.md) |
 | SolidWorks parts, assemblies or drawings | [SolidWorks workflow](references/solidworks-mcp.md) |
 | Machine paths, MCP availability or setup | [Local environment](references/local-cad-environment.md) |
 | MCP Server (`stdio` / HTTP), Web Auto-Drafting Studio (`/studio`), 3D modeling & domestic CAD drivers | [MCP & Web Studio guide](references/mcp-server-guide.md) and [command examples](references/command-examples.md) |

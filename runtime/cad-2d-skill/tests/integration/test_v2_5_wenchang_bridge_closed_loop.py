@@ -155,7 +155,7 @@ def test_intermediate_pier_two_span_reactions_and_failure_propagation_to_suite_a
     # 2. Counterexample: pile_length_m = 1.0 -> substructure fails AND full 18-sheet manifest status MUST be "failed",
     #    while still saving bridge_calculation_report.json and pinpointing failed component + related drawings!
     fail_suite = generate_full_bridge_drawing_set(
-        {"preset": "wenchang", "pile_length_m": 1.0},
+        {"preset": "wenchang", "sheet_scheme": "ql_18", "pile_length_m": 1.0},
         tmp_path / "pile_1m_counterexample",
     )
     assert fail_suite["status"] == "failed"
@@ -280,7 +280,10 @@ def test_reopen_dxf_verifier_catches_1_to_400_scale_fake_slope_and_stale_prestre
 
 
 def test_delivery_audit_on_ql09_ql13_ql17_ql18_and_visible_table_entity_tamper_detection(tmp_path):
-    suite = generate_full_bridge_drawing_set({"preset": "wenchang"}, tmp_path / "wenchang_18_sheets")
+    suite = generate_full_bridge_drawing_set(
+        {"preset": "wenchang", "sheet_scheme": "ql_18"},
+        tmp_path / "wenchang_18_sheets",
+    )
     assert suite["status"] == "passed"
     cov = suite["coverage_audit"]
     assert cov["status"] == "passed"
